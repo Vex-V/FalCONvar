@@ -1,0 +1,15 @@
+# Core -- everything the pipeline needs to read video and run the uniform sampler.
+av==18.1.0                 # decode + exact PTS/time_base; OpenCV cannot expose either
+opencv-python==5.0.0.93    # colour conversion, resize, JPEG encode, container rotation
+numpy==2.4.4
+
+# Model-backed samplers. Imported lazily, so these are only needed for the
+# sampler that uses them.
+torch==2.13.0              # clip, yolo, objects, text
+transformers==5.15.0       # clip, yolo   (CLIP image tower)
+ultralytics==8.4.120       # yolo, objects (YOLO / YOLO-World)
+easyocr==1.7.2             # text          (detector only; nothing is read)
+
+# Scene chunking. Only the detector algorithm is used -- its SceneManager is
+# batch and pull-based, which would mean a second decode pass.
+scenedetect==0.7.1
