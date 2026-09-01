@@ -280,6 +280,14 @@ INTERNAL: list[tuple[str, tuple[str, ...]]] = [
     ("ver2.embed.indexer", ("index_units", "IndexResult")),
 
     ("ver2.retrieve.search", ("Moment", "search", "to_moments")),
+    ("ver2.orchestrate", ("process", "validate", "Options", "Outcome", "POLICIES")),
+
+    # api/ is optional and sits outside ver2, but a broken import there is a
+    # broken deployment, and this is the only thing that checks anything.
+    ("api.jobs", ("Runner", "Job", "progress")),
+    ("api.service", ("ingest", "describe", "embed", "search", "videos",
+                     "build_samplers", "available")),
+    ("api.main", ("app", "runner", "safe_id")),
 
     ("ver2.recovery.recreate", ("rebuild_sampled", "rebuild_decimated", "compare",
                                 "targets_from", "Fetcher", "StoreWriter")),

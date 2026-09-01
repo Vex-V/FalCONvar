@@ -114,6 +114,21 @@ class SupabaseManifestWriter:
                 self.client.table("video_chunks").upsert(
                     self._row(chunk), on_conflict="video_id,chunk_id"
                 ).execute()
+            # A restated run can hold FEWER chunks than were streamed. Rows go
+            # in as each chunk closes, but the pipeline may fold a too-short
+            # final chunk into the one before it once it knows where the media
+            # really ends -- so the last row written can name a chunk that no
+            # longer exists. Observed on test2: 60.325 s at 20 s closed four
+            # chunks, the last 0.325 s long, and the merge left `chunk_id = 3`
+            # orphaned in Postgres while the file held three. The file writer
+            # rewrites its whole document and never had the problem; a sink
+            # that appends has to clean up after a shrink.
+            #
+            # After the upserts, never before: a failure above then leaves the
+            # previous copy whole rather than a hole.
+            (self.client.table("video_chunks").delete()
+             .eq("video_id", self.video_id)
+             .gte("chunk_id", len(self.chunks)).execute())
         self.complete = True
         self.client.table("video_manifests").update({
             "complete": True,

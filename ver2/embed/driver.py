@@ -24,21 +24,47 @@ from ver2.embed import units as units_mod
 from ver2.embed.indexer import index_units
 
 
-def _units_for(args) -> list:
-    """The descriptions to embed: a local document, or Postgres.
+def _units_for(args) -> tuple[list, list[str]]:
+    """Everything to embed for this video, and where it came from.
+
+    Descriptions and transcripts land in the same index -- both are text with a
+    time span -- so both are collected here and the caller cannot tell them
+    apart afterwards except by `sampler`.
 
     A description row does not know where its chunk sits in media time, so the
     Postgres path fetches the manifest too -- the same split that makes
     `recovery.supabase_description` fetch two things.
     """
+    units, sources = [], []
     if args.document:
-        document = json.loads(Path(args.document).read_text(encoding="utf-8"))
-        return units_mod.from_document(document)
+        path = Path(args.document)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        units += units_mod.from_document(document)
+        sources.append(f"{len(units)} descriptions")
+        # The transcript beside it, unless refused. Announced rather than
+        # silent: picking up a file the caller did not name should be
+        # something they can see in the output, not a surprise in the index.
+        transcript = path.parent / "transcript.json"
+        if not args.no_transcript and transcript.exists():
+            spoken = units_mod.from_transcript(
+                json.loads(transcript.read_text(encoding="utf-8")))
+            units += spoken
+            sources.append(f"{len(spoken)} transcript chunks from {transcript.name}")
+        return units, sources
+
     client = db.client_from_env()
     manifest = db.fetch_manifest(client, args.video_id)
     rows = db.fetch_descriptions(client, args.video_id)
     bounds = {c["chunk_id"]: (c["start_ts"], c["end_ts"]) for c in manifest["chunks"]}
-    return units_mod.from_rows(args.video_id, rows, bounds)
+    units += units_mod.from_rows(args.video_id, rows, bounds)
+    sources.append(f"{len(units)} descriptions")
+    if not args.no_transcript:
+        document = db.fetch_transcript(client, args.video_id)
+        if document:
+            spoken = units_mod.from_transcript(document)
+            units += spoken
+            sources.append(f"{len(spoken)} transcript chunks")
+    return units, sources
 
 
 def report(stats: dict[str, Any], video_id: str, args) -> None:
@@ -51,7 +77,7 @@ def report(stats: dict[str, Any], video_id: str, args) -> None:
         print(f"  skipped      {stats['skipped']}   (already indexed, text unchanged)")
     print(f"  elapsed      {stats['elapsed_s']:.2f}s")
     print("\nindexed -> " + ", ".join(
-        str(args.qdrant_path) if n == "qdrant" else "supabase: description_embeddings"
+        str(args.qdrant_path) if n == "qdrant" else "supabase: chunk_embeddings"
         for n in args.index))
 
 
@@ -79,6 +105,8 @@ def main() -> int:
     ap.add_argument("--qdrant-path", type=Path,
                     default=index_mod.DEFAULT_QDRANT_PATH,
                     help="local Qdrant directory (default out/qdrant)")
+    ap.add_argument("--no-transcript", action="store_true",
+                    help="embed descriptions only, ignoring any transcript")
     ap.add_argument("--force", action="store_true",
                     help="re-embed everything, ignoring what is already indexed")
     args = ap.parse_args()
@@ -93,10 +121,12 @@ def main() -> int:
 
     embedder = embedders_mod.build(args.embedder,
                                    **({"model": args.model} if args.model else {}))
-    units = _units_for(args)
+    units, sources = _units_for(args)
     if not units:
-        print("nothing to index: no descriptions found", file=sys.stderr)
+        print("nothing to index: no descriptions or transcript found",
+              file=sys.stderr)
         return 1
+    print("  reading      " + ", ".join(sources))
 
     video_id = units[0].video_id
     result = index_units(units, embedder, index_mod.build(args.index, args.qdrant_path),

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FalCONvar</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>FalCON<span>var</span></h1>
+  <p class="tag">A video goes in; a searchable index of moments comes out.</p>
+  <div id="health" class="pill">connecting…</div>
+</header>
+
+<nav id="tabs">
+  <button data-tab="search" class="on">Search</button>
+  <button data-tab="upload">Process a video</button>
+  <button data-tab="library">Library</button>
+  <button data-tab="jobs">Jobs</button>
+</nav>
+
+<!-- ------------------------------------------------------------- search -->
+<section id="search" class="tab on">
+  <form id="search-form">
+    <input id="q" type="search" placeholder="what are you looking for?"
+           value="the moment the reactor exploded" autocomplete="off">
+    <select id="scope"><option value="">every video</option></select>
+    <select id="sampler">
+      <option value="">every question</option>
+    </select>
+    <button type="submit">Search</button>
+  </form>
+  <p class="hint">
+    Unfiltered search lets two independent accounts of the same window vote
+    together &mdash; what was seen and what was said. Narrowing to one question
+    gives that up.
+  </p>
+  <div id="results"></div>
+</section>
+
+<!-- ------------------------------------------------------------- upload -->
+<section id="upload" class="tab">
+  <form id="upload-form">
+    <label class="file">
+      <input id="file" type="file" accept="video/*,audio/*" required>
+      <span id="file-name">choose a media file…</span>
+    </label>
+
+    <fieldset>
+      <legend>Samplers &mdash; which frames are worth describing, and why</legend>
+      <div id="samplers" class="chips"></div>
+      <label class="row">
+        <span>objects vocabulary</span>
+        <input id="vocabulary" placeholder="shopping basket, shelf, cash register">
+      </label>
+      <p class="hint">
+        The vocabulary is the configuration for <code>objects</code> and has no
+        useful default: a mismatched list found 2.4 detections per frame where a
+        matched one found 5.1.
+      </p>
+      <label class="row">
+        <span>uniform / overview cadence (s)</span>
+        <input id="every_seconds" type="number" value="5" min="0.5" step="0.5">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Chunk grid &mdash; which modality decides the boundaries</legend>
+      <div id="chunking" class="chips radio"></div>
+      <label class="row">
+        <span>chunk length / maximum (s)</span>
+        <input id="chunk_duration" type="number" value="20" min="1" step="1">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Audio</legend>
+      <label class="row check">
+        <input id="use_audio" type="checkbox" checked>
+        <span>transcribe and diarize the soundtrack</span>
+      </label>
+      <p class="hint">
+        <code>vad</code> and <code>speaker</code> grids are derived from the
+        audio, so they need this on.
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Where it goes</legend>
+      <label class="row check">
+        <input id="sink_supabase" type="checkbox">
+        <span>also write to Postgres (a local copy is always written)</span>
+      </label>
+      <label class="row check">
+        <input id="frame_store" type="checkbox" checked>
+        <span>keep the sampled frames, so describe and the UI can show them</span>
+      </label>
+    </fieldset>
+
+    <button type="submit" id="go">Process</button>
+  </form>
+  <div id="upload-status"></div>
+</section>
+
+<!-- ------------------------------------------------------------ library -->
+<section id="library" class="tab">
+  <p class="hint">
+    Read off the <code>out/</code> directory rather than remembered, so a
+    restarted server still knows everything it produced.
+  </p>
+  <div id="videos"></div>
+</section>
+
+<!-- --------------------------------------------------------------- jobs -->
+<section id="jobs" class="tab">
+  <p class="hint" id="jobs-note"></p>
+  <div id="job-list"></div>
+</section>
+
+<div id="lightbox" hidden><img id="lightbox-img" alt=""></div>
+<script src="app.js"></script>
+</body>
+</html>

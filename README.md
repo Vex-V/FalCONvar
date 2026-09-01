@@ -241,13 +241,19 @@ stage reads the manifest and does not exist here.
 
 ## Docs
 
-- `CLAUDE.md` — working notes: invariants, measured facts that should not be
-  re-derived, and environment traps.
-- `SCHEMAS.md` — every structure the pipeline writes and what each field
-  means: the local JSON documents, the frame store, the four Postgres tables,
-  the Qdrant payload, and the keys that tie them together.
+- **[docs/RUN.md](docs/RUN.md)** — how to run the web app, the API and every
+  CLI, what each output file is, and what to do when it will not start.
+- **[docs/ROUTES.md](docs/ROUTES.md)** — the HTTP surface: every endpoint, why
+  some are queued and some answer in the request, and what a search result
+  carries.
+- **[docs/SCHEMAS.md](docs/SCHEMAS.md)** — every structure the pipeline writes
+  and what each field means: the local JSON documents, the frame store, the six
+  Postgres tables, the Qdrant payload, and the keys that tie them together.
 - `schema.sql` — runnable DDL for all of it: tables, export functions, the
   hybrid search function and RLS policies. Idempotent, safe to re-run.
+- `CLAUDE.md` — working notes: invariants, measured facts that should not be
+  re-derived, and environment traps. It stays at the repository root because
+  that is where Claude Code loads it from.
 
 The recovery kit (`ver2/recovery/`) is three standalone files that import
 nothing from `ver2` and nothing outside the standard library beyond `av`,

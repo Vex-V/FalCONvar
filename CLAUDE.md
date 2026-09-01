@@ -11,8 +11,17 @@ Everything under `ver2/`. Version 1 has been deleted.
 ## Layout
 
 ```
+web/           the browser client: one page, no build step
+  index.html     the form, the search box, the moment cards
+  app.js         fetch + render; everything offered comes from /capabilities
+  style.css
+api/           HTTP in front of it all
+  main.py        routes; queued for the slow stages, immediate for search
+  service.py     the pipeline in terms a request can supply
+  jobs.py        one background worker, in-memory job records
 ver2/
-  driver.py      BOTH streams, one grid: open, split, decide the policy, run
+  driver.py      the CLI for both streams (argparse only)
+  orchestrate.py BOTH streams, one grid: open, split, decide the policy, run
   timeline.py    the shared chunk grid: spans + the policy that produced them
   video/
     ingest/
@@ -69,7 +78,7 @@ eval/
   aggregation.py how a chunk scores from its descriptions' ranks
 ```
 
-10620 lines, 99 files.
+12214 lines, 107 files.
 
 ## Commands
 
@@ -100,13 +109,16 @@ python -m ver2.driver media/x.mp4 --sampler clip --chunking scene # video grid
 python -m ver2.audio.driver media/x.mp4 --chunking speaker        # audio alone
 python -m ver2.video.ingest.driver v.mp4 --sampler overview        # prose only
 python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text        --every-seconds 10                   # read the screen on a clock
+python -m uvicorn api.main:app --port 8000   # / for the site, /docs for the schema
 python -m ver2.imports                      # after ANY install
 python -m eval.queries out/<id>/descriptions.json   # -> eval/query_pairs.json
 python -m eval.render_ab                    # compare renderings, paired CI
 python -m eval.retrieval                    # hybrid vs dense on the shipped path
 python -m eval.aggregation                  # chunk scoring, count-bias check
-# schema.sql   runnable DDL: every table, function and RLS policy
-# SCHEMAS.md   what every field means, local JSON and Postgres alike
+# schema.sql       runnable DDL: every table, function and RLS policy
+# docs/SCHEMAS.md  what every field means, local JSON and Postgres alike
+# docs/ROUTES.md   the HTTP surface and the reasoning behind it
+# docs/RUN.md      how to run the web app, the API and every CLI
 ```
 
 **Everything a video produces lives under `out/<video-id>/`** — `manifest.json`,
@@ -449,6 +461,48 @@ one proves it is not the last, and the true last is re-read after ingest
 completes. Descriptions lag ingestion by one chunk; the alternative is telling
 the model something false about every video.
 
+**A transcript chunk embeds through the same stage as a description, and that
+was the test of the split.** Both are text with a time span and some bound
+structure, so audio needed no index of its own, no table of its own and no
+code past `units.from_transcript` -- it lands in `chunk_embeddings` with
+`sampler = "transcript"`, and `--sampler transcript` narrows a search to what
+was said exactly as `--sampler yolo` narrows it to who was seen. Had it needed
+more, the seam between `embed` and the modalities would have been in the wrong
+place.
+
+Two things it does *not* carry over. Silent chunks are skipped: they stay in
+the transcript document because `chunk_id` is shared with the video side, but
+a vector for the empty string answers every query equally badly. And only
+`speakers` goes into `structured`, never `turns` -- for a description the
+structured half is worth embedding because it holds what the summary does not
+(0.705 against 0.528 MRR), but `turns[].text` *is* the transcript, so rendering
+it appended the whole chunk a second time interleaved with timestamps read as
+numbers. 337 characters became 151. The turns are the record and live in
+`audio_chunks`.
+
+**Cross-modal agreement is the point, and it shows.** Measured on Chernobyl
+with `uniform:overview` on the picture and Whisper on the sound, one `vad`
+grid: `"the moment the reactor exploded"` returns chunk 7 at 0.1326 on
+`overview(v1) + transcript(v2)` -- the visual pass describing "a severe
+explosion and fire in one section of the reactor building" and the audio pass
+"At 1.23 a.m., reactor 4 exploded", two independent accounts of the same 16
+seconds. Asking the audio for `"the control rods were removed during the
+test"` gives chunk 6, and that chunk's overview independently reports "the
+control rods appear to move upward out of the core ... highlighted in a
+stronger red tone, suggesting increased heat". Neither pass saw the other's
+output.
+
+**A sink that appends has to clean up after a shrink.** The pipeline streams
+each chunk as it closes, then folds a too-short final chunk into the one
+before it once it knows where the media really ends -- so the last row written
+can name a chunk that no longer exists. Observed on test2: 60.325 s at 20 s
+closed four chunks, the last 0.325 s long, and the merge left `chunk_id = 3`
+orphaned in Postgres while the file held three. The file writer rewrites its
+whole document and never had the problem. `finish()` now deletes
+`chunk_id >= len(chunks)` after the upserts -- after, so a failure leaves the
+previous copy whole rather than a hole. The transcript sink already did this;
+the manifest sink predated the tail merge.
+
 **One vector space per embedder, never per sampler.** A space is defined by
 the model, not by which prompt produced the text, so everything one embedder
 writes is directly comparable. The sampler is payload, and querying one is a
@@ -510,6 +564,53 @@ seconds where describing costs inference. Instead each row carries
 `frame_store`, so it is known before the first chunk exists, survives the video
 and store being moved, and changes when the sampling changes. Staleness is a
 comparison, not a deletion.
+
+**The site is served by the API, at `/app` rather than `/`.** Same origin, so
+the browser client needs no CORS and no base URL -- but not the root, because
+`GET /videos` is an API route and a site mounted there would shadow it. The
+form is built from `GET /capabilities`, so a sampler registered in `ver2`
+appears in the browser without anyone editing JavaScript.
+
+**Two bugs in that page were only findable in a real browser**, and both were
+invisible to reading the file. `#lightbox` carried the `hidden` attribute but
+also `display: grid`, and any author `display` beats the UA stylesheet's
+`[hidden] { display: none }` -- so a semi-transparent overlay covered the
+viewport, dimmed the whole page and swallowed every click. And `queue()`
+switched tabs by *clicking* the tab button, which fires an unawaited
+`loadJobs()` whose `innerHTML = ""` detached the live progress box that
+`follow()` had just inserted; the box kept polling and updating a node no
+longer in the document, so a finished job read "queued" forever. Both are the
+same shape as the pipeline bugs recorded above: the output looked plausible
+and nothing reported the fault.
+
+**The API calls `orchestrate`, never `driver`.** `ver2/driver.py` used to hold
+the whole run inline, which made it the one module breaking the rule every
+stage driver follows -- "driver.py: the CLI, argparse only, no pipeline logic".
+A server importing an argparse module to reach the work behind it would have
+made that permanent, so the run moved to `ver2/orchestrate.py` and the CLI
+became a shim over it. Verified: the CLI's output is unchanged.
+
+Progress is a **callback**, not a print. The two callers want opposite things
+from it -- a terminal wants lines as they happen, a job runner wants the latest
+state to answer a poll with -- so `process(options, on_progress=...)` emits
+`(stage, detail)` and neither policy lives in the pipeline.
+
+**Slow work is queued, one job at a time.** Every heavy stage contends for the
+same 8 GiB GPU: CLIP and YOLO during ingest, Whisper and pyannote during the
+audio pass. Two videos at once does not halve the wall clock, it doubles the
+resident weights and invites an allocator failure halfway through the more
+expensive one. A queue of one is the honest shape of the hardware.
+
+**Validation is synchronous even though the work is not.** `orchestrate.validate`
+returns problems as a list rather than raising, so the CLI prints them all at
+once and the API answers 422 with them -- and a bad sampler name never becomes
+a job that fails a minute later. What cannot be known without opening the file
+still fails in the job: `--chunking vad` on silent audio is a 202, because
+whether a track has speech is not a property of the request.
+
+**Job records die with the process; artifacts do not.** `GET /jobs` says so.
+`GET /videos` reads the `out/` directory rather than remembering, so a
+restarted server still knows everything it produced.
 
 **One chunk grid per run, and either modality may decide it.** `timeline.py`
 holds the spans and the policy that produced them, and imports nothing --

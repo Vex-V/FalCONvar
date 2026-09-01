@@ -78,6 +78,17 @@ def fetch_descriptions(client: Any, video_id: str) -> list[dict[str, Any]]:
                       {"p_video_id": video_id}).execute().data or []
 
 
+def fetch_transcript(client: Any, video_id: str) -> Optional[dict[str, Any]]:
+    """The transcript document, reassembled by ``export_audio_transcript``.
+
+    None when the video has no transcript, which is an ordinary outcome: half
+    the footage this project runs on is silent CCTV.
+    """
+    document = client.rpc("export_audio_transcript",
+                          {"p_video_id": video_id}).execute().data
+    return document or None
+
+
 def manifest_header(client: Any, video_id: str) -> dict[str, Any]:
     """The manifest without its chunks -- all a follower has at the start.
 

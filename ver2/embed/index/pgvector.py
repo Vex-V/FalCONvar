@@ -28,7 +28,7 @@ def _literal(vector: Sequence[float]) -> str:
 
 
 class PgVectorIndex:
-    """The `description_embeddings` table. A ``VectorIndex``."""
+    """The `chunk_embeddings` table. A ``VectorIndex``."""
 
     name = "pgvector"
 

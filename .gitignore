@@ -98,3 +98,10 @@ desktop.ini
 *.json.tmp
 
 
+
+# API uploads: the source file is kept only until the run reads it
+uploads/
+
+# Playwright MCP scratch output and ad-hoc screenshots
+.playwright-mcp/
+/*.png

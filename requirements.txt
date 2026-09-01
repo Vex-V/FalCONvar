@@ -13,3 +13,12 @@ easyocr==1.7.2             # text          (detector only; nothing is read)
 # Scene chunking. Only the detector algorithm is used -- its SceneManager is
 # batch and pull-based, which would mean a second decode pass.
 scenedetect==0.7.1
+
+# --- api (optional): only `api/` needs these, ver2 runs without them
+fastapi
+uvicorn[standard]
+python-multipart
+
+# --- audio (optional): only ver2/audio needs these
+faster-whisper
+pyannote.audio

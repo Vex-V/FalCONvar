@@ -165,6 +165,55 @@ def from_document(document: dict[str, Any]) -> list[Unit]:
     return units
 
 
+def from_transcript(document: dict[str, Any]) -> list[Unit]:
+    """Units from a transcript document. One per chunk that holds speech.
+
+    The whole test of whether `embed` was cut in the right place. A transcript
+    chunk is text with a time span and some bound structure, which is exactly
+    what a description is, so it needs no new index, no new table and no new
+    code past this function -- it lands in `chunk_embeddings` beside the
+    describers' output with `sampler = "transcript"`, and `--sampler
+    transcript` narrows a search to what was said the same way `--sampler yolo`
+    narrows it to who was seen.
+
+    Silent chunks are skipped. They are kept in the transcript document because
+    `chunk_id` is shared with the video side and dropping them would renumber
+    everything after -- but a vector for the empty string is not a thing worth
+    storing, and it would answer every query equally badly.
+
+    `manifest_fingerprint` carries the **timeline** fingerprint here. The
+    column's job is to name the upstream artifact this was derived from, and
+    for audio that is the grid rather than a manifest.
+
+    **Only `speakers` is carried into `structured`, not `turns`.** For a
+    description the structured half is worth embedding because it holds content
+    the summary does not -- measured at 0.705 against 0.528 MRR for summary
+    alone. For a transcript it is the opposite: `turns[].text` *is* the text, so
+    rendering it appends the entire chunk a second time, interleaved with
+    timestamps read as numbers. The turns are not lost -- they are the record,
+    and they live in `audio_chunks.structured` where they can be queried.
+    `speakers` stays because it is the one genuinely useful filter here: every
+    moment a particular voice was talking.
+    """
+    units: list[Unit] = []
+    fingerprint = document.get("timeline_fingerprint")
+    for chunk in document.get("chunks", []):
+        if not (chunk.get("text") or "").strip():
+            continue
+        units.append(Unit(
+            video_id=document["video_id"],
+            chunk_id=chunk["chunk_id"],
+            sampler="transcript",
+            text=chunk["text"],
+            structured={"speakers": (chunk.get("structured") or {}).get("speakers") or []},
+            start_ts=chunk.get("start_ts"),
+            end_ts=chunk.get("end_ts"),
+            frame_indexes=None,
+            manifest_fingerprint=fingerprint,
+        ))
+    return units
+
+
 def from_rows(video_id: str, rows: Iterable[dict[str, Any]],
               bounds: Optional[dict[int, tuple[float, float]]] = None) -> list[Unit]:
     """Units straight from `descriptions` rows.
