@@ -1,0 +1,524 @@
+[
+  {
+    "query": "customers queue at the checkout",
+    "form": "literal",
+    "truth": 0,
+    "dense": 5,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 7
+  },
+  {
+    "query": "buyers waiting for payment",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman with a red shopping bag",
+    "form": "literal",
+    "truth": 0,
+    "dense": 2,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 7
+  },
+  {
+    "query": "female shopper with crimson tote",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 5,
+    "lexical": null,
+    "hybrid": 5,
+    "lex_hits": 0
+  },
+  {
+    "query": "shelves of boxed goods",
+    "form": "literal",
+    "truth": 0,
+    "dense": 5,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 6
+  },
+  {
+    "query": "racks of packaged items",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 5,
+    "lexical": null,
+    "hybrid": 5,
+    "lex_hits": 0
+  },
+  {
+    "query": "cashier at the checkout",
+    "form": "literal",
+    "truth": 0,
+    "dense": 4,
+    "lexical": 4,
+    "hybrid": 5,
+    "lex_hits": 8
+  },
+  {
+    "query": "store clerk at payment desk",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman with a white coat",
+    "form": "literal",
+    "truth": 0,
+    "dense": 1,
+    "lexical": 2,
+    "hybrid": 2,
+    "lex_hits": 8
+  },
+  {
+    "query": "female wearing pale overcoat",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "child with a pink bow",
+    "form": "literal",
+    "truth": 0,
+    "dense": 2,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 2
+  },
+  {
+    "query": "youngster with rose ribbon",
+    "form": "paraphrase",
+    "truth": 0,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "checkout counter staff member",
+    "form": "literal",
+    "truth": 1,
+    "dense": 4,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 1
+  },
+  {
+    "query": "cash desk worker",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 3,
+    "lexical": null,
+    "hybrid": 3,
+    "lex_hits": 0
+  },
+  {
+    "query": "stacked boxes across aisle",
+    "form": "literal",
+    "truth": 1,
+    "dense": 1,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 3
+  },
+  {
+    "query": "towered cartons through walkway",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "child in white hood",
+    "form": "literal",
+    "truth": 1,
+    "dense": 4,
+    "lexical": 3,
+    "hybrid": 4,
+    "lex_hits": 8
+  },
+  {
+    "query": "youngster wearing pale cowl",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "bald glasses dark jacket counter",
+    "form": "literal",
+    "truth": 1,
+    "dense": 3,
+    "lexical": 1,
+    "hybrid": 3,
+    "lex_hits": 4
+  },
+  {
+    "query": "shaved spectacles long-coat payment desk",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman white shopping bag orange item",
+    "form": "literal",
+    "truth": 1,
+    "dense": 5,
+    "lexical": 2,
+    "hybrid": 5,
+    "lex_hits": 3
+  },
+  {
+    "query": "female retail sack tangerine object",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "man maroon cap back left shelves",
+    "form": "literal",
+    "truth": 1,
+    "dense": 1,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 3
+  },
+  {
+    "query": "male burgundy hat rear rack",
+    "form": "paraphrase",
+    "truth": 1,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "checkout counter cash register",
+    "form": "literal",
+    "truth": 2,
+    "dense": 3,
+    "lexical": 3,
+    "hybrid": 2,
+    "lex_hits": 3
+  },
+  {
+    "query": "payment desk till machine",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman in blue coat",
+    "form": "literal",
+    "truth": 2,
+    "dense": 4,
+    "lexical": 2,
+    "hybrid": 2,
+    "lex_hits": 8
+  },
+  {
+    "query": "female in azure outerwear",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "shoppers browse shelves",
+    "form": "literal",
+    "truth": 2,
+    "dense": 4,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 6
+  },
+  {
+    "query": "patrons inspect wall racks",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "older blonde glasses blue jacket shopping basket",
+    "form": "literal",
+    "truth": 2,
+    "dense": 3,
+    "lexical": 2,
+    "hybrid": 3,
+    "lex_hits": 3
+  },
+  {
+    "query": "senior fairheaded spectacles azure outerwear carrying container",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "bald glasses dark jacket beige trousers checkout",
+    "form": "literal",
+    "truth": 2,
+    "dense": 1,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 2
+  },
+  {
+    "query": "hairless spectacles somber outerwear tan pants register",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 3,
+    "lexical": null,
+    "hybrid": 3,
+    "lex_hits": 0
+  },
+  {
+    "query": "bright blue jacket pink top",
+    "form": "literal",
+    "truth": 2,
+    "dense": 1,
+    "lexical": 2,
+    "hybrid": 2,
+    "lex_hits": 8
+  },
+  {
+    "query": "vivid azure outer layer rose shirt",
+    "form": "paraphrase",
+    "truth": 2,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "cashier at register",
+    "form": "literal",
+    "truth": 3,
+    "dense": 1,
+    "lexical": 3,
+    "hybrid": 2,
+    "lex_hits": 7
+  },
+  {
+    "query": "teller at till",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman in blue jacket bag",
+    "form": "literal",
+    "truth": 3,
+    "dense": 4,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 8
+  },
+  {
+    "query": "person in azure outerwear satchel",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "child near central display",
+    "form": "literal",
+    "truth": 3,
+    "dense": 3,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 9
+  },
+  {
+    "query": "youngster by middle showcase",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "older bald man with glasses checkout",
+    "form": "literal",
+    "truth": 3,
+    "dense": 4,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 3
+  },
+  {
+    "query": "senior bespectacled fellow at register",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "woman with blonde ponytail white tray",
+    "form": "literal",
+    "truth": 3,
+    "dense": 2,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 1
+  },
+  {
+    "query": "female with tied fair locks and platter",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "child at right-side shelves white hooded sweatshirt",
+    "form": "literal",
+    "truth": 3,
+    "dense": 4,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 2
+  },
+  {
+    "query": "small kid by store racks in pale pullover",
+    "form": "paraphrase",
+    "truth": 3,
+    "dense": 4,
+    "lexical": null,
+    "hybrid": 4,
+    "lex_hits": 0
+  },
+  {
+    "query": "cashier assists customer at checkout",
+    "form": "literal",
+    "truth": 4,
+    "dense": 3,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 2
+  },
+  {
+    "query": "till clerk helps shopper at register",
+    "form": "paraphrase",
+    "truth": 4,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "blue-jacketed shopper bends into basket",
+    "form": "literal",
+    "truth": 4,
+    "dense": 2,
+    "lexical": 1,
+    "hybrid": 2,
+    "lex_hits": 1
+  },
+  {
+    "query": "azure-clad buyer leans into hamper",
+    "form": "paraphrase",
+    "truth": 4,
+    "dense": 2,
+    "lexical": null,
+    "hybrid": 2,
+    "lex_hits": 0
+  },
+  {
+    "query": "older woman in beige walks right shelves",
+    "form": "literal",
+    "truth": 4,
+    "dense": 1,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 4
+  },
+  {
+    "query": "senior lady in tan strolls beside racks",
+    "form": "paraphrase",
+    "truth": 4,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "cashier behind the checkout counter",
+    "form": "literal",
+    "truth": 4,
+    "dense": 2,
+    "lexical": 2,
+    "hybrid": 2,
+    "lex_hits": 8
+  },
+  {
+    "query": "shop clerk at till",
+    "form": "paraphrase",
+    "truth": 4,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  },
+  {
+    "query": "older male with burgundy baseball cap",
+    "form": "literal",
+    "truth": 4,
+    "dense": 1,
+    "lexical": 1,
+    "hybrid": 1,
+    "lex_hits": 1
+  },
+  {
+    "query": "senior man in maroon hat",
+    "form": "paraphrase",
+    "truth": 4,
+    "dense": 1,
+    "lexical": null,
+    "hybrid": 1,
+    "lex_hits": 0
+  }
+]

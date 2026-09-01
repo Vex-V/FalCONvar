@@ -14,7 +14,7 @@ out/<video-id>/
   manifest.json        which frames were kept, and why      <- ingest
   store/               those frames, keyed by frame index   <- ingest
   descriptions.json    what a model said about them         <- describe
-out/qdrant/            local vector index                   <- retrieve
+out/qdrant/            local vector index                   <- embed
 
 Supabase   videos + chunks              = manifest.json, as rows
            descriptions                 = descriptions.json, as rows
@@ -27,7 +27,7 @@ one thing to inspect, copy or delete.
 ## What derives from what
 
 ```
-video ──ingest──> manifest.json ──describe──> descriptions.json ──retrieve──> vectors
+video ──ingest──> manifest.json ──describe──> descriptions.json ──embed──> vectors
              └──> store/           (reads the store)              (embeds the text)
 ```
 
@@ -261,8 +261,11 @@ Payload mirrors the Postgres columns: `video_id`, `chunk_id`, `sampler`,
 ## 7. What gets embedded
 
 **Not** the summary alone. `Unit.embed_text` is the summary plus the structured
-fields rendered to text, one line per field, with each entity's values joined so
-`{appearance, clothing, role, action}` stays one clause. Measured on test1 over
+fields rendered to text, one line per field, with each entity kept as one
+clause so `{appearance, clothing, role, action}` stays bound together. Keys are
+**sorted** and each attribute is **named** -- `jsonb` does not preserve object
+key order, so rendering in iteration order made the vector depend on whether
+the description was read from the file or from Postgres. Measured on test1 over
 22 disjoint query pairs (dense MRR, random 0.457):
 
 | embedded from | literal | paraphrase |

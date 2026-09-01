@@ -52,8 +52,30 @@ def render(structured: Optional[dict[str, Any]]) -> str:
     """The structured fields as text, one line per field.
 
     A specialist's entry is a bound record -- appearance, clothing, role and
-    action for one person -- so joining its values keeps who-did-what together
-    rather than scattering it across parallel lists.
+    action for one person -- so its fields are kept together in one clause
+    rather than scattered across parallel lists. Three separators, one per
+    level of nesting, so the structure survives into the text: ``. `` between
+    fields, ``|`` between entities, ``;`` between one entity's attributes.
+
+    **Keys are sorted, and that is a correctness requirement rather than
+    tidiness.** ``jsonb`` does not preserve object key order -- it stores keys
+    by (length, bytewise) -- so a description read back from Postgres hands
+    back ``{role, action, clothing, appearance}`` where the file had
+    ``{appearance, clothing, role, action}``. Rendering in iteration order made
+    the text, and therefore ``text_hash`` and the vector, depend on which
+    *copy* of a description it came from: indexing the same data from the file
+    and from ``--video-id`` produced different embeddings, and each run
+    re-embedded what the other had just written, reporting "description
+    changed" forever. Sorting makes the text a function of content alone.
+
+    **Each attribute is named**, because the separator between two fields used
+    to be ``", "`` -- which also occurs inside them, as in "dark green top,
+    dark pants, black sneakers". Where one field ended and the next began was
+    invisible. Measured on test1 over 29 disjoint query pairs, naming them
+    changes retrieval by less than the noise floor (every paired bootstrap CI
+    spans zero); it is kept for the structure it makes explicit, at about 6%
+    more characters, and because a field that is to become a filterable enum
+    should be a named term rather than a bare word among clothing.
     """
     lines = []
     for key, value in sorted((structured or {}).items()):
@@ -63,10 +85,11 @@ def render(structured: Optional[dict[str, Any]]) -> str:
             items = []
             for item in value:
                 if isinstance(item, dict):
-                    items.append(", ".join(str(v) for v in item.values() if v))
+                    items.append("; ".join(f"{k} {item[k]}"
+                                           for k in sorted(item) if item[k]))
                 else:
                     items.append(str(item))
-            lines.append(f"{key}: " + "; ".join(items))
+            lines.append(f"{key}: " + " | ".join(items))
     return ". ".join(lines)
 
 

@@ -4,13 +4,15 @@ A video goes in; a searchable index of moments comes out. Three stages, each
 consuming only what the one before it wrote:
 
 ```
-video --ingest--> manifest + frame store --describe--> descriptions --retrieve--> moments
+video --ingest--> manifest + frame store --describe--> descriptions
+      --embed--> vectors --retrieve--> moments
 ```
 
 **ingest** decides which frames are worth describing and records why.
 **describe** reads those frames back and asks a VLM about them, one question
-per sampler. **retrieve** embeds the answers and turns a question into a time
-range you can play, with the exact frames as evidence.
+per sampler. **embed** turns each answer into a vector and keeps the index
+current. **retrieve** turns a question into a time range you can play, with the
+exact frames as evidence.
 
 ```
 ver2/
@@ -27,9 +29,13 @@ ver2/
     describers/  the Describer protocol + a registry (stub | openai)
     vlm/         the OpenAI call + one prompt and schema per sampler
     output/      description sinks (file | supabase | both)
-  retrieve/      descriptions -> a searchable index
+  embed/         descriptions -> a searchable index
+    defaults.py  which embedder + which index, shared by both CLIs
     embedders/   Embedder protocol + registry (openai | local)
     index/       qdrant (embedded) | pgvector | both
+    units.py     description -> embeddable unit, keyed by a hash of its text
+    indexer.py   embed only what changed
+  retrieve/      a question -> moments
     search.py    ranked descriptions -> ranked moments
   recovery/      standalone: rebuild any of it from a video id + the video
   db.py          the Supabase client and the shared reads
@@ -54,10 +60,14 @@ python -m ver2.describe.driver out/<id>/manifest.json
 python -m ver2.describe.driver out/<id>/manifest.json --describer openai
 python -m ver2.describe.driver --video-id <id> --follow    # tail a live ingest
 
-# 3. retrieve
-python -m ver2.retrieve.driver index out/<id>/descriptions.json
-python -m ver2.retrieve.driver search "people at the checkout" --moments 3
-python -m ver2.retrieve.driver search "..." --sampler yolo   # one question only
+# 3. embed   (defaults to Postgres; see .env.example to switch)
+python -m ver2.embed.driver out/<id>/descriptions.json
+python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
+
+# 4. retrieve
+python -m ver2.retrieve.driver "people at the checkout" --moments 3
+python -m ver2.retrieve.driver "..." --sampler yolo          # one question only
+python -m ver2.retrieve.driver "..." --index qdrant          # dense only
 
 # recovery -- three files, no project checkout needed
 python -m ver2.recovery.supabase_manifest <id>       # -> <id>.json
@@ -69,7 +79,13 @@ python -m ver2.imports                      # after any install
 
 Samplers: `uniform`, `clip`, `yolo`, `objects`, `text`. Chunkers: `uniform`,
 `scene`. Describers: `stub`, `openai`. Embedders: `openai`, `local`.
-Indexes: `qdrant`, `pgvector`.
+Indexes: `qdrant`, `pgvector`. The defaults are **pgvector + openai**, set in
+`ver2/embed/defaults.py` and overridable per-run by flag or globally by
+`FALCONVAR_INDEX` / `FALCONVAR_EMBEDDER` / `FALCONVAR_EMBED_MODEL` in `.env` --
+one place, because `embed` and `retrieve` must name the same embedder or the
+search is well-formed and meaningless. Postgres is the default because it is
+the only index carrying the lexical half; `--index qdrant` is dense-only and
+says so.
 
 ## The pipeline
 

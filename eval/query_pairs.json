@@ -1,0 +1,366 @@
+[
+  {
+    "chunk_id": 0,
+    "sampler": "clip",
+    "literal": "checkout queue cashier shoppers",
+    "paraphrase": "till line clerk patrons",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "clip",
+    "literal": "right-side shelves stacked boxes",
+    "paraphrase": "store racks piled cartons",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "yolo",
+    "literal": "older woman pink top checkout area",
+    "paraphrase": "senior lady magenta sweater register zone",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "yolo",
+    "literal": "girl red skirt shelves entrance",
+    "paraphrase": "young person scarlet bottoms store entry racks",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "sales desk till",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "objects",
+    "literal": "display stand price label",
+    "paraphrase": "fixture tag signage",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "clip",
+    "literal": "cashier handles items at checkout",
+    "paraphrase": "clerk scans goods at till",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "clip",
+    "literal": "man carries two large boxes",
+    "paraphrase": "male hauls pair of cartons",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "yolo",
+    "literal": "bald man at checkout",
+    "paraphrase": "hairless shopper at register",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "yolo",
+    "literal": "man in puffer jacket by toy shelves",
+    "paraphrase": "male in padded coat near playthings",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "payment desk till machine",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "objects",
+    "literal": "shelves packed with toy boxes",
+    "paraphrase": "wall racks filled with playthings",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "clip",
+    "literal": "blue-coated woman shopping bags",
+    "paraphrase": "elderly female carrying purchases",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "clip",
+    "literal": "man in glasses waits near counter",
+    "paraphrase": "spectacled male standing by register",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "yolo",
+    "literal": "woman in bright blue coat basket",
+    "paraphrase": "elderly female in vivid outerwear with shopping hamper",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "yolo",
+    "literal": "child at right shelves white hoodie",
+    "paraphrase": "small youngster by merchandise display in pale hooded top",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "objects",
+    "literal": "shopping basket orange rim",
+    "paraphrase": "market hamper with colored lip",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "till desk with terminal",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "clip",
+    "literal": "cashier at checkout queue",
+    "paraphrase": "shop clerk at payment desk line",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "clip",
+    "literal": "older woman adjusts shopping bag",
+    "paraphrase": "senior lady opens tote",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "yolo",
+    "literal": "blue jacket pink polo shirt",
+    "paraphrase": "azure outerwear rose collared top",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "yolo",
+    "literal": "cashier checkout red basket",
+    "paraphrase": "teller register crimson hamper",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "till point till",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "till desk payment terminal",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "clip",
+    "literal": "cashier at left register",
+    "paraphrase": "till operator by counter",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "clip",
+    "literal": "woman in blue jacket basket",
+    "paraphrase": "female in azure outerwear container",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "yolo",
+    "literal": "older man near checkout",
+    "paraphrase": "senior male by register",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "yolo",
+    "literal": "woman with long blonde hair shelves",
+    "paraphrase": "female shopper with fair locks by merchandise",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "objects",
+    "literal": "white wire basket on stand",
+    "paraphrase": "circular metal receptacle on pedestal",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "objects",
+    "literal": "checkout counter cash register",
+    "paraphrase": "payment desk with till",
+    "video_id": "test1"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "text",
+    "literal": "CHERNOBYL 1986 opening frame",
+    "paraphrase": "nuclear disaster first scene",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 0,
+    "sampler": "text",
+    "literal": "Black Sea U.S.S.R. map",
+    "paraphrase": "Mediterranean? no",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "text",
+    "literal": "REACTORS RBMK-1000",
+    "paraphrase": "atomic units thousand class",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 1,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty",
+    "paraphrase": "european broadcast network",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "europe news emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 2,
+    "sampler": "text",
+    "literal": "Reactor 4 safety test April 26 1986",
+    "paraphrase": "unit four inspection disaster date",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "text",
+    "literal": "RBMK-1000 reactors",
+    "paraphrase": "nuclear plant units",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 3,
+    "sampler": "text",
+    "literal": "MW MPa \u00b0C",
+    "paraphrase": "megawatts pressure temperature",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "eastern europe broadcaster emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 4,
+    "sampler": "text",
+    "literal": "REACTORS RBMK-1000 MPa \u00b0C MW",
+    "paraphrase": "nuclear unit pressure temperature power",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 5,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "Eastern broadcaster emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 5,
+    "sampler": "text",
+    "literal": "RADIATION 8 TONS",
+    "paraphrase": "nuclear release mass",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 6,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "public broadcaster emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 6,
+    "sampler": "text",
+    "literal": "HIROSHIMA 1945 initial deaths",
+    "paraphrase": "atomic bombing fatalities",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 7,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty watermark",
+    "paraphrase": "european broadcaster emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 7,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty watermark",
+    "paraphrase": "Eastern Europe broadcaster mark",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 8,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "broadcaster emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 8,
+    "sampler": "text",
+    "literal": "CONFINEMENT STRUCTURE 260m arch",
+    "paraphrase": "detention frame span",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 9,
+    "sampler": "text",
+    "literal": "RadioFreeEurope RadioLiberty logo",
+    "paraphrase": "media emblem",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 9,
+    "sampler": "text",
+    "literal": "CONFINEMENT STRUCTURE $3 BILLION COMPLETION 2017",
+    "paraphrase": "costly enclosure project finish year",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 10,
+    "sampler": "text",
+    "literal": "RadioFreeEurope logo watermark",
+    "paraphrase": "station emblem overlay",
+    "video_id": "Chernobyl"
+  },
+  {
+    "chunk_id": 10,
+    "sampler": "text",
+    "literal": "Producer Stuart Greer credit",
+    "paraphrase": "film maker acknowledgement",
+    "video_id": "Chernobyl"
+  }
+]

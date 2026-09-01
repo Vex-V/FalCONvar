@@ -1,17 +1,20 @@
-"""Finding the moment, given a question.
+"""Descriptions in, vectors out.
 
-The stage that makes the rest of it worth building. Ingest decides which frames
-matter, describe says what is in them, and this turns those descriptions into
-something a question can be asked of.
+The stage between describe and retrieve. What it embeds is one description --
+one ``(chunk, sampler)`` pair -- because that is the unit a describer call
+produced, and the unit whose text answers one particular kind of question.
+Merging a chunk's descriptions into a single vector would average away the
+reason there is more than one of them.
 
-What it indexes is one description -- one (chunk, sampler) pair -- because that
-is the unit a describer call produced and the unit whose text answers a
-particular kind of question. What it *returns* is a chunk: a window of media
-time with an in and an out point, and the exact frame indexes to show as
-evidence. The two are not the same thing, and the gap between them is where
-the ranking happens.
+Nothing this stage writes is a record. Embeddings are derived: the
+descriptions they come from are authoritative, and an index is a cache that
+can be dropped and rebuilt from them. That is why every vector carries a hash
+of the text it was made from -- a stale vector has to be detectable rather
+than merely regrettable.
 
-Embeddings are derived, never authoritative. The descriptions they come from
-are the record; an index is a cache that can be dropped and rebuilt, which is
-why every vector carries a hash of the text it was made from.
+It owns the index the way ingest owns the frame store: the stage that writes a
+store is the stage that defines it. `retrieve` reads this one, and reaches for
+exactly two things -- an ``Embedder``, because a question must be embedded by
+the same model as the descriptions or the vectors are not comparable, and a
+``VectorIndex``, because that is where they were put.
 """
