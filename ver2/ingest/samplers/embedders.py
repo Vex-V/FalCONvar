@@ -107,28 +107,3 @@ class CLIPEmbedder(FrameEmbedder):
         }
 
 
-class MeanColorEmbedder(FrameEmbedder):
-    """A cheap, model-free stand-in: coarse spatial colour histogram.
-
-    Useful for exercising sampling policy without a GPU or model download,
-    and as a sanity check that a CLIP result is actually doing something a
-    trivial baseline cannot.
-    """
-
-    name = "meancolor"
-
-    def __init__(self, grid: int = 4) -> None:
-        self.grid = grid
-        self.dim = grid * grid * 3
-
-    def embed(self, images: Sequence[np.ndarray]) -> np.ndarray:
-        import cv2
-
-        vectors = []
-        for image in images:
-            small = cv2.resize(image, (self.grid, self.grid), interpolation=cv2.INTER_AREA)
-            vectors.append(small.astype(np.float32).reshape(-1) / 255.0)
-        return _l2(np.stack(vectors))
-
-    def config(self) -> dict:
-        return {"name": self.name, "grid": self.grid, "dim": self.dim}

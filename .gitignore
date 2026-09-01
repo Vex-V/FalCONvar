@@ -8,14 +8,6 @@
 *.pem
 
 # ---------------------------------------------------------------------------
-# Version 1 -- superseded by ver2/, kept on disk for reference only
-# ---------------------------------------------------------------------------
-/falconvar/
-/scripts/
-/test.py
-/README.v1.md
-
-# ---------------------------------------------------------------------------
 # Media and model weights: large, and not ours to redistribute.
 # The pipeline takes any video as an argument; nothing here is required to
 # run it. Model weights are downloaded on first use by ultralytics/HF.
@@ -74,6 +66,7 @@ venv/
 ENV/
 env/
 
+.venv
 # Testing / typing / linting caches
 .pytest_cache/
 .mypy_cache/
@@ -103,3 +96,5 @@ desktop.ini
 *.log
 *.tmp
 *.json.tmp
+
+

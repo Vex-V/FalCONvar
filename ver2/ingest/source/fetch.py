@@ -22,7 +22,7 @@ the wrong frame 10 times out of 10.
 
 from __future__ import annotations
 
-from typing import Iterator, Optional
+from typing import Optional
 
 import av
 import cv2
@@ -171,11 +171,6 @@ class FrameFetcher:
             emitted += 1
             if emitted >= count:
                 return
-
-    def fetch_many(self, targets: list[tuple[Optional[int], Optional[int]]]) -> Iterator:
-        """Fetch (pts, index) pairs in ascending order, yielding (target, image)."""
-        for pts, index in targets:
-            yield (pts, index), self.fetch(pts=pts, index=index)
 
     def stats(self) -> dict:
         return {"seeks": self.seeks, "retries": self.retries, "scans": self.scans}

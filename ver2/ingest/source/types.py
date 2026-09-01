@@ -41,10 +41,6 @@ class Frame:
     discontinuity: bool = False
 
     @property
-    def has_image(self) -> bool:
-        return self.image is not None
-
-    @property
     def nbytes(self) -> int:
         return self.image.nbytes if self.image is not None else 0
 

@@ -10,9 +10,31 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
+
+# Ultralytics resolves a bare filename against the working directory and
+# downloads it if absent, which scatters weights wherever the command was run
+# from. Keeping them in one place means looking there first.
+#
+# ``weights/clip/ViT-B-32.pt`` also lives there and is *not* stale: YOLO-World
+# embeds its vocabulary with OpenAI CLIP, so OpenVocabDetector pulls a 338 MB
+# text encoder on first use. That is a second, separate CLIP from the one
+# ClipChangeSampler loads through HuggingFace -- different libraries, different
+# formats, different jobs. Deleting it costs a re-download, not a failure.
+WEIGHTS_DIR = Path(__file__).resolve().parents[3] / "weights"
+
+
+def weight_path(name: str) -> str:
+    """The local copy of a weight file if we have it, else the bare name.
+
+    Falling back to the bare name rather than raising keeps first-run working:
+    ultralytics downloads what is missing.
+    """
+    local = WEIGHTS_DIR / name
+    return str(local) if local.exists() else name
 
 
 @dataclass(frozen=True)
@@ -97,7 +119,7 @@ class YoloPersonDetector(ObjectDetector):
         self.min_height = min_height
         self.imgsz = imgsz
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._model = YOLO(model)
+        self._model = YOLO(weight_path(model))
         self._model.to(self.device)
 
     def detect(self, image: np.ndarray) -> list[Detection]:
@@ -180,7 +202,7 @@ class OpenVocabDetector(ObjectDetector):
         self.min_height = min_height
         self.imgsz = imgsz
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._model = YOLOWorld(model)
+        self._model = YOLOWorld(weight_path(model))
         self._model.set_classes(self.vocabulary)
         self._model.to(self.device)
 
@@ -300,18 +322,3 @@ class TextRegionDetector(ObjectDetector):
         }
 
 
-class FixedDetector(ObjectDetector):
-    """Returns pre-set detections. For testing sampling policy without a model."""
-
-    name = "fixed"
-
-    def __init__(self, per_call: Sequence[Sequence[Detection]]) -> None:
-        self.per_call = list(per_call)
-        self._i = 0
-
-    def detect(self, image: np.ndarray) -> list[Detection]:
-        if self._i >= len(self.per_call):
-            return []
-        out = list(self.per_call[self._i])
-        self._i += 1
-        return out

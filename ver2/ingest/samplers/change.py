@@ -247,28 +247,20 @@ class TextChangeSampler(DetectionChangeSampler):
         detector: Optional["ObjectDetector"] = None,
         threshold: float = 0.92,
         grid: int = 128,
-        mode: str = "layout",
-        iou_gate: float = 0.3,
         languages: Sequence[str] = ("en",),
         min_interval_s: float = 0.0,
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
     ) -> None:
-        from .descriptors import TextLayoutDescriptor, TextRegionDescriptor
+        from .descriptors import TextLayoutDescriptor
 
         if detector is None:
             from .detectors import TextRegionDetector
 
             detector = TextRegionDetector(languages=languages)
-        if mode == "layout":
-            descriptor = TextLayoutDescriptor(grid=grid)
-        elif mode == "region":
-            descriptor = TextRegionDescriptor(grid=grid, iou_gate=iou_gate)
-        else:
-            raise ValueError("mode must be 'layout' or 'region'")
         super().__init__(
             detector=detector,
-            descriptor=descriptor,
+            descriptor=TextLayoutDescriptor(grid=grid),
             threshold=threshold,
             min_interval_s=min_interval_s,
             max_per_chunk=max_per_chunk,

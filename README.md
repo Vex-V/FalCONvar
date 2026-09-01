@@ -6,13 +6,18 @@ back later. The describer (VLM) stage reads the manifest and never touches the
 pipeline.
 
 ```
-ver2/ingest/
-  source/      probe, sequential read, decimation, random access
-  chunker/     media time -> chunk id
-  samplers/    which decimated frames are worth describing
-  driver.py    wires it together and writes the manifest
-  calibrate.py what a threshold would cost here, and where it must not go
-  recreate.py  rebuild a frame store from its manifest
+ver2/
+  ingest/        produces a manifest
+    source/      probe, sequential read, decimation, random access
+    chunker/     media time -> chunk id
+    samplers/    which decimated frames are worth describing
+    output/      manifest + frame store -- what a run leaves behind
+    pipeline.py  one decode pass, feeding every stage from it
+    driver.py    the command line
+    calibrate.py what a threshold would cost here, and where it must not go
+  recovery/
+    recreate.py  standalone: rebuild a store from a manifest + the video
+  imports.py     import everything and report what actually loaded
 ```
 
 ## Running
@@ -26,7 +31,8 @@ python -m ver2.ingest.driver video.mp4 --sampler text --chunking scene --scene-t
 python -m ver2.ingest.driver video.mp4 --sampler uniform,clip,yolo --frame-store out/store
 
 python -m ver2.ingest.calibrate video.mp4 --sampler clip
-python -m ver2.ingest.recreate out/manifest.json --out out/rebuilt
+python -m ver2.recovery.recreate out/manifests/<id>.json --out rebuilt/
+python -m ver2.imports                      # after any install
 ```
 
 Samplers: `uniform`, `clip`, `yolo`, `objects`, `text`. Chunkers: `uniform`,
@@ -138,8 +144,12 @@ against ~167 ms to seek one back out. Keyed by frame index rather than by
 sampler, because samplers overlap — 186 picks across four samplers covered 114
 distinct frames.
 
-The manifest stays authoritative: `recreate.py` rebuilds a store from it plus
-the source video, verified **byte-identical** on 350/350 frames.
+The manifest stays authoritative: `ver2/recovery/recreate.py` rebuilds a store
+from it plus the source video, verified **byte-identical**. That file imports
+nothing from the rest of the project — hand someone the manifest, the video and
+that one script and they can reproduce the store with only `av`, `opencv-python`
+and `numpy`. If it imported the pipeline it could lean on a default living in
+code rather than in the manifest, and the claim would go untested.
 
 It is not a cache for retuning thresholds. JPEG at q85/1920px perturbs pixels
 by 1.6/255, three times the decoder difference that already shifts the
@@ -166,8 +176,24 @@ pip install -r requirements.txt
 model-backed samplers are imported lazily, so nothing pulls in torch,
 ultralytics or easyocr until you ask for them.
 
+Run `python -m ver2.imports` after installing anything. Installs move
+dependencies silently: adding PaddleOCR downgraded numpy 2.4.4 → 2.3.5 and put
+an opencv-contrib 4.10 alongside the opencv-python 5.0 already present, so
+`cv2.__version__` changed under the pipeline without a line of it being
+touched. The checker imports every library and internal module, exercises each
+enough to prove it loaded a working binary, and flags packages that shadow the
+same import name.
+
 ## Not yet built
 
 Live sources. `Frame.gap_before` and `Frame.discontinuity` are the seams —
 always `0`/`False` for a file, and where a stream will differ. The describer
 stage reads the manifest and does not exist here.
+
+## Docs
+
+- `CLAUDE.md` — working notes: invariants, measured facts that should not be
+  re-derived, and environment traps.
+- `SUPABASE.md` — step-by-step plan for publishing manifests to Supabase so a
+  recipient can rebuild a frame store from a manifest plus their own copy of
+  the video.
