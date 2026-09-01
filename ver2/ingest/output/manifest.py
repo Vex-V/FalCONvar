@@ -17,34 +17,39 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 MANIFEST_VERSION = 1
 
 
-class ManifestWriter:
-    """Accumulates chunks and keeps a valid manifest on disk throughout."""
+class FileManifestWriter:
+    """Accumulates chunks and keeps a valid manifest on disk throughout.
 
-    def __init__(
-        self,
-        path: str | Path,
-        video_id: str,
-        source: dict[str, Any],
-        config: dict[str, Any],
-        flush_every: int = 1,
-    ) -> None:
+    Implements ``ManifestSink``. The name says *file* because the atomic
+    rewrite below is a file-shaped answer to a file-shaped problem: JSON
+    cannot be appended to while someone reads it. A sink writing rows has no
+    such constraint and should not inherit this one.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        # Construction takes only what is specific to writing a file. Every
+        # fact about the run arrives through begin(), the same way it does for
+        # every other sink.
         self.path = Path(path)
-        self.video_id = video_id
-        self.source = source
-        self.config = config
-        # Rewriting costs O(chunks^2) writes over a run. At a few KB per chunk
-        # that is nothing for a 15-chunk file; a multi-hour ingest with
-        # hundreds of chunks can raise this to trade freshness for writes.
-        self.flush_every = max(1, flush_every)
+        self.video_id = ""
+        self.source: dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
         self.chunks: list[dict[str, Any]] = []
         self.stats: dict[str, Any] = {}
         self.complete = False
-        self._since_flush = 0
+
+    def begin(
+        self, video_id: str, source: dict[str, Any], config: dict[str, Any]
+    ) -> None:
+        """Write the empty manifest, so the file is valid from the first chunk."""
+        self.video_id = video_id
+        self.source = source
+        self.config = config
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write()
 
@@ -60,18 +65,38 @@ class ManifestWriter:
         }
 
     def chunk_closed(self, chunk: dict[str, Any], stats: Optional[dict] = None) -> None:
-        """Record a finished chunk; flush if enough have accumulated."""
+        """Record a finished chunk and rewrite the file.
+
+        Every chunk, because the file is the live view: a reader polling it
+        should see chunk 12 while chunk 13 is still being sampled. The cost is
+        quadratic in chunks -- chunk 100's write emits all 100 -- which is
+        17 MB of writes for a 137-chunk video whose manifest is 253 KB. That
+        is affordable, and batching it would trade the freshness this whole
+        design is for.
+        """
         self.chunks.append(chunk)
         if stats is not None:
             self.stats = stats
-        self._since_flush += 1
-        if self._since_flush >= self.flush_every:
-            self._write()
-            self._since_flush = 0
+        self._write()
 
-    def finish(self, stats: Optional[dict] = None) -> dict[str, Any]:
+    def finish(
+        self,
+        stats: Optional[dict] = None,
+        chunks: Optional[Sequence[dict[str, Any]]] = None,
+        config: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Write the final document.
+
+        ``chunks`` and ``config`` re-state what the pipeline only knows at the
+        end -- the last chunk's true ``end_ts`` and the chunker's closing
+        counters -- so no caller needs to reach in and assign attributes.
+        """
         if stats is not None:
             self.stats = stats
+        if chunks is not None:
+            self.chunks = list(chunks)
+        if config is not None:
+            self.config = config
         self.complete = True
         self._write()
         return self.document()

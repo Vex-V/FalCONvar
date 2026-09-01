@@ -35,14 +35,15 @@ class FrameStore:
 
     def __init__(
         self,
-        root: str | Path,
-        video_id: str,
+        directory: str | Path,
         max_width: Optional[int] = 1920,
         quality: int = 85,
         suffix: str = ".jpg",
     ) -> None:
-        self.root = Path(root)
-        self.video_id = video_id
+        # The directory itself, not a root to append a video id to. The
+        # manifest records this path verbatim, and a reader that has the
+        # manifest should be able to hand it straight back.
+        self.dir = Path(directory)
         # Sized for the most demanding consumer rather than the average one:
         # at 1024 px a VLM misread a burnt-in clock as 11:17:40 when it said
         # 11:17:19, and read it correctly at 1920. Downstream can downscale;
@@ -50,15 +51,11 @@ class FrameStore:
         self.max_width = max_width
         self.quality = quality
         self.suffix = suffix
-        self.dir = self.root / video_id
         self.written = 0
         self.bytes_written = 0
 
     def path_for(self, index: int) -> Path:
         return self.dir / f"{index:07d}{self.suffix}"
-
-    def has(self, index: int) -> bool:
-        return self.path_for(index).exists()
 
     def write(self, index: int, image: np.ndarray, overwrite: bool = False) -> Optional[Path]:
         """Encode and store one frame. Returns None if it was already there."""
@@ -91,11 +88,6 @@ class FrameStore:
         """
         path = self.path_for(index)
         return path.read_bytes() if path.exists() else None
-
-    def present(self) -> set[int]:
-        if not self.dir.exists():
-            return set()
-        return {int(p.stem) for p in self.dir.glob(f"*{self.suffix}") if p.stem.isdigit()}
 
     def config(self) -> dict:
         """Recorded in the manifest so a reader knows what it is getting."""

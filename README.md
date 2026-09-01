@@ -1,42 +1,75 @@
-# FalCONvar — video RAG ingestion
+# FalCONvar — video RAG
 
-Turns a video into a manifest: which frames are worth describing, grouped into
-retrievable chunks, with enough addressing information to fetch those frames
-back later. The describer (VLM) stage reads the manifest and never touches the
-pipeline.
+A video goes in; a searchable index of moments comes out. Three stages, each
+consuming only what the one before it wrote:
+
+```
+video --ingest--> manifest + frame store --describe--> descriptions --retrieve--> moments
+```
+
+**ingest** decides which frames are worth describing and records why.
+**describe** reads those frames back and asks a VLM about them, one question
+per sampler. **retrieve** embeds the answers and turns a question into a time
+range you can play, with the exact frames as evidence.
 
 ```
 ver2/
-  ingest/        produces a manifest
-    source/      probe, sequential read, decimation, random access
-    chunker/     media time -> chunk id
-    samplers/    which decimated frames are worth describing
-    output/      manifest + frame store -- what a run leaves behind
+  ingest/        video -> manifest + frame store
+    source/      probe, sequential read, decimation, random access (PyAV)
+    chunker/     media time -> chunk id                 (uniform | scene)
+    samplers/    which decimated frames to keep         (uniform|clip|yolo|objects|text)
+      components/  detectors, descriptors, embedders -- every model weight
+    output/      manifest sinks (file | supabase | both) + frame store
     pipeline.py  one decode pass, feeding every stage from it
-    driver.py    the command line
     calibrate.py what a threshold would cost here, and where it must not go
-  recovery/
-    recreate.py  standalone: rebuild a store from a manifest + the video
+  describe/      manifest + frames -> descriptions
+    input/       manifest (file|db), live chunk stream, pixels from the store
+    describers/  the Describer protocol + a registry (stub | openai)
+    vlm/         the OpenAI call + one prompt and schema per sampler
+    output/      description sinks (file | supabase | both)
+  retrieve/      descriptions -> a searchable index
+    embedders/   Embedder protocol + registry (openai | local)
+    index/       qdrant (embedded) | pgvector | both
+    search.py    ranked descriptions -> ranked moments
+  recovery/      standalone: rebuild any of it from a video id + the video
+  db.py          the Supabase client and the shared reads
+  fanout.py      primary + best-effort secondaries, used by every stage
   imports.py     import everything and report what actually loaded
 ```
 
 ## Running
 
-```bash
-python -m ver2.ingest.driver video.mp4 -o out/manifest.json
-python -m ver2.ingest.driver video.mp4 --sampler clip --chunk-duration 20
-python -m ver2.ingest.driver video.mp4 --sampler yolo --min-interval 3
-python -m ver2.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet,forklift"
-python -m ver2.ingest.driver video.mp4 --sampler text --chunking scene --scene-threshold 15
-python -m ver2.ingest.driver video.mp4 --sampler uniform,clip,yolo --frame-store out/store
+Everything one video produces lives under `out/<video-id>/` — `manifest.json`,
+`store/`, `descriptions.json`.
 
+```bash
+# 1. ingest
+python -m ver2.ingest.driver video.mp4 --sampler clip,yolo --frame-store
+python -m ver2.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
+python -m ver2.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
 python -m ver2.ingest.calibrate video.mp4 --sampler clip
-python -m ver2.recovery.recreate out/manifests/<id>.json --out rebuilt/
+
+# 2. describe  (stub needs no model, no network and no money)
+python -m ver2.describe.driver out/<id>/manifest.json
+python -m ver2.describe.driver out/<id>/manifest.json --describer openai
+python -m ver2.describe.driver --video-id <id> --follow    # tail a live ingest
+
+# 3. retrieve
+python -m ver2.retrieve.driver index out/<id>/descriptions.json
+python -m ver2.retrieve.driver search "people at the checkout" --moments 3
+python -m ver2.retrieve.driver search "..." --sampler yolo   # one question only
+
+# recovery -- three files, no project checkout needed
+python -m ver2.recovery.supabase_manifest <id>       # -> <id>.json
+python -m ver2.recovery.supabase_description <id>    # -> descriptions json
+python -m ver2.recovery.recreate <id>.json --out rebuilt/ --verify out/<id>/store
+
 python -m ver2.imports                      # after any install
 ```
 
 Samplers: `uniform`, `clip`, `yolo`, `objects`, `text`. Chunkers: `uniform`,
-`scene`.
+`scene`. Describers: `stub`, `openai`. Embedders: `openai`, `local`.
+Indexes: `qdrant`, `pgvector`.
 
 ## The pipeline
 
@@ -194,6 +227,13 @@ stage reads the manifest and does not exist here.
 
 - `CLAUDE.md` — working notes: invariants, measured facts that should not be
   re-derived, and environment traps.
-- `SUPABASE.md` — step-by-step plan for publishing manifests to Supabase so a
-  recipient can rebuild a frame store from a manifest plus their own copy of
-  the video.
+- `SCHEMAS.md` — every structure the pipeline writes and what each field
+  means: the local JSON documents, the frame store, the four Postgres tables,
+  the Qdrant payload, and the keys that tie them together.
+- `schema.sql` — runnable DDL for all of it: tables, export functions, the
+  hybrid search function and RLS policies. Idempotent, safe to re-run.
+
+The recovery kit (`ver2/recovery/`) is three standalone files that import
+nothing from `ver2` and nothing outside the standard library beyond `av`,
+`opencv-python` and `numpy` — hand them to someone with a video id and their
+own copy of the video and they can rebuild the frame store byte for byte.

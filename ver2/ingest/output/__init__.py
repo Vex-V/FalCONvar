@@ -11,7 +11,24 @@ it re-derives what it needs from the manifest, so a manifest and a video are
 enough to rebuild a store without this package present at all.
 """
 
-from .manifest import MANIFEST_VERSION, ManifestWriter
+from .base import ManifestSink
+from .manifest import MANIFEST_VERSION, FileManifestWriter
+from .multi import MultiSink
 from .store import FrameStore
 
-__all__ = ["MANIFEST_VERSION", "FrameStore", "ManifestWriter"]
+# Imported lazily by name: supabase-py is optional, and a file run must not
+# pay for it or fail without it.
+def __getattr__(name: str):
+    if name == "SupabaseManifestWriter":
+        from .supabase_manifest import SupabaseManifestWriter
+        return SupabaseManifestWriter
+    raise AttributeError(name)
+
+__all__ = [
+    "MANIFEST_VERSION",
+    "FileManifestWriter",
+    "FrameStore",
+    "ManifestSink",
+    "MultiSink",
+    "SupabaseManifestWriter",
+]

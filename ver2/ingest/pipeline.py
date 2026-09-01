@@ -13,17 +13,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from ver2.ingest import chunker as chunker_mod
 from ver2.ingest import samplers as samplers_mod
 from ver2.ingest.chunker import Chunker
-from ver2.ingest.output import FrameStore, ManifestWriter
+from ver2.ingest.output import MANIFEST_VERSION, FrameStore, ManifestSink
 from ver2.ingest.samplers import Sampler
-from ver2.ingest.source import Decimator, Frame, probe, read_frames
-
-FrameHook = Callable[[Frame, int, str], None]       # frame, chunk_id, sampler id
-ChunkHook = Callable[["Chunk"], None]
+from ver2.ingest.source import Decimator, probe, read_frames
 
 
 @dataclass
@@ -71,11 +68,9 @@ def ingest(
     chunk_duration_s: float = 20.0,
     sampler_specs: Sequence[Sampler] = (),
     video_id: Optional[str] = None,
-    out: Optional[str | Path] = None,
+    sink: Optional[ManifestSink] = None,
     store: Optional[FrameStore] = None,
     store_scope: str = "sampled",
-    on_sampled: Optional[FrameHook] = None,
-    on_chunk: Optional[ChunkHook] = None,
 ) -> Result:
     """Run one decode pass, feeding every sampler from it.
 
@@ -104,21 +99,21 @@ def ingest(
     if len(set(ids)) != len(ids):
         raise ValueError(f"sampler ids must be unique, got {ids}")
 
-    writer: Optional[ManifestWriter] = None
-    if out is not None:
-        writer = ManifestWriter(
-            out,
-            video_id=video_id,
-            source=info.as_dict(),
-            config={
-                "decimator": decimator.config(),
-                "chunker": chunker.config(),
-                "samplers": [s.config() for s in samplers],
-                "frame_store": (
-                    {**store.config(), "scope": store_scope} if store else None
-                ),
-            },
-        )
+    # One config dict for the whole run. The chunker's entry is restated at
+    # the end, once its counters are final.
+    config = {
+        "decimator": decimator.config(),
+        "chunker": chunker.config(),
+        "samplers": [s.config() for s in samplers],
+        "frame_store": (
+            {**store.config(), "scope": store_scope} if store else None
+        ),
+    }
+
+    # The caller assembles its own sinks; this knows only that a sink hears
+    # three calls, and nothing at all about where any of them writes.
+    if sink is not None:
+        sink.begin(video_id, info.as_dict(), config)
 
     chunks: list[Chunk] = []
     current: Optional[Chunk] = None
@@ -145,10 +140,8 @@ def ingest(
         _, end = chunker.bounds_of(chunk.chunk_id)
         chunk.end_ts = end if end is not None else chunk.last_ts
         chunks.append(chunk)
-        if on_chunk is not None:
-            on_chunk(chunk)
-        if writer is not None:
-            writer.chunk_closed(chunk.as_dict(), stats())
+        if sink is not None:
+            sink.chunk_closed(chunk.as_dict(), stats())
 
     for frame in read_frames(info):
         read += 1
@@ -198,8 +191,6 @@ def ingest(
                 if score is not None:
                     record["score"] = round(score, 4)
                 current.picks.setdefault(sampler.sampler_id, []).append(record)
-                if on_sampled is not None:
-                    on_sampled(frame, current.chunk_id, sampler.sampler_id)
 
             chunk_local_index += 1
 
@@ -221,25 +212,22 @@ def ingest(
 
     elapsed = time.perf_counter() - started
     final = stats()
-    if writer is not None:
-        # Re-emit chunks so a late end_ts correction and the final chunker
-        # counters (cuts seen, splits forced) land in the written document.
-        writer.chunks = [c.as_dict() for c in chunks]
-        writer.config["chunker"] = chunker.config()
-        document = writer.finish(final)
+    # The final chunker counters (cuts seen, splits forced) are only known now.
+    config["chunker"] = chunker.config()
+    if sink is not None:
+        # Re-state chunks so a late end_ts correction lands in the document.
+        document = sink.finish(
+            final, chunks=[c.as_dict() for c in chunks], config=config
+        )
     else:
+        # No sink: the document exists only in the returned Result. Same shape
+        # a sink would have produced, so a caller cannot tell them apart.
         document = {
+            "manifest_version": MANIFEST_VERSION,
             "video_id": video_id,
             "complete": True,
             "source": info.as_dict(),
-            "config": {
-                "decimator": decimator.config(),
-                "chunker": chunker.config(),
-                "samplers": [s.config() for s in samplers],
-                "frame_store": (
-                    {**store.config(), "scope": store_scope} if store else None
-                ),
-            },
+            "config": config,
             "stats": final,
             "chunks": [c.as_dict() for c in chunks],
         }

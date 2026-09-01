@@ -24,7 +24,7 @@ matrix between two of them. The sampler does the rest.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 import cv2
 import numpy as np
@@ -174,33 +174,6 @@ class BoxGeometryDescriptor(RegionDescriptor):
 
     def config(self) -> dict:
         return {"name": self.name, "class_aware": self.class_aware, "metric": self.metric}
-
-
-def _layout_vector(region: np.ndarray, size: int = 24) -> np.ndarray:
-    """Where the ink sits, as a comparable vector. Captures glyph layout, reads nothing.
-
-    A difference hash is the obvious choice here and it measured as pure
-    noise: on a static slide the same text region scored 0.86 agreement
-    against itself frame to frame, while two *different* slides scored 0.88.
-    The cause is that dHash compares adjacent pixels, and most of a text
-    region is flat background where that difference is near zero — so the
-    sign it records is decided by sensor noise rather than by content.
-
-    Averaging down with INTER_AREA suppresses that noise instead of
-    amplifying it. Centring and normalising the result makes the dot product
-    a Pearson correlation, so it is also immune to brightness and contrast
-    drift. Same measurement: 1.000 for a static slide, at most 0.80 between
-    different ones.
-    """
-    if region.ndim == 3:
-        region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    small = cv2.resize(region, (size, size), interpolation=cv2.INTER_AREA)
-    vector = small.astype(np.float32).reshape(-1)
-    vector -= vector.mean()
-    norm = np.linalg.norm(vector)
-    # A blank region has no layout to speak of; give it a zero vector so it
-    # correlates with nothing rather than dividing by zero.
-    return vector / norm if norm > 1e-6 else np.zeros_like(vector)
 
 
 class TextLayoutDescriptor(RegionDescriptor):

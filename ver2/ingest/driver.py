@@ -16,7 +16,7 @@ if __package__ in (None, ""):                       # allow running as a script
 
 from ver2.ingest import chunker as chunker_mod
 from ver2.ingest import samplers as samplers_mod
-from ver2.ingest.output import FrameStore
+from ver2.ingest.output import FileManifestWriter, FrameStore, MultiSink
 from ver2.ingest.pipeline import Result, ingest
 from ver2.ingest.samplers import Sampler
 from ver2.ingest.source import UnusableSource
@@ -125,10 +125,11 @@ def main() -> int:
     ap.add_argument("--max-per-chunk", type=int, default=None,
                     help="hard cap on frames kept per chunk")
     ap.add_argument("--video-id", default=None)
-    ap.add_argument("--frame-store", nargs="?", type=Path, const=Path("out/stores"),
+    ap.add_argument("--frame-store", nargs="?", type=Path, const=True,
                     default=None,
                     help="write sampled pixels here, keyed by frame index. Bare "
-                         "--frame-store uses out/stores/<video-id>/")
+                         "--frame-store uses out/<video-id>/store/; a path is "
+                         "used exactly as given")
     ap.add_argument("--store-scope", default="sampled", choices=["sampled", "decimated"],
                     help="sampled stores only what a sampler kept -- all the VLM needs "
                          "(default). decimated also stores rejected frames, for "
@@ -139,13 +140,54 @@ def main() -> int:
                     help="max width written to the store (default 1920)")
     ap.add_argument("-o", "--out", type=Path, default=None,
                     help="manifest path (default out/manifests/<video-id>.json)")
+    ap.add_argument("--sink", default="file",
+                    help="comma-separated manifest destinations: file, supabase "
+                         "(default file; `file,supabase` writes both). The first "
+                         "is primary and its failures stop the run; the rest are "
+                         "best-effort. supabase needs SUPABASE_URL and "
+                         "SUPABASE_SECRET_KEY")
     args = ap.parse_args()
 
-    # Both artifacts are named after the video, and kept apart: manifests are
-    # small and worth reading, stores are large and worth deleting.
+    # Everything a video produces lives under one directory named after it:
+    # out/<video-id>/{manifest.json, store/, descriptions.json}. Grouping by
+    # video rather than by artifact type means one video's whole output is one
+    # thing to inspect, copy or delete, and it keeps growing cleanly as later
+    # stages add artifacts of their own.
     video_id = args.video_id or Path(args.video).stem
+    home = Path("out") / video_id
     if args.out is None:
-        args.out = Path("out/manifests") / f"{video_id}.json"
+        args.out = home / "manifest.json"
+    if args.frame_store is True:
+        args.frame_store = home / "store"
+
+    names = [n.strip() for n in args.sink.split(",") if n.strip()]
+    unknown = [n for n in names if n not in ("file", "supabase")]
+    if unknown or not names:
+        ap.error(f"--sink: unknown destination {unknown or [args.sink]}, "
+                 "expected file and/or supabase")
+    # Each sink is constructed from its own destination settings and nothing
+    # else; the pipeline tells all of them the same thing about the run. Built
+    # before the decode starts, so an unreachable database fails in a second
+    # rather than after minutes of inference.
+    built = []
+    for n in names:
+        if n == "file":
+            built.append(FileManifestWriter(args.out))
+        else:
+            # Imported here so a file-only run never pays for supabase-py, and
+            # a missing install fails only the run that asked for it.
+            from ver2.ingest.output import SupabaseManifestWriter
+
+            # A CLI convenience only: the sink itself reads the environment
+            # and says so, which is what a library should do.
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv()
+            except ImportError:
+                pass
+            built.append(SupabaseManifestWriter())
+    sink = built[0] if len(built) == 1 else MultiSink(*built)
 
     options: dict[str, Any] = {}
     if args.chunking == "scene":
@@ -184,9 +226,9 @@ def main() -> int:
             chunk_duration_s=args.chunk_duration,
             sampler_specs=built,
             video_id=args.video_id,
-            out=args.out,
+            sink=sink,
             store=(
-                FrameStore(args.frame_store, video_id, max_width=args.store_width)
+                FrameStore(args.frame_store, max_width=args.store_width)
                 if args.frame_store else None
             ),
             store_scope=args.store_scope,
@@ -196,7 +238,10 @@ def main() -> int:
         return 1
 
     report(result)
-    print(f"\nmanifest -> {args.out}")
+    where = [str(args.out) if n == "file" else
+             f"supabase: videos/chunks where video_id = {video_id}"
+             for n in names]
+    print("\nmanifest -> " + ("\n             ").join(where))
     return 0
 
 

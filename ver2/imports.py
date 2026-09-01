@@ -26,7 +26,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -111,6 +111,23 @@ def _check_scenedetect():
     return scenedetect.__version__, "ContentDetector.process_frame present"
 
 
+def _check_openai():
+    import openai
+    from openai import OpenAI  # noqa: F401
+    return metadata.version("openai"), "describer backend; not needed for stub runs"
+
+
+def _check_qdrant():
+    from qdrant_client import QdrantClient  # noqa: F401
+    return metadata.version("qdrant-client"), "local vector index; runs embedded"
+
+
+def _check_supabase():
+    import supabase
+    from supabase import create_client  # noqa: F401
+    return metadata.version("supabase"), "manifest sink; not needed for file runs"
+
+
 def _check_paddleocr():
     from paddleocr import TextDetection
     TextDetection(model_name="PP-OCRv5_mobile_det")
@@ -126,6 +143,9 @@ EXTERNAL: list[tuple[str, Callable, bool]] = [
     ("ultralytics", _check_ultralytics, False),
     ("easyocr", _check_easyocr, False),
     ("scenedetect", _check_scenedetect, False),
+    ("openai", _check_openai, True),
+    ("qdrant-client", _check_qdrant, True),
+    ("supabase", _check_supabase, True),
     ("paddleocr", _check_paddleocr, True),
 ]
 
@@ -148,26 +168,74 @@ INTERNAL: list[tuple[str, tuple[str, ...]]] = [
     ("ver2.ingest.chunker", ("Chunker", "UniformChunker", "build", "available")),
     ("ver2.ingest.samplers.base", ("Sampler",)),
     ("ver2.ingest.samplers.uniform", ("UniformSampler",)),
-    ("ver2.ingest.samplers.clip", ("ClipChangeSampler",)),
-    ("ver2.ingest.samplers.change", ("DetectionChangeSampler", "PersonChangeSampler",
-                                     "ObjectChangeSampler", "TextChangeSampler")),
-    ("ver2.ingest.samplers.detectors", ("Detection", "ObjectDetector", "YoloPersonDetector",
+    ("ver2.ingest.samplers.scene", ("ClipChangeSampler",)),
+    ("ver2.ingest.samplers.detection", ("DetectionChangeSampler",)),
+    ("ver2.ingest.samplers.people", ("PersonChangeSampler",)),
+    ("ver2.ingest.samplers.objects", ("ObjectChangeSampler",)),
+    ("ver2.ingest.samplers.ocr", ("TextChangeSampler",)),
+    ("ver2.ingest.samplers.components.detectors", ("Detection", "ObjectDetector", "YoloPersonDetector",
                                         "OpenVocabDetector", "TextRegionDetector",
                                         "weight_path", "WEIGHTS_DIR")),
-    ("ver2.ingest.samplers.embedders", ("FrameEmbedder", "CLIPEmbedder")),
-    ("ver2.ingest.samplers.descriptors", ("RegionDescriptor", "CropEmbeddingDescriptor",
+    ("ver2.ingest.samplers.components.embedders", ("FrameEmbedder", "CLIPEmbedder")),
+    ("ver2.ingest.samplers.components", ("Detection", "RegionDescriptor",
+                                        "FrameEmbedder", "CLIPEmbedder")),
+    ("ver2.ingest.samplers.components.descriptors", ("RegionDescriptor", "CropEmbeddingDescriptor",
                                           "BoxGeometryDescriptor", "TextLayoutDescriptor")),
     ("ver2.ingest.samplers", ("Sampler", "UniformSampler", "build", "available")),
-    ("ver2.ingest.output.manifest", ("ManifestWriter", "MANIFEST_VERSION")),
+    ("ver2.ingest.output.base", ("ManifestSink",)),
+    ("ver2.ingest.output.manifest", ("FileManifestWriter", "MANIFEST_VERSION")),
+    ("ver2.ingest.output.multi", ("MultiSink",)),
+    ("ver2.fanout", ("FanOut",)),
+    ("ver2.db", ("client_from_env", "fetch_manifest", "fetch_descriptions",
+                 "manifest_header", "load_env")),
+    ("ver2.ingest.output.supabase_manifest", ("SupabaseManifestWriter",)),
     ("ver2.ingest.output.store", ("FrameStore",)),
-    ("ver2.ingest.output", ("ManifestWriter", "FrameStore", "MANIFEST_VERSION")),
+    ("ver2.ingest.output", ("FileManifestWriter", "ManifestSink", "MultiSink",
+                            "SupabaseManifestWriter", "FrameStore",
+                            "MANIFEST_VERSION")),
     ("ver2.ingest.pipeline", ("ingest", "Chunk", "Result")),
     ("ver2.ingest.calibrate", ("analyse", "render", "replay", "collect", "Report", "Window")),
     ("ver2.ingest.driver", ("report", "main")),
     # recovery is deliberately standalone: it must import nothing from ver2,
     # so that a manifest plus this one file is enough to rebuild a store.
+    ("ver2.describe.describers.base", ("Describer",)),
+    ("ver2.describe.describers.stub", ("StubDescriber",)),
+    ("ver2.describe.describers", ("Describer", "StubDescriber", "build", "available")),
+    ("ver2.describe.input.frames", ("FrameSource", "LoadedFrame", "StoreUnavailable")),
+    ("ver2.describe.input.follow", ("follow_chunks", "client_from_env")),
+    ("ver2.describe.input.manifest", ("from_file", "from_supabase", "header")),
+    ("ver2.describe.input", ("FrameSource", "StoreUnavailable", "follow_chunks",
+                             "from_file", "from_supabase", "header")),
+    ("ver2.describe.vlm.prompts", ("SYSTEM", "BY_SAMPLER", "for_sampler")),
+    ("ver2.describe.vlm.openai_client", ("OpenAIDescriber", "DescriberUnavailable",
+                                         "DEFAULT_MODEL")),
+    ("ver2.describe.vlm", ("OpenAIDescriber", "DescriberUnavailable", "DEFAULT_MODEL")),
+    ("ver2.describe.reader", ("describe", "chunks_of")),
+    ("ver2.describe.output.base", ("DescriptionSink",)),
+    ("ver2.describe.output.document", ("DescriptionDocument", "fingerprint",
+                                       "DESCRIPTION_VERSION")),
+    ("ver2.describe.output.multi", ("MultiDescriptionSink",)),
+    ("ver2.describe.output.supabase", ("SupabaseDescriptions",)),
+    ("ver2.describe.output", ("DescriptionDocument", "DescriptionSink",
+                              "MultiDescriptionSink", "SupabaseDescriptions",
+                              "fingerprint", "DESCRIPTION_VERSION")),
+
+    ("ver2.retrieve.units", ("Unit", "embedder_key", "collection_name", "text_hash")),
+    ("ver2.retrieve.embedders.base", ("Embedder",)),
+    ("ver2.retrieve.embedders.local", ("LocalEmbedder", "TextTooLong", "KNOWN")),
+    ("ver2.retrieve.embedders", ("Embedder", "build", "available")),
+    ("ver2.retrieve.index.base", ("Hit", "VectorIndex")),
+    ("ver2.retrieve.index.qdrant", ("QdrantIndex",)),
+    ("ver2.retrieve.index.pgvector", ("PgVectorIndex",)),
+    ("ver2.retrieve.index.multi", ("MultiIndex",)),
+    ("ver2.retrieve.index", ("Hit", "MultiIndex", "QdrantIndex", "PgVectorIndex")),
+    ("ver2.retrieve.indexer", ("index_units", "IndexResult")),
+    ("ver2.retrieve.search", ("Moment", "search", "to_moments")),
+
     ("ver2.recovery.recreate", ("rebuild_sampled", "rebuild_decimated", "compare",
                                 "targets_from", "Fetcher", "StoreWriter")),
+    ("ver2.recovery.supabase_manifest", ("fetch", "listing")),
+    ("ver2.recovery.supabase_description", ("fetch", "assemble", "fingerprint")),
 ]
 
 
@@ -188,7 +256,11 @@ def check_internal(module_name: str, names: tuple[str, ...]) -> Result:
 ENTRYPOINTS = [
     "ver2.ingest.driver",
     "ver2.ingest.calibrate",
+    "ver2.describe.driver",
+    "ver2.retrieve.driver",
     "ver2.recovery.recreate",
+    "ver2.recovery.supabase_manifest",
+    "ver2.recovery.supabase_description",
     "ver2.imports",
 ]
 
@@ -222,18 +294,62 @@ def check_recovery_standalone() -> Result:
     """recovery/ must not import the pipeline -- that independence is the claim."""
     import ast
 
-    src = Path(__file__).resolve().parent / "recovery" / "recreate.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
+    # Every file in recovery/, not just recreate.py: the recovery kit is
+    # handed over whole, and one leaked import anywhere in it breaks the
+    # claim that a manifest and a video are enough.
+    sources = sorted((Path(__file__).resolve().parent / "recovery").glob("*.py"))
     leaked = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("ver2"):
-            leaked.add(node.module)
-        if isinstance(node, ast.Import):
-            leaked |= {a.name for a in node.names if a.name.startswith("ver2")}
+    for src in sources:
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("ver2"):
+                leaked.add(f"{src.name}: {node.module}")
+            if isinstance(node, ast.Import):
+                leaked |= {f"{src.name}: {a.name}"
+                           for a in node.names if a.name.startswith("ver2")}
     if leaked:
         return Result("recovery imports nothing from ver2", False,
                       error=f"leaked: {', '.join(sorted(leaked))}")
-    return Result("recovery imports nothing from ver2", True, detail="standalone")
+    return Result("recovery imports nothing from ver2", True,
+                  detail=f"standalone ({len(sources)} files)")
+
+
+#: describe/ may reach into ingest/ for exactly this, and nothing else.
+DESCRIBE_MAY_IMPORT = {"ver2.ingest.output": {"FrameStore"}}
+
+
+def check_describe_boundary() -> Result:
+    """describe/ talks to the manifest and the frame store. Not the pipeline.
+
+    The manifest arrives as parsed JSON and the chunk stream as rows, so
+    neither needs an import at all. The store is a real class and is imported;
+    anything else would mean the describe stage had started depending on how
+    ingest works rather than on what it produced.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parent / "describe"
+    sources = sorted(root.rglob("*.py"))
+    leaked = []
+    for src in sources:
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if not module.startswith("ver2.ingest"):
+                    continue
+                allowed = DESCRIBE_MAY_IMPORT.get(module, set())
+                for alias in node.names:
+                    if alias.name not in allowed:
+                        leaked.append(f"{src.name}: {module}.{alias.name}")
+            elif isinstance(node, ast.Import):
+                leaked += [f"{src.name}: {a.name}" for a in node.names
+                           if a.name.startswith("ver2.ingest")]
+    if leaked:
+        return Result("describe touches only manifest + store", False,
+                      error=f"leaked: {', '.join(sorted(leaked))}")
+    return Result("describe touches only manifest + store", True,
+                  detail=f"FrameStore only ({len(sources)} files)")
 
 
 def check_registries() -> list[Result]:
@@ -327,10 +443,10 @@ def main() -> int:
 
     print()
     print("  INVARIANTS")
-    r = check_recovery_standalone()
-    print(f"    {'ok  ' if r.ok else 'FAIL'} {r.name:<38} {r.detail or r.error}")
-    if not r.ok:
-        failures.append(r)
+    for r in (check_recovery_standalone(), check_describe_boundary()):
+        print(f"    {'ok  ' if r.ok else 'FAIL'} {r.name:<38} {r.detail or r.error}")
+        if not r.ok:
+            failures.append(r)
 
     print()
     print("  ENTRY POINTS")
