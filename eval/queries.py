@@ -91,7 +91,7 @@ def generate(document: dict, per_unit: int = 3, model: str = "gpt-5.4-mini") -> 
     from openai import OpenAI
 
     from ver2.embed.units import render
-    from ver2.describe.vlm.openai_client import _api_key
+    from ver2.video.describe.vlm.openai_client import _api_key
 
     client = OpenAI(api_key=_api_key())
     pairs: list[dict] = []

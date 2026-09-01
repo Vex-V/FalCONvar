@@ -136,18 +136,18 @@ def assemble(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, 
 
 
 def fetch(video_id: str, url: str, key: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    manifest = _get(url, key, "rpc/export_manifest", p_video_id=video_id)
+    manifest = _get(url, key, "rpc/export_video_manifest", p_video_id=video_id)
     if not manifest:
         raise SystemExit(
             f"no manifest for video_id {video_id!r}. Descriptions are assembled "
             "against a manifest, so one has to be published first."
         )
-    rows = _get(url, key, "rpc/export_descriptions", p_video_id=video_id) or []
+    rows = _get(url, key, "rpc/export_video_descriptions", p_video_id=video_id) or []
     return manifest, rows
 
 
 def listing(url: str, key: str) -> list[dict[str, Any]]:
-    return _get(url, key, "descriptions", select="video_id,chunk_id,sampler")
+    return _get(url, key, "video_descriptions", select="video_id,chunk_id,sampler")
 
 
 def main(argv: Optional[list[str]] = None) -> int:

@@ -43,7 +43,7 @@ class PgVectorIndex:
         return None
 
     def existing(self, video_id: str, embedder: dict[str, Any]) -> dict[tuple[int, str], str]:
-        rows = (self.client.table("description_embeddings")
+        rows = (self.client.table("chunk_embeddings")
                 .select("chunk_id,sampler,text_hash")
                 .eq("video_id", video_id)
                 .eq("embedder", embedder_key(embedder))
@@ -72,13 +72,13 @@ class PgVectorIndex:
                 "frame_indexes": payload["frame_indexes"],
             })
         if rows:
-            self.client.table("description_embeddings").upsert(
+            self.client.table("chunk_embeddings").upsert(
                 rows, on_conflict="video_id,chunk_id,sampler,embedder").execute()
 
     def search(self, vector: Sequence[float], embedder: dict[str, Any],
                query_text: Optional[str] = None, video_id: Optional[str] = None,
                limit: int = 20, sampler: Optional[str] = None) -> list[Hit]:
-        rows = self.client.rpc("search_descriptions", {
+        rows = self.client.rpc("search_embeddings", {
             "p_embedder": embedder_key(embedder),
             "p_query_vector": _literal(vector),
             "p_query_text": query_text,

@@ -19,7 +19,7 @@ from .stub import StubDescriber
 # never pulls in a model runtime or a network client. A dotted path starting
 # with `ver2.` is imported absolutely; anything else is relative to here.
 _LAZY: dict[str, str] = {
-    "openai": "ver2.describe.vlm.openai_client:OpenAIDescriber",
+    "openai": "ver2.video.describe.vlm.openai_client:OpenAIDescriber",
 }
 _REGISTRY: dict[str, Type] = {}
 

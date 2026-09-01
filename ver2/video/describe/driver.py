@@ -15,12 +15,12 @@ from typing import Any, Optional
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ver2.describe import describers as describers_mod
-from ver2.describe import input as input_mod
-from ver2.describe.input import StoreUnavailable
-from ver2.describe.output import DescriptionDocument, MultiDescriptionSink
-from ver2.describe.vlm import DescriberUnavailable
-from ver2.describe.reader import Result, describe
+from ver2.video.describe import describers as describers_mod
+from ver2.video.describe import input as input_mod
+from ver2.video.describe.input import StoreUnavailable
+from ver2.video.describe.output import DescriptionDocument, MultiDescriptionSink
+from ver2.video.describe.vlm import DescriberUnavailable
+from ver2.video.describe.reader import Result, describe
 
 
 def report(result: Result, show: int = 4) -> None:
@@ -117,7 +117,7 @@ def main() -> int:
         if n == "file":
             built.append(DescriptionDocument(args.out))
         else:
-            from ver2.describe.output import SupabaseDescriptions
+            from ver2.video.describe.output import SupabaseDescriptions
 
             built.append(SupabaseDescriptions())
     sink = built[0] if len(built) == 1 else MultiDescriptionSink(*built)

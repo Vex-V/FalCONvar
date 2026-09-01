@@ -81,6 +81,13 @@ BY_SAMPLER: dict[str, str] = {
         "entry per distinct object, leading with those, and say what each is "
         "being used for and by whom."
     ),
+    # Deliberately unstructured. Not a fallback and not a narrowed scene
+    # question -- a short prose answer and nothing else, for when the whole
+    # apparatus of fields is more than the moment is worth.
+    "overview": (
+        "These {n} frames span {span}. Say what is happening, in 4 to 5 "
+        "sentences of plain prose. Do not list, do not label, do not itemise."
+    ),
     # Text regions changed; the value is the words, verbatim.
     "text": (
         "These {n} frames span {span} and were kept because the text on "
@@ -118,6 +125,22 @@ SUMMARY = {
         "in sentences, with who is doing what."
     ),
 }
+
+#: `overview` overrides the length instruction above, and the override is the
+#: point of the sampler. SUMMARY asks for at least 150 words because it is the
+#: only text that gets embedded and its length is a retrieval parameter; an
+#: overview is asked for when a paragraph is more than the moment deserves,
+#: so demanding 150 words of it would defeat the reason for choosing it.
+OVERVIEW_SUMMARY = {
+    "type": "string",
+    "description": (
+        "What is happening here, in 4 to 5 sentences of plain prose. No "
+        "preamble, no lists, no labels -- just the description."
+    ),
+}
+
+#: Per-sampler overrides of the summary field. Everything absent gets SUMMARY.
+SUMMARY_BY_SAMPLER: dict[str, Any] = {"overview": OVERVIEW_SUMMARY}
 
 #: The general question's fields. `people`, `objects` and `visible_text` are
 #: coarse here -- plain phrases -- because a specialist answers them properly
@@ -218,6 +241,11 @@ SPECIALIST_FIELDS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    # Empty on purpose: `overview` is a specialist in the sense that it has its
+    # own schema, and that schema is `summary` alone. Because it owns no keys
+    # it also takes none away from the scene question, so running it beside
+    # `clip` costs the scene answer nothing.
+    "overview": {},
     "text": {
         "visible_text": {
             "type": "array",
@@ -271,7 +299,7 @@ def schema_for(sampler: str, siblings: Sequence[str] = ()) -> dict[str, Any]:
     else:
         keep = owned_by(sampler, siblings)
         fields = {key: SCENE_FIELDS[key] for key in keep}
-    properties = {"summary": SUMMARY, **fields}
+    properties = {"summary": SUMMARY_BY_SAMPLER.get(sampler, SUMMARY), **fields}
     return {
         "type": "object",
         "additionalProperties": False,
@@ -314,10 +342,35 @@ def version() -> str:
         "scene": SCENE,
         "by_sampler": BY_SAMPLER,
         "summary": SUMMARY,
+        "summary_by_sampler": SUMMARY_BY_SAMPLER,
         "scene_fields": SCENE_FIELDS,
         "specialist_fields": SPECIALIST_FIELDS,
     }, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def question_for(context: dict[str, Any]) -> str:
+    """Which question these frames are for.
+
+    The sampler id is the default, and normally the right answer: the manifest
+    records *why* a frame was kept, and why it was kept is the best guide to
+    what to ask about it.
+
+    But a sampler may name a question in its own config, and that is what lets
+    a positional sampler run any question on a clock -- `uniform` keeps a frame
+    every N seconds and says which question they are for, without having to be
+    the sampler that would normally ask it. Reaching for the sampler *class*
+    instead would mean constructing an EasyOCR or CLIP object purely to borrow
+    its name, and would never extend to a question no sampler corresponds to.
+
+    Read from the manifest rather than from a table, so a run is reproducible
+    from the document it produced -- and so the choice sits inside
+    `manifest_fingerprint`, which means changing it correctly invalidates
+    describe's resume. A question named here but absent from BY_SAMPLER falls
+    back to the scene question, exactly as an unregistered sampler does.
+    """
+    config = context.get("sampler_config") or {}
+    return config.get("prompt") or context.get("sampler") or ""
 
 
 def span_of(context: dict[str, Any]) -> str:

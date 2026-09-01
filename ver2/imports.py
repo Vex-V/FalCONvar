@@ -134,6 +134,25 @@ def _check_paddleocr():
     return metadata.version("paddleocr"), "TextDetection constructed"
 
 
+def _check_faster_whisper():
+    from faster_whisper import WhisperModel  # noqa: F401
+
+    from ver2.audio import cuda
+    loaded = cuda.enable()
+    # The import proves nothing about CUDA: CTranslate2 resolves cublas at the
+    # first encode, so a run can import cleanly and fail minutes later.
+    need = [n for n in ("cublasLt64_12.dll", "cublas64_12.dll") if n not in loaded]
+    detail = ("cuBLAS preloaded" if not need
+              else f"CPU only -- missing {', '.join(need)}")
+    return metadata.version("faster-whisper"), detail
+
+
+def _check_pyannote():
+    import pyannote.audio
+    from pyannote.audio import Pipeline  # noqa: F401
+    return pyannote.audio.__version__, "gated: needs HF_TOKEN and accepted terms"
+
+
 EXTERNAL: list[tuple[str, Callable, bool]] = [
     ("numpy", _check_numpy, False),
     ("opencv (cv2)", _check_cv2, False),
@@ -146,6 +165,8 @@ EXTERNAL: list[tuple[str, Callable, bool]] = [
     ("openai", _check_openai, True),
     ("qdrant-client", _check_qdrant, True),
     ("supabase", _check_supabase, True),
+    ("faster-whisper", _check_faster_whisper, True),
+    ("pyannote.audio", _check_pyannote, True),
     ("paddleocr", _check_paddleocr, True),
 ]
 
@@ -155,70 +176,95 @@ EXTERNAL: list[tuple[str, Callable, bool]] = [
 # --------------------------------------------------------------------------- #
 
 INTERNAL: list[tuple[str, tuple[str, ...]]] = [
-    ("ver2.ingest.source.types", ("Frame", "SourceInfo")),
-    ("ver2.ingest.source.probe", ("probe", "UnusableSource", "MAX_PLAUSIBLE_FPS")),
-    ("ver2.ingest.source.reader", ("read_frames", "ROTATIONS")),
-    ("ver2.ingest.source.decimate", ("Decimator",)),
-    ("ver2.ingest.source.fetch", ("FrameFetcher",)),
-    ("ver2.ingest.source", ("Frame", "SourceInfo", "probe", "read_frames",
+    ("ver2.timeline", ("Timeline", "uniform", "from_cuts", "enforce")),
+    ("ver2.video.ingest.source.types", ("Frame", "SourceInfo")),
+    ("ver2.video.ingest.source.probe", ("probe", "UnusableSource", "MAX_PLAUSIBLE_FPS")),
+    ("ver2.video.ingest.source.reader", ("read_frames", "ROTATIONS")),
+    ("ver2.video.ingest.source.decimate", ("Decimator",)),
+    ("ver2.video.ingest.source.fetch", ("FrameFetcher",)),
+    ("ver2.video.ingest.source", ("Frame", "SourceInfo", "probe", "read_frames",
                             "Decimator", "FrameFetcher", "UnusableSource")),
-    ("ver2.ingest.chunker.base", ("Chunker",)),
-    ("ver2.ingest.chunker.uniform", ("UniformChunker",)),
-    ("ver2.ingest.chunker.scene", ("SceneChunker",)),
-    ("ver2.ingest.chunker", ("Chunker", "UniformChunker", "build", "available")),
-    ("ver2.ingest.samplers.base", ("Sampler",)),
-    ("ver2.ingest.samplers.uniform", ("UniformSampler",)),
-    ("ver2.ingest.samplers.scene", ("ClipChangeSampler",)),
-    ("ver2.ingest.samplers.detection", ("DetectionChangeSampler",)),
-    ("ver2.ingest.samplers.people", ("PersonChangeSampler",)),
-    ("ver2.ingest.samplers.objects", ("ObjectChangeSampler",)),
-    ("ver2.ingest.samplers.ocr", ("TextChangeSampler",)),
-    ("ver2.ingest.samplers.components.detectors", ("Detection", "ObjectDetector", "YoloPersonDetector",
+    ("ver2.video.ingest.chunker.base", ("Chunker",)),
+    ("ver2.video.ingest.chunker.uniform", ("UniformChunker",)),
+    ("ver2.video.ingest.chunker.scene", ("SceneChunker",)),
+    ("ver2.video.ingest.chunker.fixed", ("FixedChunker",)),
+    ("ver2.video.ingest.chunker", ("Chunker", "UniformChunker", "build", "available")),
+    ("ver2.video.ingest.samplers.base", ("Sampler",)),
+    ("ver2.video.ingest.samplers.uniform", ("UniformSampler",)),
+    ("ver2.video.ingest.samplers.scene", ("ClipChangeSampler",)),
+    ("ver2.video.ingest.samplers.detection", ("DetectionChangeSampler",)),
+    ("ver2.video.ingest.samplers.people", ("PersonChangeSampler",)),
+    ("ver2.video.ingest.samplers.objects", ("ObjectChangeSampler",)),
+    ("ver2.video.ingest.samplers.ocr", ("TextChangeSampler",)),
+    ("ver2.video.ingest.samplers.components.detectors", ("Detection", "ObjectDetector", "YoloPersonDetector",
                                         "OpenVocabDetector", "TextRegionDetector",
                                         "weight_path", "WEIGHTS_DIR")),
-    ("ver2.ingest.samplers.components.embedders", ("FrameEmbedder", "CLIPEmbedder")),
-    ("ver2.ingest.samplers.components", ("Detection", "RegionDescriptor",
+    ("ver2.video.ingest.samplers.components.embedders", ("FrameEmbedder", "CLIPEmbedder")),
+    ("ver2.video.ingest.samplers.components", ("Detection", "RegionDescriptor",
                                         "FrameEmbedder", "CLIPEmbedder")),
-    ("ver2.ingest.samplers.components.descriptors", ("RegionDescriptor", "CropEmbeddingDescriptor",
+    ("ver2.video.ingest.samplers.components.descriptors", ("RegionDescriptor", "CropEmbeddingDescriptor",
                                           "BoxGeometryDescriptor", "TextLayoutDescriptor")),
-    ("ver2.ingest.samplers", ("Sampler", "UniformSampler", "build", "available")),
-    ("ver2.ingest.output.base", ("ManifestSink",)),
-    ("ver2.ingest.output.manifest", ("FileManifestWriter", "MANIFEST_VERSION")),
-    ("ver2.ingest.output.multi", ("MultiSink",)),
+    ("ver2.video.ingest.samplers", ("Sampler", "UniformSampler", "build", "available")),
+    ("ver2.video.ingest.output.base", ("ManifestSink",)),
+    ("ver2.video.ingest.output.manifest", ("FileManifestWriter", "MANIFEST_VERSION")),
+    ("ver2.video.ingest.output.multi", ("MultiSink",)),
     ("ver2.fanout", ("FanOut",)),
     ("ver2.db", ("client_from_env", "fetch_manifest", "fetch_descriptions",
                  "manifest_header", "load_env")),
-    ("ver2.ingest.output.supabase_manifest", ("SupabaseManifestWriter",)),
-    ("ver2.ingest.output.store", ("FrameStore",)),
-    ("ver2.ingest.output", ("FileManifestWriter", "ManifestSink", "MultiSink",
+    ("ver2.video.ingest.output.supabase_manifest", ("SupabaseManifestWriter",)),
+    ("ver2.video.ingest.output.store", ("FrameStore",)),
+    ("ver2.video.ingest.output", ("FileManifestWriter", "ManifestSink", "MultiSink",
                             "SupabaseManifestWriter", "FrameStore",
                             "MANIFEST_VERSION")),
-    ("ver2.ingest.pipeline", ("ingest", "Chunk", "Result")),
-    ("ver2.ingest.calibrate", ("analyse", "render", "replay", "collect", "Report", "Window")),
-    ("ver2.ingest.driver", ("report", "main")),
+    ("ver2.video.ingest.pipeline", ("ingest", "Chunk", "Result")),
+    ("ver2.video.ingest.calibrate", ("analyse", "render", "replay", "collect", "Report", "Window")),
+    ("ver2.video.ingest.driver", ("report", "main")),
     # recovery is deliberately standalone: it must import nothing from ver2,
     # so that a manifest plus this one file is enough to rebuild a store.
-    ("ver2.describe.describers.base", ("Describer",)),
-    ("ver2.describe.describers.stub", ("StubDescriber",)),
-    ("ver2.describe.describers", ("Describer", "StubDescriber", "build", "available")),
-    ("ver2.describe.input.frames", ("FrameSource", "LoadedFrame", "StoreUnavailable")),
-    ("ver2.describe.input.follow", ("follow_chunks", "client_from_env")),
-    ("ver2.describe.input.manifest", ("from_file", "from_supabase", "header")),
-    ("ver2.describe.input", ("FrameSource", "StoreUnavailable", "follow_chunks",
+    ("ver2.video.describe.describers.base", ("Describer",)),
+    ("ver2.video.describe.describers.stub", ("StubDescriber",)),
+    ("ver2.video.describe.describers", ("Describer", "StubDescriber", "build", "available")),
+    ("ver2.video.describe.input.frames", ("FrameSource", "LoadedFrame", "StoreUnavailable")),
+    ("ver2.video.describe.input.follow", ("follow_chunks", "client_from_env")),
+    ("ver2.video.describe.input.manifest", ("from_file", "from_supabase", "header")),
+    ("ver2.video.describe.input", ("FrameSource", "StoreUnavailable", "follow_chunks",
                              "from_file", "from_supabase", "header")),
-    ("ver2.describe.vlm.prompts", ("SYSTEM", "BY_SAMPLER", "for_sampler")),
-    ("ver2.describe.vlm.openai_client", ("OpenAIDescriber", "DescriberUnavailable",
+    ("ver2.video.describe.vlm.prompts", ("SYSTEM", "BY_SAMPLER", "for_sampler")),
+    ("ver2.video.describe.vlm.openai_client", ("OpenAIDescriber", "DescriberUnavailable",
                                          "DEFAULT_MODEL")),
-    ("ver2.describe.vlm", ("OpenAIDescriber", "DescriberUnavailable", "DEFAULT_MODEL")),
-    ("ver2.describe.reader", ("describe", "chunks_of")),
-    ("ver2.describe.output.base", ("DescriptionSink",)),
-    ("ver2.describe.output.document", ("DescriptionDocument", "fingerprint",
+    ("ver2.video.describe.vlm", ("OpenAIDescriber", "DescriberUnavailable", "DEFAULT_MODEL")),
+    ("ver2.video.describe.reader", ("describe", "chunks_of")),
+    ("ver2.video.describe.output.base", ("DescriptionSink",)),
+    ("ver2.video.describe.output.document", ("DescriptionDocument", "fingerprint",
                                        "DESCRIPTION_VERSION")),
-    ("ver2.describe.output.multi", ("MultiDescriptionSink",)),
-    ("ver2.describe.output.supabase", ("SupabaseDescriptions",)),
-    ("ver2.describe.output", ("DescriptionDocument", "DescriptionSink",
+    ("ver2.video.describe.output.multi", ("MultiDescriptionSink",)),
+    ("ver2.video.describe.output.supabase", ("SupabaseDescriptions",)),
+    ("ver2.video.describe.output", ("DescriptionDocument", "DescriptionSink",
                               "MultiDescriptionSink", "SupabaseDescriptions",
                               "fingerprint", "DESCRIPTION_VERSION")),
+
+    ("ver2.audio.source", ("probe", "load", "Track", "AudioInfo", "SAMPLE_RATE")),
+    ("ver2.audio.cuda", ("enable", "NEEDED")),
+    ("ver2.audio.transcribe.base", ("Transcriber", "Transcript", "Segment", "Word")),
+    ("ver2.audio.transcribe.stub", ("StubTranscriber",)),
+    ("ver2.audio.transcribe.whisper", ("WhisperTranscriber", "TranscriberUnavailable")),
+    ("ver2.audio.transcribe", ("Transcriber", "Transcript", "build", "available")),
+    ("ver2.audio.diarize.base", ("Diarizer", "Diarization", "Turn")),
+    ("ver2.audio.diarize.pyannote_diarizer", ("PyannoteDiarizer", "DiarizerUnavailable")),
+    ("ver2.audio.diarize", ("Diarizer", "Diarization", "NoDiarizer", "build", "available")),
+    ("ver2.audio.align", ("attribute", "split_on_speaker", "speaker_for")),
+    ("ver2.audio.segment.cut", ("to_chunks",)),
+    ("ver2.audio.segment", ("build", "available", "to_chunks", "vad_cuts",
+                            "speaker_cuts", "speech_spans")),
+    ("ver2.audio.output.base", ("TranscriptSink",)),
+    ("ver2.audio.output.document", ("TranscriptDocument", "build_document",
+                                    "TRANSCRIPT_VERSION")),
+    ("ver2.audio.output.multi", ("MultiTranscriptSink",)),
+    ("ver2.audio.output.supabase", ("SupabaseTranscript",)),
+    ("ver2.audio.output", ("TranscriptDocument", "TranscriptSink",
+                           "MultiTranscriptSink", "SupabaseTranscript",
+                           "build_document")),
+    ("ver2.audio.reader", ("listen", "cut", "Result")),
 
     ("ver2.embed.defaults", ("index", "embedder", "model", "describe")),
     ("ver2.embed.units", ("Unit", "embedder_key", "collection_name", "text_hash")),
@@ -257,9 +303,11 @@ def check_internal(module_name: str, names: tuple[str, ...]) -> Result:
 # module proves nothing about whether it runs: a missing `import argparse` used
 # only inside main() imports cleanly and fails at the first call.
 ENTRYPOINTS = [
-    "ver2.ingest.driver",
-    "ver2.ingest.calibrate",
-    "ver2.describe.driver",
+    "ver2.video.ingest.driver",
+    "ver2.video.ingest.calibrate",
+    "ver2.video.describe.driver",
+    "ver2.audio.driver",
+    "ver2.driver",
     "ver2.embed.driver",
     "ver2.retrieve.driver",
     "ver2.recovery.recreate",
@@ -319,7 +367,7 @@ def check_recovery_standalone() -> Result:
 
 
 #: describe/ may reach into ingest/ for exactly this, and nothing else.
-DESCRIBE_MAY_IMPORT = {"ver2.ingest.output": {"FrameStore"}}
+DESCRIBE_MAY_IMPORT = {"ver2.video.ingest.output": {"FrameStore"}}
 
 
 def check_describe_boundary() -> Result:
@@ -332,7 +380,7 @@ def check_describe_boundary() -> Result:
     """
     import ast
 
-    root = Path(__file__).resolve().parent / "describe"
+    root = Path(__file__).resolve().parent / "video" / "describe"
     sources = sorted(root.rglob("*.py"))
     leaked = []
     for src in sources:
@@ -340,7 +388,7 @@ def check_describe_boundary() -> Result:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                if not module.startswith("ver2.ingest"):
+                if not module.startswith("ver2.video.ingest"):
                     continue
                 allowed = DESCRIBE_MAY_IMPORT.get(module, set())
                 for alias in node.names:
@@ -348,7 +396,7 @@ def check_describe_boundary() -> Result:
                         leaked.append(f"{src.name}: {module}.{alias.name}")
             elif isinstance(node, ast.Import):
                 leaked += [f"{src.name}: {a.name}" for a in node.names
-                           if a.name.startswith("ver2.ingest")]
+                           if a.name.startswith("ver2.video.ingest")]
     if leaked:
         return Result("describe touches only manifest + store", False,
                       error=f"leaked: {', '.join(sorted(leaked))}")
@@ -361,10 +409,18 @@ def check_registries() -> list[Result]:
     nothing is a break the import check above would not catch."""
     out: list[Result] = []
     try:
-        from ver2.ingest import chunker as chunker_mod
-        from ver2.ingest import samplers as samplers_mod
+        from ver2.video.ingest import chunker as chunker_mod
+        from ver2.video.ingest import samplers as samplers_mod
     except Exception as exc:
         return [Result("registries", False, error=f"{type(exc).__name__}: {exc}")]
+
+    # Entries that cannot be built from nothing. `fixed` carries a grid decided
+    # by another pass, so a no-argument build is not a shape it ever has -- the
+    # check supplies a one-chunk timeline rather than reporting the absence of
+    # an argument as a broken registry.
+    from ver2.timeline import uniform as _uniform_timeline
+
+    needs: dict[str, dict] = {"fixed": {"timeline": _uniform_timeline(10.0, 10.0)}}
 
     for label, mod, heavy in (("samplers", samplers_mod, {"clip", "yolo", "objects", "text"}),
                               ("chunkers", chunker_mod, {"scene"})):
@@ -375,7 +431,7 @@ def check_registries() -> list[Result]:
                 out.append(Result(f"{label}:{name}", True, detail="registered (lazy)"))
                 continue
             try:
-                obj = mod.build(name)
+                obj = mod.build(name, **needs.get(name, {}))
                 out.append(Result(f"{label}:{name}", True, detail=type(obj).__name__))
             except Exception as exc:
                 out.append(Result(f"{label}:{name}", False,

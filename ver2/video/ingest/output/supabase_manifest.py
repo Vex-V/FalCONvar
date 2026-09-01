@@ -58,8 +58,8 @@ class SupabaseManifestWriter:
         self.config = config
         # Replace, not insert: re-ingesting a video should supersede its
         # manifest rather than fail. The cascade on chunks takes the old rows.
-        self.client.table("videos").delete().eq("video_id", video_id).execute()
-        self.client.table("videos").insert({
+        self.client.table("video_manifests").delete().eq("video_id", video_id).execute()
+        self.client.table("video_manifests").insert({
             "video_id": video_id,
             "complete": False,
             "manifest_version": MANIFEST_VERSION,
@@ -94,7 +94,7 @@ class SupabaseManifestWriter:
         self.chunks.append(chunk)
         if stats is not None:
             self.stats = stats
-        self.client.table("chunks").insert(self._row(chunk)).execute()
+        self.client.table("video_chunks").insert(self._row(chunk)).execute()
 
     def finish(
         self,
@@ -111,11 +111,11 @@ class SupabaseManifestWriter:
             # the last chunk's end_ts, and any chunk the pipeline restated.
             self.chunks = list(chunks)
             for chunk in self.chunks:
-                self.client.table("chunks").upsert(
+                self.client.table("video_chunks").upsert(
                     self._row(chunk), on_conflict="video_id,chunk_id"
                 ).execute()
         self.complete = True
-        self.client.table("videos").update({
+        self.client.table("video_manifests").update({
             "complete": True,
             "stats": self.stats,
             "config": self.config,

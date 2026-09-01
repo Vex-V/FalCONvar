@@ -66,7 +66,7 @@ def fetch_manifest(client: Any, video_id: str) -> dict[str, Any]:
     Server-side so there is no second implementation of the manifest format to
     drift from the one the file writer produces.
     """
-    document = client.rpc("export_manifest", {"p_video_id": video_id}).execute().data
+    document = client.rpc("export_video_manifest", {"p_video_id": video_id}).execute().data
     if not document:
         raise SystemExit(f"no manifest in Supabase for video_id {video_id!r}")
     return document
@@ -74,7 +74,7 @@ def fetch_manifest(client: Any, video_id: str) -> dict[str, Any]:
 
 def fetch_descriptions(client: Any, video_id: str) -> list[dict[str, Any]]:
     """Every description row for one video, in (chunk, sampler) order."""
-    return client.rpc("export_descriptions",
+    return client.rpc("export_video_descriptions",
                       {"p_video_id": video_id}).execute().data or []
 
 
@@ -84,7 +84,7 @@ def manifest_header(client: Any, video_id: str) -> dict[str, Any]:
     Ingest claims its ``video_id`` before decoding a frame, so everything about
     a run except its results is available while the run is still going.
     """
-    rows = (client.table("videos")
+    rows = (client.table("video_manifests")
             .select("video_id,complete,manifest_version,source,config,stats")
             .eq("video_id", video_id).execute().data)
     if not rows:

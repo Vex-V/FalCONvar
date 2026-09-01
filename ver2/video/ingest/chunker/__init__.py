@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Type
 
 from .base import Chunker
+from .fixed import FixedChunker
 from .uniform import UniformChunker
 
 _LAZY: dict[str, str] = {"scene": "scene:SceneChunker"}
@@ -21,6 +22,9 @@ def register(cls: Type[Chunker]) -> Type[Chunker]:
 
 
 register(UniformChunker)
+# Not lazy: it carries a Timeline and pulls in nothing heavy. It is how an
+# audio-derived grid reaches the video pass.
+register(FixedChunker)
 
 
 def _resolve(name: str) -> Type[Chunker]:
@@ -45,4 +49,5 @@ def available() -> list[str]:
     return sorted(set(_REGISTRY) | set(_LAZY))
 
 
-__all__ = ["Chunker", "UniformChunker", "available", "build", "register"]
+__all__ = ["Chunker", "FixedChunker", "UniformChunker",
+           "available", "build", "register"]

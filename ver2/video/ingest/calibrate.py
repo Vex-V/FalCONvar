@@ -336,7 +336,7 @@ def main() -> int:
 
     if __package__ in (None, ""):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from ver2.ingest import samplers as samplers_mod
+    from ver2.video.ingest import samplers as samplers_mod
 
     ap = argparse.ArgumentParser(description="Report what a sampler's threshold does here.")
     ap.add_argument("video")

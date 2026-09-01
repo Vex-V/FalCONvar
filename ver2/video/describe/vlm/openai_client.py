@@ -92,7 +92,10 @@ class OpenAIDescriber:
         """The instruction, then every frame labelled with its own timestamp."""
         parts: list[dict[str, Any]] = [{
             "type": "input_text",
-            "text": prompts.for_sampler(context["sampler"], context, len(images)),
+            # The question, not the sampler: a positional sampler may be
+            # standing in for one it is not. See prompts.question_for.
+            "text": prompts.for_sampler(prompts.question_for(context), context,
+                                        len(images)),
         }]
         for position, frame in enumerate(images, start=1):
             parts.append({
@@ -129,10 +132,13 @@ class OpenAIDescriber:
                 # tokens repeating what the scene sampler already said.
                 text={"format": {
                     "type": "json_schema",
-                    "name": f"description_{context['sampler']}",
+                    "name": f"description_{prompts.question_for(context)}",
                     "strict": True,
+                    # Resolved the same way as the instruction, so the shape
+                    # asked for and the question asked always agree.
                     "schema": prompts.schema_for(
-                        context["sampler"], context.get("chunk_samplers", ())),
+                        prompts.question_for(context),
+                        context.get("chunk_samplers", ())),
                 }},
             )
         except Exception as exc:                   # noqa: BLE001

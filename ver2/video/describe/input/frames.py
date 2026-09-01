@@ -33,7 +33,7 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from ver2.ingest.output import FrameStore
+from ver2.video.ingest.output import FrameStore
 
 REBUILD_HINT = ("Rebuild it from the manifest and the video:\n"
                 "    python -m ver2.recovery.recreate <manifest> --out <store>")

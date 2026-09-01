@@ -35,7 +35,8 @@ class StubDescriber:
             # a stub run exercises the shape the document has to hold.
             fields={key: "" if key == "setting" else []
                     for key in prompts.owned_by(
-                        context["sampler"], context.get("chunk_samplers", ()))},
+                        prompts.question_for(context),
+                        context.get("chunk_samplers", ()))},
         )
 
     def config(self) -> dict[str, Any]:

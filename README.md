@@ -50,15 +50,15 @@ Everything one video produces lives under `out/<video-id>/` — `manifest.json`,
 
 ```bash
 # 1. ingest
-python -m ver2.ingest.driver video.mp4 --sampler clip,yolo --frame-store
-python -m ver2.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
-python -m ver2.ingest.calibrate video.mp4 --sampler clip
+python -m ver2.video.ingest.driver video.mp4 --sampler clip,yolo --frame-store
+python -m ver2.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
+python -m ver2.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
+python -m ver2.video.ingest.calibrate video.mp4 --sampler clip
 
 # 2. describe  (stub needs no model, no network and no money)
-python -m ver2.describe.driver out/<id>/manifest.json
-python -m ver2.describe.driver out/<id>/manifest.json --describer openai
-python -m ver2.describe.driver --video-id <id> --follow    # tail a live ingest
+python -m ver2.video.describe.driver out/<id>/manifest.json
+python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
+python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live ingest
 
 # 3. embed   (defaults to Postgres; see .env.example to switch)
 python -m ver2.embed.driver out/<id>/descriptions.json

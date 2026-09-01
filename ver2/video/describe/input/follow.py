@@ -37,7 +37,7 @@ def _as_chunk(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rows_after(client: Any, video_id: str, last: int) -> list[dict[str, Any]]:
-    return (client.table("chunks")
+    return (client.table("video_chunks")
             .select("chunk_id,start_ts,end_ts,decimated_frames,samplers")
             .eq("video_id", video_id).gt("chunk_id", last)
             .order("chunk_id").execute().data)
@@ -75,7 +75,7 @@ def follow_chunks(
             pending = _as_chunk(row)
         if rows:
             continue
-        done = (client.table("videos").select("complete")
+        done = (client.table("video_manifests").select("complete")
                 .eq("video_id", video_id).execute().data)
         if done and done[0]["complete"]:
             if pending is not None:

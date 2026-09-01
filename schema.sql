@@ -8,8 +8,36 @@
 -- so verify by row count under the publishable key, never by absence of an
 -- exception.
 
+-- ---------------------------------------------------------------- teardown
+-- The tables were renamed to say which stream they belong to. These are the
+-- names they had before: `videos`, `chunks`, `descriptions`,
+-- `description_embeddings`, `transcripts`, `transcript_chunks`. Dropping them
+-- is a no-op on a database that never had them, so this stays safe to re-run
+-- and can be deleted once every deployment has been through it once.
+--
+-- The functions go too: a `create or replace` cannot rename one, and the old
+-- names would otherwise survive as working RPCs returning stale shapes -- the
+-- same silent-staleness failure the `fts` column had.
+-- Without an argument list. Naming the types was tried and failed silently:
+-- `search_descriptions(text, vector, text, text, text, int, int)` matched
+-- nothing, so the function survived a full teardown and was left pointing at a
+-- table that no longer existed. The bare form drops whatever overload is
+-- there, and errors loudly if a name is ambiguous rather than doing nothing.
+drop function if exists export_manifest;
+drop function if exists export_descriptions;
+drop function if exists export_transcript;
+drop function if exists search_descriptions;
+drop function if exists search_transcripts;
+
+drop table if exists description_embeddings cascade;
+drop table if exists transcript_chunks cascade;
+drop table if exists transcripts        cascade;
+drop table if exists descriptions       cascade;
+drop table if exists chunks             cascade;
+drop table if exists videos             cascade;
+
 -- ---------------------------------------------------------------- manifests
-create table if not exists videos (
+create table if not exists video_manifests (
   video_id         text primary key,
   complete         boolean not null default false,
   manifest_version int     not null,
@@ -19,8 +47,8 @@ create table if not exists videos (
   ingested_at      timestamptz not null default now()
 );
 
-create table if not exists chunks (
-  video_id         text references videos on delete cascade,
+create table if not exists video_chunks (
+  video_id         text references video_manifests on delete cascade,
   chunk_id         int,
   start_ts         numeric not null,
   end_ts           numeric not null,
@@ -29,13 +57,13 @@ create table if not exists chunks (
   primary key (video_id, chunk_id)
 );
 
-create index if not exists chunks_video_start on chunks (video_id, start_ts);
-create index if not exists chunks_samplers    on chunks using gin (samplers jsonb_path_ops);
+create index if not exists video_chunks_start on video_chunks (video_id, start_ts);
+create index if not exists video_chunks_samplers on video_chunks using gin (samplers jsonb_path_ops);
 
 -- The manifest, reassembled server-side so there is no second implementation
 -- of the format to drift. Verified byte-for-byte equivalent (as parsed data --
 -- jsonb does not preserve key order) to what the file writer produces.
-create or replace function export_manifest(p_video_id text)
+create or replace function export_video_manifest(p_video_id text)
 returns jsonb language sql stable as $$
   select jsonb_build_object(
     'manifest_version', v.manifest_version,
@@ -52,16 +80,16 @@ returns jsonb language sql stable as $$
           'decimated_frames', c.decimated_frames,
           'samplers',         c.samplers)
         order by c.chunk_id) filter (where c.chunk_id is not null), '[]'::jsonb))
-  from videos v
-  left join chunks c using (video_id)
+  from video_manifests v
+  left join video_chunks c using (video_id)
   where v.video_id = p_video_id
   group by v.video_id, v.manifest_version, v.complete, v.source, v.config, v.stats;
 $$;
 
--- ------------------------------------------------------------- descriptions
+-- ------------------------------------------------------------- video_descriptions
 -- One row per (video_id, chunk_id, sampler): the unit one describer call
--- covers. NO foreign key to videos, deliberately -- ingest replaces a manifest
--- wholesale and cascades chunks with it, and re-ingesting costs 20 seconds
+-- covers. NO foreign key to video_manifests, deliberately -- ingest replaces a manifest
+-- wholesale and cascades video_chunks with it, and re-ingesting costs 20 seconds
 -- where describing costs inference. A cascade would let the cheap operation
 -- destroy the expensive one.
 --
@@ -70,7 +98,7 @@ $$;
 -- known before the first chunk exists, survives the video and store being
 -- moved, and changes when the sampling changes. Staleness becomes a
 -- comparison rather than a deletion.
-create table if not exists descriptions (
+create table if not exists video_descriptions (
   video_id       text  not null,
   chunk_id       int   not null,
   sampler        text  not null,
@@ -84,19 +112,19 @@ create table if not exists descriptions (
   primary key (video_id, chunk_id, sampler)
 );
 
-create index if not exists descriptions_video_chunk on descriptions (video_id, chunk_id);
+create index if not exists video_descriptions_chunk on video_descriptions (video_id, chunk_id);
 
 -- The same observation, broken out: setting, entities, actions, visible_text,
 -- changes. `description` stays the prose because that is what gets embedded
 -- and read; this is what a filter can use -- every moment showing a basket,
 -- every moment where a sign said something.
-alter table descriptions
+alter table video_descriptions
   add column if not exists structured jsonb not null default '{}'::jsonb;
 
-create index if not exists descriptions_structured
-  on descriptions using gin (structured jsonb_path_ops);
+create index if not exists video_descriptions_structured
+  on video_descriptions using gin (structured jsonb_path_ops);
 
-create or replace function export_descriptions(p_video_id text)
+create or replace function export_video_descriptions(p_video_id text)
 returns jsonb language sql stable as $$
   select coalesce(jsonb_agg(jsonb_build_object(
       'chunk_id',    chunk_id,    'sampler',       sampler,
@@ -106,21 +134,21 @@ returns jsonb language sql stable as $$
       'model',       model,
       'manifest_fingerprint', manifest_fingerprint)
       order by chunk_id, sampler), '[]'::jsonb)
-  from descriptions where video_id = p_video_id;
+  from video_descriptions where video_id = p_video_id;
 $$;
 
 -- --------------------------------------------------------------------- RLS
-alter table videos       enable row level security;
-alter table chunks       enable row level security;
-alter table descriptions enable row level security;
+alter table video_manifests       enable row level security;
+alter table video_chunks       enable row level security;
+alter table video_descriptions enable row level security;
 
-drop policy if exists "public read" on videos;
-drop policy if exists "public read" on chunks;
-drop policy if exists "public read" on descriptions;
+drop policy if exists "public read" on video_manifests;
+drop policy if exists "public read" on video_chunks;
+drop policy if exists "public read" on video_descriptions;
 
-create policy "public read" on videos       for select to anon using (true);
-create policy "public read" on chunks       for select to anon using (true);
-create policy "public read" on descriptions for select to anon using (true);
+create policy "public read" on video_manifests       for select to anon using (true);
+create policy "public read" on video_chunks       for select to anon using (true);
+create policy "public read" on video_descriptions for select to anon using (true);
 
 -- ---------------------------------------------------------------- retrieval
 create extension if not exists vector;
@@ -135,12 +163,12 @@ create extension if not exists vector;
 -- search only -- no ANN index -- which is correct at this scale: a few thousand
 -- descriptions scan in under a millisecond. Once an embedder is settled, add
 --
---     alter table description_embeddings add column embedding_fixed vector(1536);
---     create index on description_embeddings using hnsw
+--     alter table chunk_embeddings add column embedding_fixed vector(1536);
+--     create index on chunk_embeddings using hnsw
 --            (embedding_fixed vector_cosine_ops) where embedder = '...';
 --
 -- and note pgvector's HNSW limit of 2000 dimensions for the `vector` type.
-create table if not exists description_embeddings (
+create table if not exists chunk_embeddings (
   video_id       text not null,
   chunk_id       int  not null,
   sampler        text not null,
@@ -165,7 +193,7 @@ create table if not exists description_embeddings (
 -- summaries alone answers literal queries at MRR 0.752, and the structured
 -- fields are where the verbatim signage and the exact garments live, so
 -- leaving them out of the lexical index throws away the terms it is best at.
-alter table description_embeddings
+alter table chunk_embeddings
   add column if not exists structured jsonb not null default '{}'::jsonb;
 
 -- Dropped and rebuilt rather than conditionally added, and this is the one
@@ -180,22 +208,22 @@ alter table description_embeddings
 -- Nothing is lost by dropping it. The column is generated, so Postgres
 -- recomputes every row from `content` and `structured`; the GIN index below
 -- goes with it and is recreated by the same re-run.
-alter table description_embeddings drop column if exists fts;
+alter table chunk_embeddings drop column if exists fts;
 
-alter table description_embeddings
+alter table chunk_embeddings
   add column fts tsvector
   generated always as (
     to_tsvector('english', content || ' ' || jsonb_path_query_array(
       structured, 'strict $.**?(@.type() == "string")')::text)
   ) stored;
 
-create index if not exists description_embeddings_structured
-  on description_embeddings using gin (structured jsonb_path_ops);
+create index if not exists chunk_embeddings_structured
+  on chunk_embeddings using gin (structured jsonb_path_ops);
 
-create index if not exists description_embeddings_fts
-  on description_embeddings using gin (fts);
-create index if not exists description_embeddings_video
-  on description_embeddings (video_id, chunk_id);
+create index if not exists chunk_embeddings_fts
+  on chunk_embeddings using gin (fts);
+create index if not exists chunk_embeddings_video
+  on chunk_embeddings (video_id, chunk_id);
 
 -- Hybrid search, fused with Reciprocal Rank Fusion.
 --
@@ -203,7 +231,7 @@ create index if not exists description_embeddings_video
 -- unrelated scales, and any weighting between them is a number nobody can
 -- justify. RRF only reads the two *orderings*, so it needs no calibration --
 -- a row ranked 1st by vectors and 8th by text scores 1/(k+1) + 1/(k+8).
-create or replace function search_descriptions(
+create or replace function search_embeddings(
   p_embedder     text,
   p_query_vector vector,
   p_query_text   text default null,
@@ -219,7 +247,7 @@ returns table (
 )
 language sql stable as $$
   with candidates as (
-    select e.* from description_embeddings e
+    select e.* from chunk_embeddings e
     where e.embedder = p_embedder
       and (p_video_id is null or e.video_id = p_video_id)
       -- A filter over one shared space, not a space of its own: every row
@@ -265,6 +293,149 @@ language sql stable as $$
   limit p_limit;
 $$;
 
-alter table description_embeddings enable row level security;
-drop policy if exists "public read" on description_embeddings;
-create policy "public read" on description_embeddings for select to anon using (true);
+alter table chunk_embeddings enable row level security;
+drop policy if exists "public read" on chunk_embeddings;
+create policy "public read" on chunk_embeddings for select to anon using (true);
+
+-- ---------------------------------------------------------------- audio_transcripts
+-- The audio half. Two tables rather than rows in `video_descriptions` with
+-- sampler = 'transcript', which was tempting because it would inherit
+-- export_video_descriptions, the embed path and retrieval for free. It is the wrong
+-- trade: `model` would mean "a VLM" on some rows and "Whisper plus pyannote"
+-- on others, `frame_indexes` would be empty on half of them, and `structured`
+-- would hold two unrelated shapes. That reads fine until something has to
+-- branch on which kind of row it is holding.
+--
+-- What IS shared is the vector index. A transcript chunk embeds through the
+-- same `embed` stage and lands in `chunk_embeddings` with
+-- sampler = 'transcript', because that table stores text with a time span and
+-- a transcript chunk is exactly that. No schema change is needed there, which
+-- is the evidence the embed/retrieve split was cut in the right place.
+--
+-- NO foreign key to `video_manifests`, for the reason `video_descriptions` has none: ingest
+-- replaces a manifest wholesale and re-ingesting costs seconds, while
+-- transcribing and diarizing cost model time. A cascade would let the cheap
+-- operation destroy the expensive one. `timeline_fingerprint` replaces it.
+
+-- One row per video: everything about the pass that is not per-chunk.
+create table if not exists audio_transcripts (
+  video_id        text primary key,
+  language        text,
+  language_probability numeric,
+  speakers        text[]  not null default '{}',
+  model           jsonb   not null default '{}'::jsonb,  -- transcriber + diarizer
+  audio           jsonb   not null default '{}'::jsonb,  -- codec, rate, channels
+  stats           jsonb   not null default '{}'::jsonb,
+  timeline        jsonb   not null default '{}'::jsonb,  -- policy, derived_from, fingerprint
+  timeline_fingerprint text,
+  -- The word-level record: every segment with its words, timestamps and
+  -- speaker. Stored, and not merely derivable, because it is what makes a
+  -- chunk grid a decision that can be revisited -- re-cutting to a different
+  -- policy is arithmetic over this, where regenerating it means paying for
+  -- Whisper again. A holder of the database can therefore re-chunk; a holder
+  -- of only `audio_chunks` cannot.
+  segments        jsonb   not null default '[]'::jsonb,
+  transcribed_at  timestamptz not null default now()
+);
+
+-- One row per (video_id, chunk_id): the current grid's view of the words.
+-- Derived from `audio_transcripts.segments` plus a timeline, so this is a cache in
+-- the way the frame store is a cache -- droppable, rebuildable, and not the
+-- record. Chunks with no speech are kept with empty text on purpose: the grid
+-- is shared with the video side, so chunk_id has to mean the same thing in
+-- both, and dropping the quiet ones renumbers everything after them.
+create table if not exists audio_chunks (
+  video_id        text not null,
+  chunk_id        int  not null,
+  start_ts        numeric not null,
+  end_ts          numeric not null,
+  text            text not null default '',
+  word_count      int  not null default 0,
+  -- {speakers: [...], turns: [{speaker, start, end, text}]}. One bound record
+  -- per contiguous run of one voice, so a window holding three speakers still
+  -- says who said what -- the same shape the `yolo` describer returns for
+  -- people, and for the same reason.
+  structured      jsonb not null default '{}'::jsonb,
+  timeline_fingerprint text,
+  primary key (video_id, chunk_id)
+);
+
+create index if not exists audio_chunks_video on audio_chunks (video_id, start_ts);
+create index if not exists audio_chunks_structured
+  on audio_chunks using gin (structured jsonb_path_ops);
+
+-- Full text over the words. Note this is NOT what retrieval searches --
+-- retrieval goes through `chunk_embeddings.fts`, which is populated when
+-- a transcript chunk is embedded. This one answers a different and cheaper
+-- question: which video contains this phrase, without embedding anything.
+alter table audio_chunks drop column if exists fts;
+
+alter table audio_chunks
+  add column fts tsvector
+  generated always as (
+    to_tsvector('english', text || ' ' || jsonb_path_query_array(
+      structured, 'strict $.**?(@.type() == "string")')::text)
+  ) stored;
+
+create index if not exists audio_chunks_fts on audio_chunks using gin (fts);
+
+-- The document, reassembled server-side, so there is no second implementation
+-- of the format to drift from what the file writer produces.
+create or replace function export_audio_transcript(p_video_id text)
+returns jsonb language sql stable as $$
+  select jsonb_build_object(
+    'transcript_version', 1,
+    'video_id',   t.video_id,
+    'complete',   true,
+    'timeline_fingerprint', t.timeline_fingerprint,
+    'language',   t.language,
+    'language_probability', t.language_probability,
+    'speakers',   to_jsonb(t.speakers),
+    'model',      t.model,
+    'source',     jsonb_build_object('video_id', t.video_id, 'audio', t.audio),
+    'stats',      t.stats,
+    'timeline',   t.timeline,
+    'segments',   t.segments,
+    'chunks', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'chunk_id',   c.chunk_id,
+               'start_ts',   c.start_ts,
+               'end_ts',     c.end_ts,
+               'text',       c.text,
+               'word_count', c.word_count,
+               'structured', c.structured)
+             order by c.chunk_id)
+      from audio_chunks c where c.video_id = t.video_id), '[]'::jsonb))
+  from audio_transcripts t
+  where t.video_id = p_video_id;
+$$;
+
+-- Which videos have someone saying this, without embedding anything.
+create or replace function search_audio_chunks(
+  p_query    text,
+  p_video_id text default null,
+  p_limit    int  default 20
+)
+returns table (
+  video_id text, chunk_id int, start_ts numeric, end_ts numeric,
+  text text, speakers jsonb, rank real
+)
+language sql stable as $$
+  select c.video_id, c.chunk_id, c.start_ts, c.end_ts, c.text,
+         c.structured -> 'speakers',
+         ts_rank_cd(c.fts, websearch_to_tsquery('english', p_query)) as rank
+  from audio_chunks c
+  where c.fts @@ websearch_to_tsquery('english', p_query)
+    and (p_video_id is null or c.video_id = p_video_id)
+  order by rank desc
+  limit p_limit;
+$$;
+
+alter table audio_transcripts       enable row level security;
+alter table audio_chunks enable row level security;
+
+drop policy if exists "public read" on audio_transcripts;
+drop policy if exists "public read" on audio_chunks;
+
+create policy "public read" on audio_transcripts       for select to anon using (true);
+create policy "public read" on audio_chunks for select to anon using (true);

@@ -15,12 +15,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ver2.ingest import chunker as chunker_mod
-from ver2.ingest import samplers as samplers_mod
-from ver2.ingest.chunker import Chunker
-from ver2.ingest.output import MANIFEST_VERSION, FrameStore, ManifestSink
-from ver2.ingest.samplers import Sampler
-from ver2.ingest.source import Decimator, probe, read_frames
+from ver2.video.ingest import chunker as chunker_mod
+from ver2.video.ingest import samplers as samplers_mod
+from ver2.timeline import MIN_TAIL_FRACTION
+from ver2.video.ingest.chunker import Chunker
+from ver2.video.ingest.output import MANIFEST_VERSION, FrameStore, ManifestSink
+from ver2.video.ingest.samplers import Sampler
+from ver2.video.ingest.source import Decimator, probe, read_frames
 
 
 @dataclass
@@ -48,6 +49,41 @@ class Chunk:
                 for sampler_id, frames in self.picks.items()
             },
         }
+
+
+
+def _merge_tail(chunks: list["Chunk"], min_tail_s: float) -> None:
+    """Fold a too-short final chunk into its predecessor, in place.
+
+    The frames were already chosen -- the samplers reset at the boundary that
+    is being removed, so the merged chunk holds one extra mandatory
+    first-frame-of-chunk pick. That is the honest cost of deciding this after
+    the pass rather than before it, and an extra frame is not a defect: the
+    manifest still names exactly the frames that were kept, and the store
+    still holds them. Nothing is invented and nothing is dropped.
+
+    ``chunk_local_index`` is **shifted, not renumbered**. It is the frame's
+    position in the chunk's decimated stream, not a sequence number over the
+    picks -- a uniform sampler at stride 3 yields 0, 3, 6, 9 for four picks --
+    so the tail's indices continue from however many decimated frames the host
+    already had. Renumbering them 0..n would silently redefine the field.
+    """
+    if len(chunks) < 2:
+        return
+    tail = chunks[-1]
+    if tail.end_ts - tail.start_ts >= min_tail_s:
+        return
+    host = chunks[-2]
+    offset = host.decimated
+    for sampler_id, picks in tail.picks.items():
+        for pick in picks:
+            pick["chunk_local_index"] += offset
+        host.picks.setdefault(sampler_id, []).extend(picks)
+        host.picks[sampler_id].sort(key=lambda p: p["media_ts"])
+    host.decimated += tail.decimated
+    host.end_ts = tail.end_ts
+    host.last_ts = max(host.last_ts, tail.last_ts)
+    chunks.pop()
 
 
 @dataclass
@@ -88,6 +124,10 @@ def ingest(
         # media time, and the duration cap doubles as the chunk length.
         options.setdefault("max_duration_s", chunk_duration_s)
         options.setdefault("fps", info.fps if info.fps_trusted else 30.0)
+    elif chunking == "fixed":
+        # The grid is the argument. Injecting a chunk length here would be a
+        # second opinion about boundaries that were already decided.
+        pass
     else:
         options.setdefault("duration_s", chunk_duration_s)
     chunker: Chunker = chunker_mod.build(chunking, **options)
@@ -205,10 +245,25 @@ def ingest(
     # The last chunk ends where the video does, not where the boundary grid
     # would put it and not at its last decimated frame. Only a file knows this;
     # a live source keeps the last-frame answer set in close().
-    if chunks and info.frame_count and info.fps_trusted:
+    # Not when the grid was handed in. A `fixed` run is honouring boundaries
+    # another pass computed, and both of the corrections below would silently
+    # edit them: the audio stream is routinely a few milliseconds shorter than
+    # the video one (205.264 s against 205.280 s on the reference file), so
+    # "correcting" the last chunk to the video's end makes the manifest and the
+    # timeline disagree about a boundary neither of them chose. A supplied grid
+    # has also already had its own minimum applied, and re-applying a different
+    # one here would merge a tail the other pass deliberately kept.
+    if chunking != "fixed" and chunks and info.frame_count and info.fps_trusted:
         duration = info.frame_count / info.fps
         if duration > chunks[-1].start_ts:
             chunks[-1].end_ts = duration
+        # And once the true end is known, a stub of a last chunk is folded into
+        # the one before it. Where the media stops relative to a grid that knew
+        # nothing about it is arbitrary -- 97.99 s at 20 s leaves a usable
+        # 17.99 s, 100.4 s leaves 0.4 s -- and a 0.4 s chunk still costs a
+        # describer call per sampler, still keeps a frame because every chunk
+        # keeps at least one, and is still a moment nobody can play.
+        _merge_tail(chunks, chunk_duration_s * MIN_TAIL_FRACTION)
 
     elapsed = time.perf_counter() - started
     final = stats()

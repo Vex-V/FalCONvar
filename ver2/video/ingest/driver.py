@@ -14,12 +14,12 @@ from typing import Any
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ver2.ingest import chunker as chunker_mod
-from ver2.ingest import samplers as samplers_mod
-from ver2.ingest.output import FileManifestWriter, FrameStore, MultiSink
-from ver2.ingest.pipeline import Result, ingest
-from ver2.ingest.samplers import Sampler
-from ver2.ingest.source import UnusableSource
+from ver2.video.ingest import chunker as chunker_mod
+from ver2.video.ingest import samplers as samplers_mod
+from ver2.video.ingest.output import FileManifestWriter, FrameStore, MultiSink
+from ver2.video.ingest.pipeline import Result, ingest
+from ver2.video.ingest.samplers import Sampler
+from ver2.video.ingest.source import UnusableSource
 
 
 def report(result: Result, show: int = 6) -> None:
@@ -66,12 +66,28 @@ def report(result: Result, show: int = 6) -> None:
 
 
 def _build_samplers(args) -> list[Sampler]:
+    """The --sampler list, as objects.
+
+    A name may carry a question after a colon -- `uniform:text` keeps a frame
+    every N seconds and has the describe stage ask the text question about it,
+    without paying EasyOCR to decide *when*. The sampler id then defaults to
+    the question, so `uniform:text` and a real `text` sampler in one run collide
+    on purpose: they would write to the same key in the manifest.
+    """
     rate = {"min_interval_s": args.min_interval, "max_per_chunk": args.max_per_chunk}
     tuned = {} if args.threshold is None else {"threshold": args.threshold}
     built = []
-    for name in [n.strip() for n in args.sampler.split(",") if n.strip()]:
+    for entry in [n.strip() for n in args.sampler.split(",") if n.strip()]:
+        name, _, prompt = entry.partition(":")
+        if prompt and name not in ("uniform", "overview"):
+            raise SystemExit(
+                f"--sampler {entry!r}: only `uniform` takes a question after a "
+                "colon. A change sampler already implies its own question.")
         if name == "uniform":
-            built.append(samplers_mod.build(name, every_n=args.every_n, **rate))
+            built.append(samplers_mod.build(
+                name, every_s=args.every_seconds, prompt=prompt or None, **rate))
+        elif name == "overview":
+            built.append(samplers_mod.build(name, every_s=args.every_seconds, **rate))
         elif name == "clip":
             built.append(samplers_mod.build(name, mode=args.mode, **tuned, **rate))
         elif name == "objects":
@@ -104,8 +120,10 @@ def main() -> int:
                     help="scene chunking: ignore cuts arriving sooner (default 5)")
     ap.add_argument("--sampler", default="uniform",
                     help=f"comma-separated; known: {', '.join(samplers_mod.available())}")
-    ap.add_argument("--every-n", type=int, default=3,
-                    help="uniform sampler stride, in decimated frames (default 3)")
+    ap.add_argument("--every-seconds", type=float, default=3.0,
+                    help="uniform/overview: seconds between kept frames "
+                         "(default 3). Media time, not a frame count, so the "
+                         "cadence does not move with --per-second")
     ap.add_argument("--threshold", type=float, default=None,
                     help="change samplers: per-sampler default if unset")
     ap.add_argument("--target-rate", type=float, default=None,
@@ -176,7 +194,7 @@ def main() -> int:
         else:
             # Imported here so a file-only run never pays for supabase-py, and
             # a missing install fails only the run that asked for it.
-            from ver2.ingest.output import SupabaseManifestWriter
+            from ver2.video.ingest.output import SupabaseManifestWriter
 
             # A CLI convenience only: the sink itself reads the environment
             # and says so, which is what a library should do.
@@ -197,7 +215,7 @@ def main() -> int:
     built = _build_samplers(args)
     calibrations = []
     if args.target_rate is not None:
-        from ver2.ingest.calibrate import calibrate as run_calibration
+        from ver2.video.ingest.calibrate import calibrate as run_calibration
 
         for sampler in built:
             if not hasattr(sampler, "threshold"):

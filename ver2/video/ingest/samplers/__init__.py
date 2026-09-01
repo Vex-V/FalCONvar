@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Type
 
 from .base import Sampler
-from .uniform import UniformSampler
+from .uniform import OverviewSampler, UniformSampler
 
 # name -> "module:ClassName", resolved on first use.
 # The registry name is what a manifest, a description row and an embedding are
@@ -34,6 +34,8 @@ def register(cls: Type[Sampler]) -> Type[Sampler]:
 
 
 register(UniformSampler)
+# Positional too, so nothing heavy is imported for it.
+register(OverviewSampler)
 
 
 def _resolve(name: str) -> Type[Sampler]:
@@ -58,4 +60,5 @@ def available() -> list[str]:
     return sorted(set(_REGISTRY) | set(_LAZY))
 
 
-__all__ = ["Sampler", "UniformSampler", "available", "build", "register"]
+__all__ = ["Sampler", "OverviewSampler",
+    "UniformSampler", "available", "build", "register"]

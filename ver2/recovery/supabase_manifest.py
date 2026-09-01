@@ -75,7 +75,7 @@ def fetch(video_id: str, url: str, key: str) -> dict[str, Any]:
     the ``chunks`` array, in ``chunk_id`` order. Nothing is reconstructed here,
     so there is no second implementation of the format to drift.
     """
-    document = _get(url, key, "rpc/export_manifest", p_video_id=video_id)
+    document = _get(url, key, "rpc/export_video_manifest", p_video_id=video_id)
     if not document:
         raise SystemExit(
             f"no manifest for video_id {video_id!r}.\n"
@@ -85,7 +85,7 @@ def fetch(video_id: str, url: str, key: str) -> dict[str, Any]:
 
 
 def listing(url: str, key: str) -> list[dict[str, Any]]:
-    return _get(url, key, "videos",
+    return _get(url, key, "video_manifests",
                 select="video_id,complete,ingested_at", order="ingested_at.desc")
 
 

@@ -12,33 +12,47 @@ Everything under `ver2/`. Version 1 has been deleted.
 
 ```
 ver2/
-  ingest/
-    source/      probe, sequential read, decimation, random access (PyAV)
-    chunker/     media time -> chunk id            (uniform | scene)
-    samplers/    which decimated frames to keep    (uniform|clip|yolo|objects|text)
+  driver.py      BOTH streams, one grid: open, split, decide the policy, run
+  timeline.py    the shared chunk grid: spans + the policy that produced them
+  video/
+    ingest/
+      source/    probe, sequential read, decimation, random access (PyAV)
+      chunker/   media time -> chunk id    (uniform | scene | fixed)
+      samplers/  which decimated frames to keep
+                 (uniform|overview|clip|yolo|objects|text)
                  policy: base.py, uniform.py, scene.py, detection.py (the base
                  for detector-driven ones) + people.py, objects.py, ocr.py
-      components/  perception: detectors, descriptors, embedders. Every model
-                   weight lives below this line and none above it.
-    output/      manifest sinks (file | supabase | both) + frame store
-    pipeline.py  ingest() -- one decode pass, feeding every stage
-    driver.py    the CLI (argparse only; no pipeline logic)
-    calibrate.py what a threshold would cost here, and where it must not go
-  describe/
-    input/       manifest (file|db), live chunk stream, pixels from the store
-    describers/  the Describer protocol + a registry (stub | openai)
-    vlm/         the OpenAI call + prompts.py, one prompt per sampler
-    output/      description sinks (file | supabase | both)
-    reader.py    describe() -- one call per (chunk, sampler)
-    driver.py    the CLI
-  embed/
+        components/  perception: detectors, descriptors, embedders. Every model
+                     weight lives below this line and none above it.
+      output/    manifest sinks (file | supabase | both) + frame store
+      pipeline.py  ingest() -- one decode pass, feeding every stage
+      driver.py  the CLI (argparse only; no pipeline logic)
+      calibrate.py what a threshold would cost here, and where it must not go
+    describe/
+      input/     manifest (file|db), live chunk stream, pixels from the store
+      describers/  the Describer protocol + a registry (stub | openai)
+      vlm/       the OpenAI call + prompts.py, one prompt per sampler
+      output/    description sinks (file | supabase | both)
+      reader.py  describe() -- one call per (chunk, sampler)
+      driver.py  the CLI
+  audio/         no describe stage: a transcript is already the text
+    source.py    decode whole -> 16k mono float32 (PyAV) + silence guard
+    cuda.py      preload the vendored CUDA DLLs before CTranslate2 asks
+    transcribe/  Transcriber protocol + registry (stub | whisper)
+    diarize/     Diarizer protocol + registry (none | pyannote)
+    align.py     words + speaker turns -> attributed segments
+    segment/     transcript -> boundaries (vad | speaker) + cut.py
+    output/      transcript sinks (file; one call, not three)
+    reader.py    listen() -- decode, transcribe, diarize, attribute
+    driver.py    the CLI, audio alone
+  embed/         SHARED: descriptions and transcripts both land here
     defaults.py  which embedder + which index, shared by both CLIs
     embedders/   Embedder protocol + registry (openai | local)
     index/       VectorIndex: qdrant (embedded) | pgvector | both, + build()
     units.py     description -> embeddable unit, keyed by a hash of its text
     indexer.py   embed only what changed
     driver.py    the CLI
-  retrieve/
+  retrieve/      SHARED
     search.py    query -> ranked descriptions -> ranked moments
     driver.py    the CLI
   fanout.py      primary + best-effort secondaries, shared by every stage
@@ -55,21 +69,21 @@ eval/
   aggregation.py how a chunk scores from its descriptions' ranks
 ```
 
-8212 lines, 75 files.
+10620 lines, 99 files.
 
 ## Commands
 
 ```bash
-python -m ver2.ingest.driver media/test2.mp4 --sampler clip --frame-store
-python -m ver2.ingest.driver video.mp4 --sampler uniform,clip,yolo,objects,text \
+python -m ver2.video.ingest.driver media/test2.mp4 --sampler clip --frame-store
+python -m ver2.video.ingest.driver video.mp4 --sampler uniform,clip,yolo,objects,text \
        --min-interval 3 --chunking scene --scene-threshold 15
-python -m ver2.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
-python -m ver2.ingest.calibrate video.mp4 --sampler clip
-python -m ver2.describe.driver out/<id>/manifest.json     # describe -> json
-python -m ver2.describe.driver --video-id <id> --sink file,supabase
-python -m ver2.describe.driver --video-id <id> --follow    # tail a live ingest
-python -m ver2.describe.driver out/<id>/manifest.json --describer openai
+python -m ver2.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
+python -m ver2.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
+python -m ver2.video.ingest.calibrate video.mp4 --sampler clip
+python -m ver2.video.describe.driver out/<id>/manifest.json     # describe -> json
+python -m ver2.video.describe.driver --video-id <id> --sink file,supabase
+python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live ingest
+python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
        --model gpt-5.4-mini --sink file,supabase          # costs money
 python -m ver2.embed.driver out/<id>/descriptions.json     # -> pgvector
 python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
@@ -80,6 +94,12 @@ python -m ver2.recovery.supabase_manifest --list          # what is published
 python -m ver2.recovery.supabase_manifest <id>            # -> <id>.json
 python -m ver2.recovery.supabase_description <id>         # -> descriptions json
 python -m ver2.recovery.recreate out/<id>/manifest.json --out rebuilt/
+python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
+python -m ver2.driver media/x.mp4 --sampler clip --chunking vad   # audio grid
+python -m ver2.driver media/x.mp4 --sampler clip --chunking scene # video grid
+python -m ver2.audio.driver media/x.mp4 --chunking speaker        # audio alone
+python -m ver2.video.ingest.driver v.mp4 --sampler overview        # prose only
+python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text        --every-seconds 10                   # read the screen on a clock
 python -m ver2.imports                      # after ANY install
 python -m eval.queries out/<id>/descriptions.json   # -> eval/query_pairs.json
 python -m eval.render_ab                    # compare renderings, paired CI
@@ -209,7 +229,7 @@ summary-only embeddings the gap would be far wider.
 
 **The shipped retrieval path, measured by withholding only the lexical half.**
 Same vectors, same table, same ranking code -- `p_query_text` withheld so
-`search_descriptions` skips its `by_text` CTE and fuses nothing. 29 query
+`search_embeddings` skips its `by_text` CTE and fuses nothing. 29 query
 pairs, ground truth the chunk a query was written from, 5 chunks (random:
 top-1 0.200, MRR 0.457):
 
@@ -320,6 +340,41 @@ unparseable JSON. The default is 2000, and truncation is detected from the
 response's own `status`/`incomplete_details` rather than inferred from a JSON
 error further down.
 
+**A sampler may name its question instead of being it.** `uniform` takes a
+`prompt`, so a positional sampler can stand in for one it is not:
+`--sampler uniform:text` keeps a frame every N seconds and has describe ask
+the *text* question about it. Passing a sampler rather than a prompt was the
+first design and is worse -- the wrapper never runs the inner sampler's logic,
+so it would construct an EasyOCR or CLIP object purely to borrow its name, and
+it could never extend to a question no sampler corresponds to.
+
+The point is cost. `text` fires *when the writing changes*, and finding that
+out costs EasyOCR on every decimated frame -- 98.1% of that sampler's total.
+"Read the screen every ten seconds" wants none of that: measured on Chernobyl,
+`uniform:text` at 6 s ran **no model at ingest** and the VLM still transcribed
+`RadioFreeEurope RadioLiberty`, `BYELORUSSIAN S.S.R.`, `REACTOR 1`, `1977`
+correctly. The two are different questions, not two settings of one.
+
+`prompt` is recorded in the sampler's config, so it is in the manifest and
+therefore inside `manifest_fingerprint` -- editing it invalidates describe's
+resume exactly as editing `vlm/prompts.py` does. `question_for` reads it back
+and falls through to the sampler id, so nothing that does not set it changes.
+
+**`overview` is a question with no fields at all.** Summary only, 4 to 5
+sentences, and it overrides the ">= 150 words" instruction that every other
+prompt carries -- the length rule exists because the summary is what gets
+embedded and its length is a retrieval parameter, but an overview is chosen
+precisely when a paragraph is more than the moment deserves. It owns no keys,
+so it takes none from the scene question and costs a `clip` running beside it
+nothing. Measured: 84 and 86 words, 4 sentences, zero structured keys.
+
+**`uniform` counts seconds, not decimated frames.** It used to take `every_n`,
+which made the cadence a function of the decimator -- `every_n=3` was one frame
+every 3 s at `per_second=1` and every 0.75 s at 4. Media time is the only clock
+a decision may use, and this was the last place that was not true. The cadence
+is enforced as the base class's `min_interval_s`, so a skipped frame costs no
+inference rather than merely producing no output.
+
 **A prompt is chosen by sampler, never shared.** The manifest records *why*
 each frame was kept and that is the most useful thing it knows: a person
 sampler fired because the people changed, a text sampler because the writing
@@ -373,7 +428,7 @@ manifest arrives as parsed JSON and the chunk stream as rows, so neither needs
 an import; the store is the single class it imports from `ingest`. Anything
 more would mean depending on how ingest works rather than on what it produced.
 `imports.py` enforces this by AST-parsing every file under `describe/` and
-rejecting any `ver2.ingest` import other than `FrameStore`.
+rejecting any `ver2.video.ingest` import other than `FrameStore`.
 
 **Describing reads the frame store and nothing else.** No seek-the-video
 fallback: the store exists so this stage has its frames in hand, and a
@@ -447,14 +502,129 @@ are fused per description, then descriptions are fused into chunks. Cosine
 distance and `ts_rank_cd` have no common scale, and any weight between them
 would be invented; RRF reads only the orderings, so it needs no calibration.
 
-**Descriptions never cascade from a manifest.** The `descriptions` table has
-no foreign key to `videos` on purpose: ingest replaces a manifest wholesale
-(`begin()` deletes the row, `chunks` cascades), and re-ingesting costs 20
+**Descriptions never cascade from a manifest.** The `video_descriptions` table has
+no foreign key to `video_manifests` on purpose: ingest replaces a manifest wholesale
+(`begin()` deletes the row, `video_chunks` cascades), and re-ingesting costs 20
 seconds where describing costs inference. Instead each row carries
 `manifest_fingerprint` — a hash of `source` minus `uri` and `config` minus
 `frame_store`, so it is known before the first chunk exists, survives the video
 and store being moved, and changes when the sampling changes. Staleness is a
 comparison, not a deletion.
+
+**One chunk grid per run, and either modality may decide it.** `timeline.py`
+holds the spans and the policy that produced them, and imports nothing --
+`audio` and `video` both depend on it, so neither may own it.
+
+    uniform   arithmetic. Both sides derive it identically; nothing propagates
+              and neither has to run first.
+    scene     the video pass, streaming, from frame content.
+    vad       the audio pass, in the gaps between speech.
+    speaker   the audio pass, where the voice changes.
+
+Propagation is one-way per run and always cheap in the same direction: a
+finished transcript can be re-cut to any grid because Whisper timestamps every
+word, while a sampler's decisions are made during the decode pass and cannot
+be revisited. So an audio-derived policy forces audio to run first; a
+video-derived one forces nothing, because transcription needs no boundaries at
+all and can run concurrently. `FixedChunker` is how a grid decided elsewhere
+reaches the video pipeline, and it is deliberately the dumbest chunker there
+-- every judgement was made before the span list existed.
+
+**A supplied grid is honoured exactly; the pipeline stops correcting it.** The
+final-chunk correction and the tail merge both run only when the chunker
+computed its own boundaries. On a `fixed` run they would silently edit a grid
+another pass decided: the audio stream is routinely shorter than the video one
+-- 205.264 s against 205.280 s on Chernobyl -- so "correcting" the last chunk
+to the video's end made `manifest != timeline` by 16 ms, on a boundary neither
+pass had chosen. And a supplied grid has already had its own `min_s` applied,
+so re-applying a different one would merge a tail the other pass kept
+deliberately.
+
+The other half of that fix is in the driver: **the shared grid spans the
+longer stream**, because a file is as long as its longest one. A grid built
+from the audio duration alone leaves the last video frames outside every
+chunk. Verified across all four policies -- `manifest`, `timeline` and
+`transcript` hold identical spans, and the transcript's recorded
+`timeline_fingerprint` matches, on `uniform`, `scene`, `vad` and `speaker`
+alike.
+
+**A short final chunk is merged into the one before it, under every policy.**
+A grid divides the media wherever it happens to end, so the tail is uniformly
+distributed over the chunk length: 97.99 s at 20 s leaves a usable 17.99 s,
+but 100.4 s leaves 0.40 s. That stub is not harmless -- it costs a describer
+call *per sampler*, it keeps a frame because every chunk keeps at least one,
+and it is a moment retrieval can return that nobody can play. The threshold is
+a fraction (`MIN_TAIL_FRACTION = 0.25`) rather than a number of seconds, so it
+holds at any chunk length, and it is applied by `timeline.uniform`,
+`timeline.enforce` and the pipeline alike so that "no chunk shorter than N"
+means the same thing however the boundaries were derived.
+
+The pipeline merges *after* the pass, at the point it already corrects the
+final chunk's `end_ts`, so the samplers had reset at the boundary being
+removed and the merged chunk carries one extra mandatory first-frame pick.
+That is the honest cost of deciding late, and an extra frame is not a defect.
+**`chunk_local_index` is shifted, not renumbered** -- it is the frame's
+position in the chunk's decimated stream, not a sequence number over the picks
+(a uniform sampler at stride 3 yields 0, 3, 6, 9), so renumbering the tail's
+picks 0..n silently redefines the field. Verified: at `--chunk-duration 24` on
+test1 the merged chunk reads `[0, 3, 6, ..., 24]` with every index below its
+26 decimated frames, and at the shipped 20 s nothing merges -- chunk bounds
+and every sampler's frame list stay identical to the manifest the current
+descriptions and vectors were built from.
+
+**Content-derived boundaries need both guards or they are unusable.**
+`timeline.enforce` merges anything below `min_s` and splits anything above
+`max_s`. Voice activity cuts on every pause -- on conversational audio that is
+every second or two, which would shred the video into chunks too short to
+describe and multiply the describer calls that dominate cost. A monologue
+gives the opposite failure: zero cuts, one chunk covering the file. Measured
+on Chernobyl, `--chunking speaker` on single-narrator audio found no speaker
+changes and `enforce` divided the file into 7 even chunks of 29.3 s, which is
+the honest outcome rather than an invented one. **`max_s` splits evenly, not
+into fixed bites**: taking 30 s bites off a 62.5 s span leaves a 2.5 s
+remainder, so the guard against short chunks would create one.
+
+**Chunks with no speech are kept, with empty text.** The grid is shared, so
+`chunk_id` must mean the same thing in the manifest and the transcript;
+dropping the quiet ones renumbers everything after them and breaks that
+correspondence silently. Measured on Chernobyl: 10 chunks on a `vad` grid, the
+first empty because narration starts at 5.9 s, and all 428 words placed with
+none lost.
+
+**Audio is scanned whole; it cannot be chunked first.** Whisper carries
+context across an utterance and detects language from the opening seconds, so
+a 20-second window loses the sentence that straddles its edge. Diarization is
+worse: speaker labels come from clustering embeddings over the *entire*
+recording, so `SPEAKER_00` in one window bears no relation to `SPEAKER_00` in
+the next -- chunk first and the speakers are not misaligned, they are
+unnameable. Boundaries are applied *after*, and re-segmenting costs nothing
+because Whisper returns a timestamp per word. That asymmetry is what lets
+either modality own the chunk grid: audio can always conform to a boundary
+decided elsewhere without re-running inference or losing a word.
+
+**Transcription and diarization stay separate passes, joined by `align`.**
+Whisper does not know who spoke and pyannote does not know what was said.
+Keeping them apart is what lets either be swapped. A word is attributed by its
+**midpoint**, because the two models estimate edges independently and word
+spans routinely straddle a turn boundary by tens of milliseconds; a segment
+takes the speaker who spoke most of it by duration, because a sentence can
+begin during the previous speaker's tail. With no diarizer, or no speech,
+every segment keeps `speaker=None` -- a transcript with no speaker information
+is truthful, one where everything is `SPEAKER_00` is not.
+
+**Measured, RTX 4060:** decode 205 s of AAC in 0.30 s (~700x realtime),
+Whisper `small` float16 37.6x, pyannote 3.1 30.1x. A one-hour recording is
+about four minutes of work, against one describer call per chunk on the video
+side. Chernobyl: 34 segments, 428 word timestamps, 1 speaker over 18 turns
+covering 89% of duration, all 34 segments attributed.
+
+**Silence is answered without a model.** test1.mp4 is CCTV with a live but
+empty microphone: RMS 0.000221, peak 0.0291, against 0.1796 for narration --
+three orders of magnitude, so the 1e-3 threshold sits in a wide gap rather
+than on a cliff. Whisper returns zero segments there and names the language
+`cy` at p=0.41, and pyannote finds zero speakers in 0.1 s. Both are correct,
+so the guard exists to skip a model load and to make "no speech" a reported
+fact, not to make a fine judgement.
 
 **`media_ts` is the only clock a decision may use.** Never wall time, never
 frame counts.
@@ -534,6 +704,26 @@ and labelled wire baskets "shopping bag"; a matched one found 5.1.
 
 ## Environment traps
 
+**`cublas64_12.dll` is not found, on a machine where it is present.**
+CTranslate2 (under faster-whisper) asks Windows for it *by name* at the first
+encode, not at import. `nvidia-cublas-cu12` installs it to
+`site-packages/nvidia/cublas/bin`, which is on no search path: since Python
+3.8 an extension's dependencies do not resolve from `PATH`, and
+`os.add_dll_directory` does not help because the load happens lazily inside an
+already-initialised C++ extension. The version is a contract -- this project's
+torch is cu130 and ships `cublas64_13.dll`, which is not a substitute.
+`ver2/audio/cuda.py` loads each by absolute path with `ctypes.WinDLL` first,
+which puts it in the process module table so the by-name request resolves.
+Call `enable()` before constructing any CUDA-backed audio model.
+
+**pyannote 4.x returns `DiarizeOutput`, not `Annotation`.** The 3.x recipe
+`pipeline(audio).itertracks(yield_label=True)` raises `AttributeError`. The
+annotation is `.speaker_diarization`; there is also
+`.exclusive_speaker_diarization` with overlaps resolved (what this project
+uses -- a word cannot belong to two speakers) and `.speaker_embeddings`, a
+256-d vector per speaker, which is the only route to identity across files
+since labels are per-run clusterings.
+
 **`schema.sql` could not repair its own `fts` column, and now can.** `add
 column if not exists fts` is a no-op when the column exists, so an `fts`
 generated by an earlier version of the file — over `content` alone, before the
@@ -547,8 +737,8 @@ unconditional add; the column is generated, so nothing is lost.
 **PostgREST's cached schema is the fastest way to see what is really
 deployed.** `GET /rest/v1/` with `Accept: application/openapi+json` lists every
 column and RPC parameter it knows. That is how the stale generation was found —
-`fts` present, `structured` absent on both tables, `export_descriptions`
-returning no `structured`, `search_descriptions` with no `p_sampler`.
+`fts` present, `structured` absent on both tables, `export_video_descriptions`
+returning no `structured`, `search_embeddings` with no `p_sampler`.
 
 **`weights/clip/ViT-B-32.pt` (338 MB) is NOT stale.** YOLO-World embeds its
 vocabulary with OpenAI CLIP, so `OpenVocabDetector` downloads it. That is a
@@ -581,8 +771,8 @@ both recreate paths, 13 structural manifest checks, 13 container/codec formats,
 from Postgres by `recovery.supabase_description` identical to the local one.
 
 `embed` and `retrieve` are separate stages. Both indexes are live: 10 units of
-test1 in Qdrant and in `description_embeddings`, identical `text_hash` values
-in each, and `search_descriptions` fusing vector and text ranks with
+test1 in Qdrant and in `chunk_embeddings`, identical `text_hash` values
+in each, and `search_embeddings` fusing vector and text ranks with
 `p_sampler` filtering. `--sampler clip` halves a moment's score to a single
 `1/(k+1)` exactly as predicted — one description per chunk, nothing to fuse.
 

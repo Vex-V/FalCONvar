@@ -55,7 +55,7 @@ class SupabaseDescriptions:
         models, must not be skipped as "already described", which would report
         success and do nothing.
         """
-        rows = (self.client.table("descriptions")
+        rows = (self.client.table("video_descriptions")
                 .select("chunk_id,sampler,description,model,manifest_fingerprint")
                 .eq("video_id", self.video_id)
                 .eq("manifest_fingerprint", self.manifest_fingerprint)
@@ -64,7 +64,7 @@ class SupabaseDescriptions:
                 if r.get("description") is not None and r.get("model") == self.model}
 
     def described(self, record: dict[str, Any]) -> None:
-        self.client.table("descriptions").upsert({
+        self.client.table("video_descriptions").upsert({
             "video_id": self.video_id,
             "chunk_id": record["chunk_id"],
             "sampler": record["sampler"],

@@ -11,14 +11,17 @@ copies correspond.
 
 ```
 out/<video-id>/
-  manifest.json        which frames were kept, and why      <- ingest
-  store/               those frames, keyed by frame index   <- ingest
+  timeline.json        the chunk grid + the policy behind it <- whichever pass
+  manifest.json        which frames were kept, and why      <- video ingest
+  store/               those frames, keyed by frame index   <- video ingest
   descriptions.json    what a model said about them         <- describe
+  transcript.json      what was said, and by whom           <- audio
 out/qdrant/            local vector index                   <- embed
 
-Supabase   videos + chunks              = manifest.json, as rows
-           descriptions                 = descriptions.json, as rows
-           description_embeddings       = the vectors + what they were built from
+Supabase   video_manifests + video_chunks              = manifest.json, as rows
+           video_descriptions           = descriptions.json, as rows
+           audio_transcripts + audio_chunks = transcript.json, as rows
+           chunk_embeddings             = the vectors + what they were built from
 ```
 
 Everything for one video sits under one directory, so a video's whole output is
@@ -39,7 +42,7 @@ Only the manifest and the descriptions are records. The frame store is a cache
 
 ## 1. `manifest.json`
 
-Written by `ver2.ingest`, rewritten atomically as each chunk closes, so a
+Written by `ver2.video.ingest`, rewritten atomically as each chunk closes, so a
 reader always sees a whole document. `complete` says whether ingestion
 finished — it distinguishes "no more chunks yet" from "no more chunks ever".
 
@@ -119,7 +122,7 @@ burnt-in clock as 11:17:40 when it read 11:17:19.
 
 ## 3. `descriptions.json`
 
-Written by `ver2.describe`, one entry per `(chunk, sampler)` pair — which is
+Written by `ver2.video.describe`, one entry per `(chunk, sampler)` pair — which is
 the unit one describer call covers.
 
 ```jsonc
@@ -210,13 +213,13 @@ list of actions does not say who did what, and cannot be made to afterwards.
 
 DDL in [`schema.sql`](schema.sql), idempotent and safe to re-run.
 
-### `videos` + `chunks` — the manifest, as rows
+### `video_manifests` + `video_chunks` — the manifest, as rows
 Identical content to `manifest.json`; `chunks.samplers` holds the frame records
-verbatim as `jsonb`. `export_manifest(video_id)` reassembles the document
+verbatim as `jsonb`. `export_video_manifest(video_id)` reassembles the document
 server-side, so there is no second implementation of the format to drift.
-`chunks` cascades from `videos`, and ingest replaces both wholesale.
+`video_chunks` cascades from `video_manifests`, and ingest replaces both wholesale.
 
-### `descriptions` — one row per `(video_id, chunk_id, sampler)`
+### `video_descriptions` — one row per `(video_id, chunk_id, sampler)`
 ```
 video_id, chunk_id, sampler          primary key
 frame_indexes int[], frame_count
@@ -225,13 +228,13 @@ structured   jsonb                   that sampler's fields
 model        jsonb                   name + params + prompts hash
 elapsed_s, manifest_fingerprint, described_at
 ```
-**No foreign key to `videos`, deliberately.** Ingest replaces a manifest
+**No foreign key to `video_manifests`, deliberately.** Ingest replaces a manifest
 wholesale and re-ingesting costs 20 seconds where describing costs inference; a
 cascade would let the cheap operation destroy the expensive one.
 `manifest_fingerprint` replaces it — staleness becomes a comparison rather than
-a deletion. Read back with `export_descriptions(video_id)`.
+a deletion. Read back with `export_video_descriptions(video_id)`.
 
-### `description_embeddings` — one row per `(description, embedder)`
+### `chunk_embeddings` — one row per `(description, embedder)`
 ```
 video_id, chunk_id, sampler, embedder    primary key
 dims int, embedding vector               unconstrained width, see below
@@ -245,7 +248,7 @@ manifest_fingerprint, start_ts, end_ts, frame_indexes, indexed_at
 are never mixed in one ranking. `embedding` is declared `vector` with **no**
 dimension, because nomic (768), bge-m3 (1024) and OpenAI (1536) differ — that
 means exact cosine search and no ANN index, which is correct at this scale.
-`search_descriptions()` does vector + full-text and fuses them with RRF.
+`search_embeddings()` does vector + full-text and fuses them with RRF.
 
 ## 6. Qdrant — `out/qdrant/`
 
@@ -289,3 +292,72 @@ the description was read from the file or from Postgres. Measured on test1 over
 | `model` (incl. `prompts`) | descriptions | resuming across a model or prompt change |
 | `text_hash` | embeddings | a vector built from text since rewritten |
 | `embedder` / collection name | embeddings | ranking 768-wide vectors against 1536-wide |
+
+
+---
+
+## 8. `transcript.json` and the transcript tables
+
+Written by `ver2.audio`, whole rather than incrementally: transcription and
+diarization are single passes over the entire file that produce nothing until
+they produce everything, so there is no partial state a reader could see.
+
+```jsonc
+{
+  "transcript_version": 1,
+  "video_id": "Chernobyl",
+  "complete": true,
+  "timeline_fingerprint": "ecc94042102dc605",   // must equal the manifest's grid
+
+  "language": "en", "language_probability": 0.9907,
+  "speakers": ["SPEAKER_00"],
+  "model": { "transcriber": {...}, "diarizer": {...} },
+  "timeline": { /* the whole grid, see ver2/timeline.py */ },
+
+  "segments": [{            // THE RECORD -- independent of any chunk grid
+    "start": 6.99, "end": 13.39, "speaker": "SPEAKER_00",
+    "text": "The world's worst civilian nuclear disaster ...",
+    "words": [{ "start": 6.99, "end": 7.41, "text": " The", "probability": 0.92 }]
+  }],
+
+  "chunks": [{              // DERIVED -- this grid's view of those words
+    "chunk_id": 0, "start_ts": 0.0, "end_ts": 20.0,
+    "text": "The world's worst civilian nuclear disaster ...",
+    "word_count": 45,
+    "structured": {
+      "speakers": ["SPEAKER_00"],
+      "turns": [{ "speaker": "SPEAKER_00", "start": 6.99, "end": 19.8,
+                  "text": "..." }]
+    }
+  }]
+}
+```
+
+**`segments` is the record and `chunks` is a cache** -- the two arrays inside
+this document, not the tables. Every word carries its own timestamp, so
+re-cutting to a different grid is arithmetic over `segments`: no model runs
+again and no word is lost. `chunks` can be thrown away and rebuilt;
+`segments` cannot. That asymmetry is the whole reason either
+modality is allowed to own the boundaries.
+
+**A chunk with no speech is kept, with empty text.** The grid is shared with
+the video side, so `chunk_id` has to mean the same thing in both documents;
+dropping the quiet ones renumbers every chunk after them.
+
+### `audio_transcripts` + `audio_chunks`
+
+The same split as `video_manifests` + `video_chunks`: a header row per video carrying
+`language`, `speakers`, `model`, `timeline` and the whole `segments` array,
+and one row per chunk carrying `text`, `word_count` and `structured`.
+`export_audio_transcript(video_id)` reassembles the document server-side.
+
+**No foreign key to `video_manifests`**, for the reason `video_descriptions` has none: ingest
+replaces a manifest wholesale and re-ingesting costs seconds, while
+transcribing and diarizing cost model time. `timeline_fingerprint` replaces
+the cascade -- staleness becomes a comparison.
+
+`audio_chunks.fts` answers "which video contains this phrase" without
+embedding anything. It is **not** what retrieval searches: a transcript chunk
+reaches retrieval by being embedded into `chunk_embeddings` with
+`sampler = 'transcript'`, which needs no schema change there because that
+table stores text with a time span and a transcript chunk is exactly that.
