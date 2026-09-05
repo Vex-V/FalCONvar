@@ -15,7 +15,7 @@ design:
 
 | kind | endpoints | why |
 |---|---|---|
-| **immediate** | `/health`, `/capabilities`, `/videos` (GET), `/videos/{id}/{name}`, `/videos/{id}/frames/{n}`, `/search` | one query or one file read; tens of milliseconds |
+| **immediate** | `/health`, `/capabilities`, `/videos` (GET), `/videos/{id}/{name}`, `/videos/{id}/export(s)`, `/videos/{id}/frames/{n}`, `/search` | one query or one file read; tens of milliseconds |
 | **queued** | `/videos` (POST), `/describe`, `/embed` | minutes of GPU or paid inference; returns `202` and a job id |
 | **introspective** | `/capabilities` | reads the registries, so `ver2` gaining a sampler needs no edit here |
 
@@ -47,7 +47,9 @@ list:
 
 ```json
 {
-  "samplers":     ["clip", "objects", "overview", "text", "uniform", "yolo"],
+  "samplers":     ["clip", "objects", "text", "uniform", "yolo"],
+  "prompts":      ["scene", "clip", "objects", "overview", "text", "uniform", "yolo"],
+  "pairings":     ["uniform:overview", "uniform:text"],
   "chunking":     ["uniform", "scene", "vad", "speaker"],
   "describers":   ["openai", "stub"],
   "transcribers": ["stub", "whisper"],
@@ -73,22 +75,34 @@ worker.
 | field | default | notes |
 |---|---|---|
 | `file` | — | the media file |
-| `samplers` | `clip` | comma-separated. `uniform:text` runs the *text* question on a clock |
+| `use_video` | `true` | sample frames and describe them. Off: no manifest, no frame store, no describe stage |
+| `use_audio` | `true` | transcribe and diarize. Off: no transcript |
+| `samplers` | `clip` | comma-separated. Any entry may be `name:prompt` — `yolo:overview` keeps the people sampler's frames and asks for prose. An unknown question is a 422. Read only when `use_video` |
 | `chunking` | `uniform` | `uniform` \| `scene` \| `vad` \| `speaker` |
 | `chunk_duration` | `20` | uniform: the length; everything else: the maximum |
-| `every_seconds` | `3` | `uniform`/`overview` cadence, in media time |
+| `every_frames` | `1` | `uniform` stride over the **decimated** stream, in frames; 1 is every decimated frame. The cadence in seconds is this over `per_second` |
 | `vocabulary` | — | `objects` only. **No useful default**: a mismatched list found 2.4 detections/frame where a matched one found 5.1 |
 | `threshold` | per-sampler | leave unset; the useful value differs by an order of magnitude between samplers |
 | `per_second` | `1.0` | decimation rate |
-| `frame_store` | `true` | keep the sampled pixels; describe reads only from here |
-| `use_audio` | `true` | transcribe and diarize |
+| `frame_store` | `true` | keep the sampled pixels; describe reads only from here. Forced off without video |
 | `transcriber` / `diarizer` | `whisper` / `pyannote` | `stub` and `none` need no model |
 | `language` | — | skip Whisper's language detection |
 | `sinks` | `file` | `file,supabase` writes both; file is primary |
 | `video_id` | from the filename | keys four tables and the output directory |
 
-**Validation is synchronous even though the work is not.** A bad sampler name
-or `chunking=speaker` with `diarizer=none` is a **422** the caller sees at once,
+**Either stream alone, or both.** `use_video` and `use_audio` are independent,
+and the grid policy has to be derivable from a stream that is actually running:
+`scene` is found while decoding frames, `vad` and `speaker` in the waveform.
+Asking for one without its stream is a **422**, not a preference that can be
+honoured some other way. `uniform` is arithmetic and works whatever is on.
+
+Audio alone writes `timeline.json` and `transcript.json` and nothing else.
+There is no describe stage to run — a transcript is already the text that stage
+would produce — so `embed`, `retrieve` and `aggregate` all work directly off it.
+
+**Validation is synchronous even though the work is not.** A bad sampler name,
+`chunking=speaker` with `diarizer=none`, or neither stream selected, is a
+**422** the caller sees at once,
 and the upload is deleted rather than left behind. What cannot be known without
 opening the file still fails inside the job: `chunking=vad` on a silent track is
 a **202**, because whether a track has speech is not a property of the request.
@@ -164,6 +178,41 @@ server still knows everything it produced.
 the document as written; see [SCHEMAS.md](SCHEMAS.md) for what each field means.
 Anything else is a 404 rather than a path traversal.
 
+`?download=1` adds a `Content-Disposition` filename. The body is identical
+either way — content negotiation would be tidier, but a browser cannot set an
+`Accept` header on a plain link, and a link is what the Library tab has.
+
+## GET `/videos/{video_id}/exports` — what can be handed to another service
+
+```json
+{ "video_id": "Chernobyl",
+  "bundle": "/videos/Chernobyl/export",
+  "exports": [
+    { "kind": "artifact",  "name": "transcript", "bytes": 79662,
+      "about": "words, speakers and turns, cut to the same grid",
+      "url": "/videos/Chernobyl/transcript" },
+    { "kind": "aggregate", "name": "summary", "bytes": 2270,
+      "about": "what the whole video is about, in one pass over every chunk",
+      "url": "/videos/Chernobyl/aggregates/summary" } ] }
+```
+
+The discovery route for a consumer that is not this browser. It lists what
+**exists**: an audio-only video advertises no manifest rather than offering a
+link that 404s, which reads as breakage rather than as a run that never had
+one. A caller wanting "the summaries" should not have to know that summaries
+live under `aggregates/` while descriptions live a level up, and this is the
+one place that mapping is written down — the browser's download links read it
+too.
+
+## GET `/videos/{video_id}/export` — all of it, once
+
+Every document the video produced, as one object: `manifest`, `timeline`,
+`descriptions`, `transcript`, and `aggregates` keyed by id. **Absent documents
+are absent keys**, not nulls, so the shape says what the run actually did.
+
+Four requests plus one per aggregate is a lot of round trips for a consumer
+that wants the lot. `?download=1` names the file `<video_id>.json`.
+
 ## GET `/videos/{video_id}/frames/{index}`
 
 One JPEG, exactly as ingest wrote it — no decode, no resize. The `index` is a
@@ -204,7 +253,8 @@ independent accounts of the same window both matched — what was seen and what
 was said, or two samplers that never saw each other's output. That agreement is
 what the per-sampler split exists to produce.
 
-**`sampler` narrows to one question** (`yolo`, `text`, `transcript`, `overview`,
+**`sampler` narrows to one sampler id** — which for a pairing is `name:prompt`
+(`yolo:overview`), not the question alone (`yolo`, `text`, `transcript`,
 …) and gives up exactly that: with one sampler a chunk can contribute at most
 one description, so a moment's score collapses to a single `1/(k+1)` and there
 is nothing left to fuse.

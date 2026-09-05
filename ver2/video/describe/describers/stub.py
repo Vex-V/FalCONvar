@@ -36,7 +36,7 @@ class StubDescriber:
             fields={key: "" if key == "setting" else []
                     for key in prompts.owned_by(
                         prompts.question_for(context),
-                        context.get("chunk_samplers", ()))},
+                        context.get("chunk_questions", ()))},
         )
 
     def config(self) -> dict[str, Any]:

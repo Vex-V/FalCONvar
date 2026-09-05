@@ -3,6 +3,12 @@
 A new sampler subclasses Sampler, implements propose(), and is registered
 here; it then becomes available to build() and to the driver's CLI.
 
+A name here is a *strategy* -- which frames to keep -- and nothing more. What
+is asked about those frames is a prompt, paired with `name:prompt` and passed
+to any sampler, so there is no entry here for a question. `overview` used to
+have one, whose whole content was `prompt="overview"`; it is now spelled
+`uniform:overview`, and any other sampler can ask it too.
+
 Model-backed samplers are imported lazily. Importing this package must not
 pull in torch, ultralytics or easyocr -- the uniform baseline has to stay
 usable, and testable, on a machine with none of them installed.
@@ -13,7 +19,7 @@ from __future__ import annotations
 from typing import Type
 
 from .base import Sampler
-from .uniform import OverviewSampler, UniformSampler
+from .uniform import UniformSampler
 
 # name -> "module:ClassName", resolved on first use.
 # The registry name is what a manifest, a description row and an embedding are
@@ -34,8 +40,6 @@ def register(cls: Type[Sampler]) -> Type[Sampler]:
 
 
 register(UniformSampler)
-# Positional too, so nothing heavy is imported for it.
-register(OverviewSampler)
 
 
 def _resolve(name: str) -> Type[Sampler]:
@@ -60,5 +64,4 @@ def available() -> list[str]:
     return sorted(set(_REGISTRY) | set(_LAZY))
 
 
-__all__ = ["Sampler", "OverviewSampler",
-    "UniformSampler", "available", "build", "register"]
+__all__ = ["Sampler", "UniformSampler", "available", "build", "register"]

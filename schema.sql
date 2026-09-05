@@ -439,3 +439,145 @@ drop policy if exists "public read" on audio_chunks;
 
 create policy "public read" on audio_transcripts       for select to anon using (true);
 create policy "public read" on audio_chunks for select to anon using (true);
+
+-- ---------------------------------------------------------------- aggregates
+-- Video-level structure derived from what the chunk stages wrote: counts,
+-- speaker shares, novelty ranking, a summary, chapters, events, entities.
+--
+-- ONE table rather than one per aggregator, and this is the opposite call from
+-- keeping `video_descriptions` and `audio_transcripts` apart. There, the rows
+-- had different provenance and different lifecycles, and merging them would
+-- have made `model` mean two things with half the columns null. Here every row
+-- is the SAME kind of thing -- a video-level document derived from the same
+-- inputs -- differing only in the shape of its payload. `jsonb` is exactly for
+-- that, and a new aggregator becomes a row rather than a migration.
+--
+-- NO foreign key to `video_manifests`, for the reason nothing else here has
+-- one: re-ingesting costs seconds where an LLM aggregate costs money, and a
+-- cascade would let the cheap operation destroy the expensive one.
+--
+-- `inputs_fingerprint` is what replaces it: a hash of the chunk text the
+-- aggregator actually read. A summary of descriptions that have since been
+-- rewritten is not wrong in any visible way -- it reads perfectly -- so
+-- staleness has to be a comparison rather than something a reader assumes.
+create table if not exists video_aggregates (
+  video_id            text not null,
+  aggregate_id        text not null,      -- stats, summary, chapters, events, …
+  tier                text,               -- free | local | llm
+  depends_on          text[] not null default '{}',
+  inputs_fingerprint  text,
+  config              jsonb not null default '{}'::jsonb,
+  elapsed_s           numeric,
+  payload             jsonb not null,
+  computed_at         timestamptz not null default now(),
+  primary key (video_id, aggregate_id)
+);
+
+create index if not exists video_aggregates_video on video_aggregates (video_id);
+create index if not exists video_aggregates_payload
+  on video_aggregates using gin (payload jsonb_path_ops);
+
+create or replace function export_video_aggregates(p_video_id text)
+returns jsonb language sql stable as $$
+  select coalesce(jsonb_object_agg(aggregate_id, jsonb_build_object(
+      'aggregate_id', aggregate_id, 'tier', tier,
+      'depends_on', to_jsonb(depends_on),
+      'inputs_fingerprint', inputs_fingerprint,
+      'config', config, 'elapsed_s', elapsed_s,
+      'computed_at', computed_at, 'payload', payload)), '{}'::jsonb)
+  from video_aggregates where video_id = p_video_id;
+$$;
+
+-- ------------------------------------------------------------ video vectors
+-- One row per (video, kind, embedder). Today the only kind is `summary`.
+--
+-- Separate from `chunk_embeddings` because the unit differs, not because the
+-- data does. A chunk vector answers "which twenty seconds"; a summary vector
+-- answers "which video" -- and a video is not a moment you can play. Putting
+-- summaries in the chunk table would need a sentinel chunk_id and would then
+-- return a whole-video "moment" alongside real ones in every search, competing
+-- with them on a scale it does not share.
+--
+-- Only summaries are embedded. The rest of what `aggregate` produces is
+-- statistical, and a vector of a count is not a useful thing to have.
+create table if not exists video_embeddings (
+  video_id       text not null,
+  kind           text not null default 'summary',
+  embedder       text not null,
+  dims           int  not null,
+  embedding      vector not null,
+  content        text not null,                        -- the summary prose
+  structured     jsonb not null default '{}'::jsonb,   -- key_points, topics
+  text_hash      text not null,
+  inputs_fingerprint text,
+  indexed_at     timestamptz not null default now(),
+  primary key (video_id, kind, embedder)
+);
+
+alter table video_embeddings drop column if exists fts;
+
+alter table video_embeddings
+  add column fts tsvector
+  generated always as (
+    to_tsvector('english', content || ' ' || jsonb_path_query_array(
+      structured, 'strict $.**?(@.type() == "string")')::text)
+  ) stored;
+
+create index if not exists video_embeddings_fts on video_embeddings using gin (fts);
+
+-- Which video, not which moment. Same RRF as `search_embeddings`, for the same
+-- reason: cosine distance and ts_rank have no common scale, and RRF reads only
+-- the orderings so it needs no calibration.
+create or replace function search_videos(
+  p_embedder     text,
+  p_query_vector vector,
+  p_query_text   text default null,
+  p_limit        int  default 10,
+  p_rrf_k        int  default 60
+)
+returns table (
+  video_id text, kind text, content text, structured jsonb,
+  vector_rank int, text_rank int, score double precision
+)
+language sql stable as $$
+  with candidates as (
+    select e.* from video_embeddings e where e.embedder = p_embedder
+  ),
+  by_vector as (
+    select c.video_id, c.kind,
+           row_number() over (order by c.embedding <=> p_query_vector) as rank
+    from candidates c order by c.embedding <=> p_query_vector
+    limit greatest(p_limit * 4, 40)
+  ),
+  by_text as (
+    select c.video_id, c.kind,
+           row_number() over (
+             order by ts_rank_cd(c.fts, websearch_to_tsquery('english', p_query_text)) desc
+           ) as rank
+    from candidates c
+    where p_query_text is not null and p_query_text <> ''
+      and c.fts @@ websearch_to_tsquery('english', p_query_text)
+    limit greatest(p_limit * 4, 40)
+  ),
+  fused as (
+    select coalesce(v.video_id, t.video_id) as video_id,
+           coalesce(v.kind, t.kind) as kind,
+           v.rank as vector_rank, t.rank as text_rank,
+           coalesce(1.0 / (p_rrf_k + v.rank), 0)
+         + coalesce(1.0 / (p_rrf_k + t.rank), 0) as score
+    from by_vector v
+    full outer join by_text t on v.video_id = t.video_id and v.kind = t.kind
+  )
+  select f.video_id, f.kind, c.content, c.structured,
+         f.vector_rank::int, f.text_rank::int, f.score
+  from fused f
+  join candidates c on c.video_id = f.video_id and c.kind = f.kind
+  order by f.score desc limit p_limit;
+$$;
+
+alter table video_aggregates enable row level security;
+alter table video_embeddings enable row level security;
+drop policy if exists "public read" on video_aggregates;
+drop policy if exists "public read" on video_embeddings;
+create policy "public read" on video_aggregates for select to anon using (true);
+create policy "public read" on video_embeddings for select to anon using (true);

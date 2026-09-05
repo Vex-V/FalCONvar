@@ -1,261 +1,165 @@
-# FalCONvar — video RAG
+# FalCONvar
 
-A video goes in; a searchable index of moments comes out. Three stages, each
-consuming only what the one before it wrote:
-
-```
-video --ingest--> manifest + frame store --describe--> descriptions
-      --embed--> vectors --retrieve--> moments
-```
-
-**ingest** decides which frames are worth describing and records why.
-**describe** reads those frames back and asks a VLM about them, one question
-per sampler. **embed** turns each answer into a vector and keeps the index
-current. **retrieve** turns a question into a time range you can play, with the
-exact frames as evidence.
+Media goes in; a searchable index of moments comes out — plus the video-level
+answers that searching cannot give you.
 
 ```
-ver2/
-  ingest/        video -> manifest + frame store
-    source/      probe, sequential read, decimation, random access (PyAV)
-    chunker/     media time -> chunk id                 (uniform | scene)
-    samplers/    which decimated frames to keep         (uniform|clip|yolo|objects|text)
-      components/  detectors, descriptors, embedders -- every model weight
-    output/      manifest sinks (file | supabase | both) + frame store
-    pipeline.py  one decode pass, feeding every stage from it
-    calibrate.py what a threshold would cost here, and where it must not go
-  describe/      manifest + frames -> descriptions
-    input/       manifest (file|db), live chunk stream, pixels from the store
-    describers/  the Describer protocol + a registry (stub | openai)
-    vlm/         the OpenAI call + one prompt and schema per sampler
-    output/      description sinks (file | supabase | both)
-  embed/         descriptions -> a searchable index
-    defaults.py  which embedder + which index, shared by both CLIs
-    embedders/   Embedder protocol + registry (openai | local)
-    index/       qdrant (embedded) | pgvector | both
-    units.py     description -> embeddable unit, keyed by a hash of its text
-    indexer.py   embed only what changed
-  retrieve/      a question -> moments
-    search.py    ranked descriptions -> ranked moments
-  recovery/      standalone: rebuild any of it from a video id + the video
-  db.py          the Supabase client and the shared reads
-  fanout.py      primary + best-effort secondaries, used by every stage
-  imports.py     import everything and report what actually loaded
+                         ┌──────────────────────────────────────┐
+   video ─── ingest ───► │ manifest + frames │ ──── describe ───┤
+                         └──────────────────────────────────────┤
+                                                                ├─ embed ─► vectors ─► retrieve ─► moments
+   audio ─── listen ───► │ transcript                           │
+                         └──────────────────────────────────────┘
+                                          └──── aggregate ─────► summary, chapters, events, stats…
 ```
 
-## Running
+Both streams land on **one chunk grid**, so `chunk_id 7` means the same twenty
+seconds whether you ask what was seen or what was said. A search can then be
+answered by two independent accounts of the same moment.
 
-Everything one video produces lives under `out/<video-id>/` — `manifest.json`,
-`store/`, `descriptions.json`.
+---
 
-```bash
-# 1. ingest
-python -m ver2.video.ingest.driver video.mp4 --sampler clip,yolo --frame-store
-python -m ver2.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
-python -m ver2.video.ingest.calibrate video.mp4 --sampler clip
+## What each stage does
 
-# 2. describe  (stub needs no model, no network and no money)
-python -m ver2.video.describe.driver out/<id>/manifest.json
-python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
-python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live ingest
+| stage | in | out | what it decides |
+|---|---|---|---|
+| **ingest** | a video | `manifest.json`, `store/` | which frames are worth describing, **and why** |
+| **describe** | manifest + frames | `descriptions.json` | one VLM answer per (chunk, sampler) — a different question per sampler |
+| **listen** | a soundtrack | `transcript.json` | words with timestamps, who spoke, cut to the grid |
+| **embed** | descriptions + transcript | vectors | what text to embed, and what has actually changed |
+| **retrieve** | a question | ranked moments | dense + lexical, fused twice |
+| **aggregate** | everything above | `aggregates/*.json` | the whole-video questions retrieval is bad at |
 
-# 3. embed   (defaults to Postgres; see .env.example to switch)
-python -m ver2.embed.driver out/<id>/descriptions.json
-python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
+Nothing looks at the video except `ingest`. Every later stage reads only what
+the one before it wrote, which is why any of them can be re-run alone.
 
-# 4. retrieve
-python -m ver2.retrieve.driver "people at the checkout" --moments 3
-python -m ver2.retrieve.driver "..." --sampler yolo          # one question only
-python -m ver2.retrieve.driver "..." --index qdrant          # dense only
+## Capabilities
 
-# recovery -- three files, no project checkout needed
-python -m ver2.recovery.supabase_manifest <id>       # -> <id>.json
-python -m ver2.recovery.supabase_description <id>    # -> descriptions json
-python -m ver2.recovery.recreate <id>.json --out rebuilt/ --verify out/<id>/store
+**Samplers** — why a frame was kept, which decides which question gets asked
+about it:
 
-python -m ver2.imports                      # after any install
-```
+`clip` has the scene changed · `yolo` have the people changed · `objects` have
+things moved or appeared (open-vocabulary, you supply the class list) · `text`
+has the writing changed · `uniform` every Nth decimated frame.
 
-Samplers: `uniform`, `clip`, `yolo`, `objects`, `text`. Chunkers: `uniform`,
-`scene`. Describers: `stub`, `openai`. Embedders: `openai`, `local`.
-Indexes: `qdrant`, `pgvector`. The defaults are **pgvector + openai**, set in
-`ver2/embed/defaults.py` and overridable per-run by flag or globally by
-`FALCONVAR_INDEX` / `FALCONVAR_EMBEDDER` / `FALCONVAR_EMBED_MODEL` in `.env` --
-one place, because `embed` and `retrieve` must name the same embedder or the
-search is well-formed and meaningless. Postgres is the default because it is
-the only index carrying the lexical half; `--index qdrant` is dense-only and
-says so.
+**Questions** are separate from samplers, and any pair is allowed as
+`name:prompt`: `uniform:text` reads the screen on a stride without running OCR
+at ingest at all, `yolo:overview` keeps frames where the people changed and
+asks for prose rather than the structured people call. Unpaired, a sampler is
+asked its own question. A stride counts the frames the sampler
+was offered, so the cadence in seconds is `--every-frames` over
+`--per-second`; a cadence in seconds regardless is `--min-interval`.
 
-## The pipeline
+**Chunk grids** — one per run, and either modality may decide it:
 
-```
-probe ──▶ read ──┬──▶ chunker.observe()          native rate, scene cuts
-                 │
-                 └──▶ decimate ──▶ chunk ──▶ sampler(s) ──▶ manifest + frame store
-   4485 frames        299 @ 1fps    15 windows    40 kept
-```
+`uniform` arithmetic, nothing propagates · `scene` the video pass, from frame
+content · `vad` the audio pass, in the gaps between speech · `speaker` the
+audio pass, where the voice changes.
 
-**Probe decides the timeline once, before ingesting.** The container's
-timestamps and its reported frame rate are two independently corruptible
-signals, so neither is trusted: an H.264 stream copied into AVI reports 600
-fps, a raw `.h264` reports no timestamps at all, and a file remuxed from a
-container that never stored reorder information emits correct timestamps in
-*decode* order. If both signals are unusable the file is refused, because a
-wrong timeline silently produces wrong chunk boundaries.
+**Audio** — Whisper transcription and pyannote diarization as separate passes,
+joined by word midpoints. Scanned whole, then cut: word-level timestamps make
+re-segmenting free, which is what lets either modality own the boundaries.
 
-**Reading is sequential, and that is not a simplification.** Frames reference
-each other, so producing the frame at second 47 means decoding forward from
-its keyframe regardless. Seeking to sample would cost *more* decode work, not
-less. The reader is a generator, so exactly one frame is in flight — the
-alternative is 4485 × 6 MB for a five-minute 1080p file.
+**Retrieval** — dense vectors and BM25, fused by RRF inside Postgres, then
+descriptions folded into moments by `best + ½·second`. Neither half knows which
+kind of question it was handed, which is the argument for fusing rather than
+choosing. Qdrant is available and dense-only; it says so when you pick it.
 
-**Decimation buckets on media time** rather than counting every Nth frame.
-Identical on a clean file; self-correcting on a lossy one, where counting
-drifts permanently after a gap and bucketing snaps back within one bucket.
+**Aggregates** — `stats`, `speakers`, `novelty` (free: arithmetic, no model),
+`ner`, `sentiment` (local GPU), `summary`, `chapters`, `events` (paid LLM
+calls). Everything at or below the chosen tier runs, cheapest first; anything
+whose inputs have not changed is left alone. A long video's summary is reduced
+hierarchically, and **every layer is kept** with the span it covers — a leaf
+summary is the only account of the video between one chunk and the whole file.
 
-**Chunk boundaries derive from media time alone**, never from how many frames
-arrived, so two runs of the same video agree even if one lost frames.
+**Audio-only or video-only.** Either stream can be switched off. Audio alone
+writes a transcript and no manifest, skips describe entirely — a transcript is
+already the text that stage would produce — and still embeds, searches and
+aggregates.
 
-**Samplers reset at every chunk boundary**, and every chunk keeps at least one
-frame. Rate limits (`min_interval_s`, `max_per_chunk`) are enforced by the base
-class *before* the strategy runs, so a rate-limited frame costs no inference.
-
-## Samplers
-
-| sampler | asks | compares |
-|---|---|---|
-| `uniform` | every Nth frame | nothing — a positional baseline |
-| `clip` | has the scene changed? | whole-frame CLIP cosine |
-| `yolo` | have the people changed? | CLIP embedding of each person *crop* |
-| `objects` | have things moved or appeared? | box proximity — no embedder |
-| `text` | has the text changed? | the frame masked to where text was found |
-
-Each compares against the **last frame kept**, not the previous frame, so
-change accumulates across skipped frames. The reference never crosses a chunk
-boundary.
-
-`objects` uses an open vocabulary because COCO's classes are not what most
-footage is about. **The vocabulary is the configuration** — there is no useful
-default. Measured on shop CCTV, a mismatched list found 2.4 detections/frame
-and labelled wire baskets as "shopping bag"; a matched one found 5.1.
-
-## Thresholds
-
-Set them per *sampler* and per *content type*, not per video. The defaults
-(`clip 0.96`, `yolo 0.83`, `objects 0.30`, `text 0.92`) differ by an order of
-magnitude because they compare different things — never copy one to another.
-
-Keep rates vary widely between videos and that is the sampler working, not a
-miscalibration: measured at `clip 0.96`, three retail CCTV files kept 13.4%,
-18.0% and 59.2%, and the busiest one genuinely changes three times as much per
-second. **If the cost is too high, use `min_interval_s` / `max_per_chunk`**, which
-keep the most-changed frames spaced out, rather than lowering the threshold,
-which just keeps fewer and leaves the per-chunk distribution lopsided.
-
-`calibrate.py` does not choose a threshold. It reports what every threshold
-would cost, from one cached model pass, and measures the **noise floor** — the
-similarity between adjacent frames when nothing happened. A threshold above
-that samples encoder quantization rather than content: one PNG looped for 60 s
-decodes to 60 *different* frames, and a threshold of 1.000 keeps all of them.
-
-## The manifest
-
-```jsonc
-{
-  "video_id": "...",
-  "complete": true,              // false while a live run is still going
-  "source":  { "fps": 15.0, "time_base": "1/15360", "timeline": "pts", ... },
-  "config":  { "decimator": {...}, "chunker": {...}, "samplers": [...] },
-  "chunks": [{
-    "chunk_id": 0, "start_ts": 0.0, "end_ts": 20.0, "decimated_frames": 20,
-    "samplers": {
-      "clip": { "frame_count": 4, "frames": [
-        { "index": 0, "media_ts": 0.0, "chunk_local_index": 0, "pts": 0, "score": 0.94 }
-      ]}
-    }
-  }]
-}
-```
-
-It is rewritten as each chunk closes, via write-to-temp plus `os.replace`, so a
-reader sees a complete document or the previous one, never a torn file. A run
-killed at 94% of a 23-minute video left 128 chunks and 325 frames fully usable.
-
-Frames carry `pts` in the container's integer timebase, not just seconds:
-`pts × time_base` is exact, and at a 1/1200000 timebase a rounded float lands
-on the wrong frame.
-
-## Frame store
-
-Optional. Ingest already holds the pixels, so writing them costs ~4.8 ms/frame
-against ~167 ms to seek one back out. Keyed by frame index rather than by
-sampler, because samplers overlap — 186 picks across four samplers covered 114
-distinct frames.
-
-The manifest stays authoritative: `ver2/recovery/recreate.py` rebuilds a store
-from it plus the source video, verified **byte-identical**. That file imports
-nothing from the rest of the project — hand someone the manifest, the video and
-that one script and they can reproduce the store with only `av`, `opencv-python`
-and `numpy`. If it imported the pipeline it could lean on a default living in
-code rather than in the manifest, and the claim would go untested.
-
-It is not a cache for retuning thresholds. JPEG at q85/1920px perturbs pixels
-by 1.6/255, three times the decoder difference that already shifts the
-detection samplers by 12–15%. Sweeping a threshold wants cached *descriptors*
-(2 KB per frame), which is what `calibrate.py` does.
-
-## Formats
-
-Anything FFmpeg opens. Verified on MP4/MOV/MKV/TS/WebM/AVI carrying H.264,
-HEVC, VP9, AV1, MJPEG and ProRes, plus variable frame rate, rotated portrait
-video, remuxes with scrambled reorder information, and raw elementary streams.
-
-Extensions are not whitelisted, because the failures don't track extensions:
-what breaks is a codec in a container that cannot express it (H.264 with
-B-frames in AVI), no container at all, or corrupt rate metadata.
-
-## Install
+## Quick start
 
 ```bash
 pip install -r requirements.txt
+python -m ver2.imports                 # after ANY install: what actually loaded
+cp .env.example .env                   # keys for OpenAI and Supabase
+
+python -m uvicorn api.main:app --port 8000
 ```
 
-`av`, `opencv-python` and `numpy` are all the `uniform` sampler needs. The
-model-backed samplers are imported lazily, so nothing pulls in torch,
-ultralytics or easyocr until you ask for them.
+Then <http://localhost:8000/app> for the browser client, or
+<http://localhost:8000/docs> for the API schema.
 
-Run `python -m ver2.imports` after installing anything. Installs move
-dependencies silently: adding PaddleOCR downgraded numpy 2.4.4 → 2.3.5 and put
-an opencv-contrib 4.10 alongside the opencv-python 5.0 already present, so
-`cv2.__version__` changed under the pipeline without a line of it being
-touched. The checker imports every library and internal module, exercises each
-enough to prove it loaded a working binary, and flags packages that shadow the
-same import name.
+From the command line, one file end to end:
 
-## Not yet built
+```bash
+python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
+python -m ver2.driver media/x.mp4 --no-video --chunking vad    # sound alone
+python -m ver2.video.describe.driver out/x/manifest.json --describer openai
+python -m ver2.embed.driver out/x/descriptions.json
+python -m ver2.aggregate.driver x --tier llm
+python -m ver2.retrieve.driver "people at the checkout" --moments 3
+```
 
-Live sources. `Frame.gap_before` and `Frame.discontinuity` are the seams —
-always `0`/`False` for a file, and where a stream will differ. The describer
-stage reads the manifest and does not exist here.
+Everything one file produces lives under `out/<video-id>/`. Grouped by video
+rather than by artifact type, so one video's whole output is one thing to
+inspect, copy or delete.
 
-## Docs
+## Layout
 
-- **[docs/RUN.md](docs/RUN.md)** — how to run the web app, the API and every
-  CLI, what each output file is, and what to do when it will not start.
-- **[docs/ROUTES.md](docs/ROUTES.md)** — the HTTP surface: every endpoint, why
-  some are queued and some answer in the request, and what a search result
-  carries.
-- **[docs/SCHEMAS.md](docs/SCHEMAS.md)** — every structure the pipeline writes
-  and what each field means: the local JSON documents, the frame store, the six
-  Postgres tables, the Qdrant payload, and the keys that tie them together.
-- `schema.sql` — runnable DDL for all of it: tables, export functions, the
-  hybrid search function and RLS policies. Idempotent, safe to re-run.
-- `CLAUDE.md` — working notes: invariants, measured facts that should not be
-  re-derived, and environment traps. It stays at the repository root because
-  that is where Claude Code loads it from.
+```
+web/            the browser client: one page, no build step
+api/            HTTP in front of it all; slow stages queued, search immediate
+ver2/
+  driver.py     the CLI for both streams
+  orchestrate.py both streams, one grid — what the CLI and the API both call
+  timeline.py   the shared chunk grid: spans + the policy that produced them
+  video/
+    ingest/     source, chunker, samplers, output, pipeline, calibrate
+    describe/   input, describers, vlm/prompts.py, output, reader
+  audio/        source, transcribe, diarize, align, segment, output, reader
+  embed/        SHARED: descriptions and transcripts both land here
+  retrieve/     SHARED: query -> ranked descriptions -> ranked moments
+  aggregate/    video-level structure over what the chunk stages wrote
+  recovery/     STANDALONE: rebuild a store from a manifest + the video
+eval/           the measurements behind the choices, reproducible
+schema.sql      runnable DDL: every table, function and RLS policy
+docs/           SCHEMAS.md · ROUTES.md · RUN.md
+```
 
-The recovery kit (`ver2/recovery/`) is three standalone files that import
-nothing from `ver2` and nothing outside the standard library beyond `av`,
-`opencv-python` and `numpy` — hand them to someone with a video id and their
-own copy of the video and they can rebuild the frame store byte for byte.
+`recovery/` imports nothing from `ver2`, and `imports.py` enforces it by
+parsing the files. Hand someone those three files, a video id and the video,
+and they rebuild the frame store byte for byte with `av`, `opencv` and `numpy`.
+
+## Where to read next
+
+- **[docs/RUN.md](docs/RUN.md)** — every CLI, the API, the web app, and the
+  order to run them in.
+- **[docs/ROUTES.md](docs/ROUTES.md)** — the HTTP surface and the reasoning
+  behind each route.
+- **[docs/SCHEMAS.md](docs/SCHEMAS.md)** — what every field means, in the local
+  JSON and in Postgres alike.
+- **[CLAUDE.md](CLAUDE.md)** — the invariants, and the measurements that
+  produced them. Every design decision here has a number behind it; this is
+  where the numbers are.
+
+## Storage
+
+Local JSON is always written and is the primary sink. Postgres (Supabase) is
+optional and additive — `--sink file,supabase` writes both, file first. Vectors
+go to pgvector by default because it is the half with a lexical index; Qdrant
+runs embedded with no server and is dense-only.
+
+Run `schema.sql` once against a fresh database. It is idempotent and repairs
+its own generated columns.
+
+## Not built
+
+- A local embedder has been written and guarded but never run; every
+  measurement here is OpenAI.
+- Structured fields reach both indexes and both can filter on them, but the
+  values are free text, so a filter for `cashier` matches everything. They need
+  an `enum` first.
+- Live sources. `Frame.gap_before` and `Frame.discontinuity` are the seams.
+- Tests. Verification is `imports.py`, recreate's byte-comparison, and the
+  measurements in `eval/`.

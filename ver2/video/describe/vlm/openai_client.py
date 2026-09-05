@@ -40,25 +40,14 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 #: verbose case rather than the average one.
 DEFAULT_MAX_TOKENS = 2000
 
-#: The conventional name first, then the one this project's .env.example uses.
-KEY_VARS = ("OPENAI_API_KEY", "OPENAI_API")
+#: Resolving the key lives in `ver2/llm.py`, which the aggregate stage also
+#: uses. Four copies of connect-and-complain is what made `db.py` necessary;
+#: this is the same lesson applied before it happens again.
+from ver2.llm import KEY_VARS, api_key as _api_key  # noqa: E402
 
 
 class DescriberUnavailable(Exception):
     """No key, no SDK, or the API refused in a way retrying will not fix."""
-
-
-def _api_key(explicit: Optional[str] = None) -> str:
-    if explicit:
-        return explicit
-    for name in KEY_VARS:
-        value = os.environ.get(name)
-        if value:
-            return value
-    raise DescriberUnavailable(
-        "no OpenAI key: set " + " or ".join(KEY_VARS) + " in .env "
-        "(it is gitignored) or in the environment"
-    )
 
 
 class OpenAIDescriber:
@@ -138,7 +127,7 @@ class OpenAIDescriber:
                     # asked for and the question asked always agree.
                     "schema": prompts.schema_for(
                         prompts.question_for(context),
-                        context.get("chunk_samplers", ())),
+                        context.get("chunk_questions", ())),
                 }},
             )
         except Exception as exc:                   # noqa: BLE001

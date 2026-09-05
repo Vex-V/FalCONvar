@@ -24,6 +24,9 @@ from typing import Any, Iterator, Optional, Sequence
 from .describers import Describer
 from .input import FrameSource
 from .output import DescriptionSink
+# A leaf: prompts.py imports nothing. Resolving each chunk's questions here
+# rather than in a describer keeps every describer seeing the same answer.
+from .vlm import prompts
 
 
 @dataclass
@@ -61,6 +64,18 @@ def describe(
     model = describer.config()
     started = time.perf_counter()
 
+    # Before anything is read or written, and before a single call is paid for.
+    # A manifest naming a question this module does not have would otherwise
+    # fall through to the scene question and produce a complete-looking
+    # document answering something nobody asked -- the manifest is written by
+    # a stage that cannot see this vocabulary, so it is checked on arrival.
+    unknown = sorted({q for entry in (manifest.get("config") or {}).get("samplers", [])
+                      if (q := entry.get("prompt")) and q not in prompts.QUESTIONS})
+    if unknown:
+        raise ValueError(
+            f"manifest names unknown question(s) {', '.join(unknown)}; "
+            f"known: {', '.join(prompts.QUESTIONS)}")
+
     # Before the sink, so a missing or incomplete frame store fails without
     # having written anything. A run that cannot read pixels should leave no
     # document behind claiming it tried.
@@ -89,10 +104,18 @@ def describe(
                     "end_ts": chunk["end_ts"],
                     "sampler": sampler,
                     "sampler_config": _config_for(manifest, sampler),
-                    # Who else is answering about this chunk. A general
+                    # What else is being *asked* about this chunk. A general
                     # describer gives up the fields a specialist here owns,
                     # rather than answering them a second time.
-                    "chunk_samplers": list(chunk["samplers"]),
+                    #
+                    # Questions, not sampler ids. Ownership in `prompts.OWNER`
+                    # is keyed by question, and the two are only equal while no
+                    # sampler is paired with someone else's question. With
+                    # `yolo:overview` on the chunk, passing ids would have
+                    # `clip` drop `people` for a call that was asked `overview`
+                    # and owns no keys at all -- the field would leave the
+                    # document with nothing malformed to notice.
+                    "chunk_questions": _questions_on(manifest, chunk),
                 }
                 call_started = time.perf_counter()
                 answer = describer.describe(images, context)
@@ -130,6 +153,15 @@ def describe(
     }
     document = sink.finish(stats) if sink is not None else {"stats": stats}
     return Result(document, chunks_seen, described, skipped, frames, elapsed)
+
+
+def _questions_on(manifest: dict[str, Any], chunk: dict[str, Any]) -> list[str]:
+    """Every question asked about this chunk, resolved the same way each call
+    resolves its own -- so what a schema gives up and what is actually asked
+    can never disagree."""
+    return [prompts.question_for({"sampler": sampler,
+                                  "sampler_config": _config_for(manifest, sampler)})
+            for sampler in chunk["samplers"]]
 
 
 def _config_for(manifest: dict[str, Any], sampler: str) -> dict:

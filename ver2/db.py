@@ -60,16 +60,21 @@ def client_from_env(url: Optional[str] = None, key: Optional[str] = None,
     return create_client(url, key)
 
 
-def fetch_manifest(client: Any, video_id: str) -> dict[str, Any]:
+def fetch_manifest(client: Any, video_id: str,
+                   required: bool = True) -> Optional[dict[str, Any]]:
     """The whole manifest, reassembled server-side by ``export_manifest``.
 
     Server-side so there is no second implementation of the manifest format to
     drift from the one the file writer produces.
+
+    ``required=False`` returns None instead of exiting, for a caller that can
+    work without one: an audio-only run writes no manifest, so its absence is
+    a fact about the video rather than a missing input.
     """
     document = client.rpc("export_video_manifest", {"p_video_id": video_id}).execute().data
-    if not document:
+    if not document and required:
         raise SystemExit(f"no manifest in Supabase for video_id {video_id!r}")
-    return document
+    return document or None
 
 
 def fetch_descriptions(client: Any, video_id: str) -> list[dict[str, Any]]:

@@ -28,7 +28,8 @@ ver2/
       source/    probe, sequential read, decimation, random access (PyAV)
       chunker/   media time -> chunk id    (uniform | scene | fixed)
       samplers/  which decimated frames to keep
-                 (uniform|overview|clip|yolo|objects|text)
+                 (uniform|clip|yolo|objects|text); any may be
+                 paired with any question as `name:prompt`
                  policy: base.py, uniform.py, scene.py, detection.py (the base
                  for detector-driven ones) + people.py, objects.py, ocr.py
         components/  perception: detectors, descriptors, embedders. Every model
@@ -64,6 +65,16 @@ ver2/
   retrieve/      SHARED
     search.py    query -> ranked descriptions -> ranked moments
     driver.py    the CLI
+  aggregate/     SHARED: video-level structure over what the chunks said
+    base.py      the Aggregator protocol + Context (joins the documents)
+    stats.py speakers.py novelty.py       free: arithmetic and existing vectors
+    ner.py sentiment.py                   local: GPU models
+    summary.py chapters.py events.py      llm: paid calls
+    llm.py       one rendering of the video, shared by the text aggregators
+    output/      aggregate sinks (file | supabase | both)
+    reader.py    aggregate() -- resolve order, run, skip what is current
+    driver.py    the CLI
+  llm.py         the text model call + the key, shared by describe and aggregate
   fanout.py      primary + best-effort secondaries, shared by every stage
   db.py          the Supabase client + the reads more than one stage needs
   recovery/
@@ -78,7 +89,7 @@ eval/
   aggregation.py how a chunk scores from its descriptions' ranks
 ```
 
-12214 lines, 107 files.
+15650 lines, 132 files.
 
 ## Commands
 
@@ -95,6 +106,7 @@ python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live i
 python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
        --model gpt-5.4-mini --sink file,supabase          # costs money
 python -m ver2.embed.driver out/<id>/descriptions.json     # -> pgvector
+python -m ver2.embed.driver out/<id>/transcript.json      # audio-only video
 python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
 python -m ver2.retrieve.driver "people at the checkout" --moments 3
 python -m ver2.retrieve.driver "..." --sampler yolo        # one question only
@@ -104,12 +116,17 @@ python -m ver2.recovery.supabase_manifest <id>            # -> <id>.json
 python -m ver2.recovery.supabase_description <id>         # -> descriptions json
 python -m ver2.recovery.recreate out/<id>/manifest.json --out rebuilt/
 python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
+python -m ver2.driver media/x.mp4 --no-video --chunking vad    # sound alone
+python -m ver2.driver media/x.mp4 --no-audio --chunking scene  # picture alone
 python -m ver2.driver media/x.mp4 --sampler clip --chunking vad   # audio grid
 python -m ver2.driver media/x.mp4 --sampler clip --chunking scene # video grid
 python -m ver2.audio.driver media/x.mp4 --chunking speaker        # audio alone
-python -m ver2.video.ingest.driver v.mp4 --sampler overview        # prose only
-python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text        --every-seconds 10                   # read the screen on a clock
+python -m ver2.video.ingest.driver v.mp4 --sampler uniform:overview   # prose only
+python -m ver2.video.ingest.driver v.mp4 --sampler yolo:overview      # their frames, prose
+python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text        --every-frames 10                    # read the screen on a stride
 python -m uvicorn api.main:app --port 8000   # / for the site, /docs for the schema
+python -m ver2.aggregate.driver <id> --tier free   # no model, no network
+python -m ver2.aggregate.driver <id> --tier llm    # + summary, chapters, events
 python -m ver2.imports                      # after ANY install
 python -m eval.queries out/<id>/descriptions.json   # -> eval/query_pairs.json
 python -m eval.render_ab                    # compare renderings, paired CI
@@ -340,6 +357,24 @@ schema when that specialist ran on the same chunk*, so ownership stays
 exclusive per chunk without anyone being asked twice, and a uniform-only run
 still records everything rather than a stub.
 
+**Ownership is over the questions on a chunk, never the sampler ids.**
+`OWNER` is keyed by question, and `schema_for` was already passed a resolved
+question as its first argument -- but its `siblings` arrived as raw ids from
+the manifest. That worked only while every id equalled its question, which is
+no longer true. `reader._questions_on` resolves each sampler on the chunk
+through the same `question_for` the call itself uses, so what a schema gives up
+and what is actually asked cannot disagree.
+
+Measured on test2, `uniform,uniform:overview,uniform:yolo`: with ids as
+siblings the scene call keeps `people` and `uniform:yolo` answers it too --
+two answers to one key, resolved arbitrarily by `merge`. With questions, the
+scene call gives `people` up and exactly one call answers it. The mirror case
+is worse and was the reason to look: a `yolo` sampler paired with `overview`
+would have had `clip` surrender `people` to a call whose schema owns no keys at
+all, and the field would leave the document with everything still well-formed.
+Verified end to end -- `yolo:overview,clip` on test2 keeps all seven scene
+keys, `yolo:overview` owns none, nothing is answered twice.
+
 A single shared schema was tried and is wrong: every field being present means
 the model may fill any of them, and it does — asked about people it returned a
 paragraph about the room, paid for twice, leaving two `setting` values with no
@@ -352,18 +387,52 @@ unparseable JSON. The default is 2000, and truncation is detected from the
 response's own `status`/`incomplete_details` rather than inferred from a JSON
 error further down.
 
-**A sampler may name its question instead of being it.** `uniform` takes a
-`prompt`, so a positional sampler can stand in for one it is not:
-`--sampler uniform:text` keeps a frame every N seconds and has describe ask
-the *text* question about it. Passing a sampler rather than a prompt was the
+**Which frames, and what to ask, are independent.** Every sampler takes a
+`prompt` -- it lives on the base class -- so any strategy pairs with any
+question as `name:prompt`. `uniform:text` reads the screen on a stride;
+`yolo:overview` keeps frames where the people changed and asks for prose
+instead of the structured people call. Unpaired, the question is the sampler's
+own name.
+
+It was `uniform` alone that took a `prompt`, enforced by a hardcoded
+`if name not in ("uniform", "overview")` in two drivers, and there was never a
+reason for the restriction: `question_for`, `for_sampler` and `schema_for` all
+already took a *question* rather than a sampler. Generalising deleted a special
+case rather than adding one. Passing a sampler rather than a prompt was the
 first design and is worse -- the wrapper never runs the inner sampler's logic,
 so it would construct an EasyOCR or CLIP object purely to borrow its name, and
 it could never extend to a question no sampler corresponds to.
 
+**A pairing is keyed by both halves.** `sampler_id` is `name:prompt` when a
+question is paired and the bare name otherwise. Keying by the question alone
+was the earlier rule and it stops working the moment any sampler can ask
+anything: `yolo:overview` and `clip:overview` hold different frames and would
+collide on one manifest key. The id is what the manifest, `descriptions.json`,
+`chunk_embeddings.sampler` and `--sampler` all inherit, so `uniform:text` runs
+are keyed `uniform:text` where they used to be keyed `text` -- old vectors need
+re-indexing to be reachable by the new name.
+
+**An unknown question is rejected, not fallen through.** `question_for` falls
+back to the scene question by design, which makes `yolo:overvew` a run that
+completes, costs money and answers something nobody asked. `prompts.QUESTIONS`
+is the vocabulary and it is checked in all four places a run can start: both
+CLIs, `orchestrate.validate`, and `describe()` itself before a single call --
+because the manifest is written by a stage that cannot see the vocabulary.
+
+**Ingest still does not depend on describe.** A sampler records the question as
+an opaque string and `base.py` never reads it; the DAG edge runs describe ->
+ingest and `imports.py` enforces it. Only the *drivers* import `prompts`, and
+function-locally: they are composition roots, and validating a typo is the one
+thing they want the vocabulary for. That is also why `vlm/__init__.py` resolves
+`OpenAIDescriber` through a module `__getattr__` -- it re-exported the client
+eagerly, so reading `vlm.prompts` pulled in `openai`, which its own docstring
+already claimed it did not.
+
 The point is cost. `text` fires *when the writing changes*, and finding that
 out costs EasyOCR on every decimated frame -- 98.1% of that sampler's total.
-"Read the screen every ten seconds" wants none of that: measured on Chernobyl,
-`uniform:text` at 6 s ran **no model at ingest** and the VLM still transcribed
+"Read the screen every so often" wants none of that: measured on Chernobyl,
+`uniform:text` at a stride of 6 (6 s at `per_second=1`) ran **no model at
+ingest** and the VLM still transcribed
 `RadioFreeEurope RadioLiberty`, `BYELORUSSIAN S.S.R.`, `REACTOR 1`, `1977`
 correctly. The two are different questions, not two settings of one.
 
@@ -372,7 +441,10 @@ therefore inside `manifest_fingerprint` -- editing it invalidates describe's
 resume exactly as editing `vlm/prompts.py` does. `question_for` reads it back
 and falls through to the sampler id, so nothing that does not set it changes.
 
-**`overview` is a question with no fields at all.** Summary only, 4 to 5
+**`overview` is a question with no fields at all**, and only a question --
+there is no `OverviewSampler` any more. Its whole content was
+`prompt="overview"`, which every sampler now expresses, so `--sampler overview`
+is spelled `--sampler uniform:overview`. Summary only, 4 to 5
 sentences, and it overrides the ">= 150 words" instruction that every other
 prompt carries -- the length rule exists because the summary is what gets
 embedded and its length is a retrieval parameter, but an overview is chosen
@@ -380,12 +452,40 @@ precisely when a paragraph is more than the moment deserves. It owns no keys,
 so it takes none from the scene question and costs a `clip` running beside it
 nothing. Measured: 84 and 86 words, 4 sentences, zero structured keys.
 
-**`uniform` counts seconds, not decimated frames.** It used to take `every_n`,
-which made the cadence a function of the decimator -- `every_n=3` was one frame
-every 3 s at `per_second=1` and every 0.75 s at 4. Media time is the only clock
-a decision may use, and this was the last place that was not true. The cadence
-is enforced as the base class's `min_interval_s`, so a skipped frame costs no
-inference rather than merely producing no output.
+**`uniform` counts decimated frames, not seconds.** `every_n` is a stride over
+the stream the sampler was actually offered, read off `chunk_local_index` --
+the one thing about position a sampler is handed. Counting seconds instead
+meant dividing a wall of media time the sampler had no other business knowing,
+which is the one place a sampler decided on something other than the frames
+flowing past it.
+
+The cadence in seconds is therefore a consequence of decimation rather than a
+second setting beside it: `every_n=3` is one frame every 3 s at
+`per_second=1` and one every 0.75 s at 4. That is the intent -- `per_second`
+already decides how much of the video anything downstream may look at, so a
+positional sampler is a stride over what survived it, and the two numbers stop
+being two ways to say the same thing. Verified on test2 with `--every-frames 3`:
+identical `chunk_local_index` sequences (0, 3, 6, ...) at `per_second` 1 and 4,
+36.1% and 33.9% of decimated frames kept, at 3 s and 0.767 s spacing.
+
+A cadence in *seconds* regardless of decimation is still expressible, and by
+the mechanism every sampler shares: `min_interval_s`, enforced in the base
+class before the strategy runs. Verified: `--every-frames 2 --per-second 4
+--min-interval 3` keeps frames exactly 3 s apart, at indices 0, 12, 24 --
+both constraints holding at once. The cadence is no longer folded *into*
+`min_interval_s`, which is what let a stride and an interval be set
+independently; nothing is lost by deciding in `propose` here because this
+sampler runs no model, so a frame it turns down costs what one the base class
+never offered it costs.
+
+The default is frame-native and shared: 1, every decimated frame. Unlike
+`--threshold`, which is left unset so each change sampler keeps the value
+calibrated for what *it* compares, one stride for every positional sampler is
+correct -- because **`overview` is a prompt, not a cadence**. It briefly had
+its own `every_s=5.0` as `OverviewSampler`; that was dead code (every caller
+passed `every_seconds` explicitly), and making the flag optional resurrected it
+as a divergence where the same question kept different frames depending on
+which spelling was typed. The class is gone entirely now.
 
 **A prompt is chosen by sampler, never shared.** The manifest records *why*
 each frame was kept and that is the most useful thing it knows: a person
@@ -583,6 +683,45 @@ longer in the document, so a finished job read "queued" forever. Both are the
 same shape as the pipeline bugs recorded above: the output looked plausible
 and nothing reported the fault.
 
+**Aggregates answer what retrieval cannot.** Embeddings cannot count, so "the
+busiest moment", "who dominated", "how much of this is speech" are exact
+questions similarity answers approximately. `aggregate/` reads the finished
+documents -- never the video, never another stage's modules -- and produces
+video-level structure. Measured on Chernobyl: 90.3% speech ratio, 125.1 words
+per minute, `monologue: true` with 0 handovers, and 4 chapters that tile the
+whole video with the explosion correctly at 94.4 s.
+
+**`depends_on` drops rather than fails.** A dependency naming a source
+(`yolo`, `transcript`) is a requirement on the video; one naming another
+aggregator orders it first. `speakers` on silent CCTV is not an error, it is a
+question that does not apply, and it is reported as skipped *with the reason*
+-- "needs transcript, which this video has no output for" -- because "speakers
+did not run" is only useful beside why.
+
+**A tier is a cost ceiling, and asking for a dear one still runs the cheap
+ones.** `free` is arithmetic, `local` adds GPU models, `llm` adds paid calls;
+they run cheapest first, so a run that dies partway has produced the free
+results rather than none.
+
+**Staleness is `inputs_fingerprint`, a hash of the chunk text actually read.**
+A summary of descriptions that have since been rewritten reads perfectly, which
+is precisely why it cannot be left to a reader to assume. A re-run reports
+"current" and costs nothing; `--force` rebuilds. The same discipline as
+`manifest_fingerprint` and `text_hash`, applied to the most expensive stage.
+
+**Only the summary is embedded, and into its own table.** `chunk_embeddings`
+answers *which twenty seconds*; a summary answers *which video*, and a video is
+not a moment you can play. Putting summaries in the chunk table would need a
+sentinel `chunk_id` and would then return a whole-video "moment" beside real
+ones in every search. Everything else `aggregate` produces is statistical, and
+a vector of a count answers nothing.
+
+**Installing `gliner` downgraded transformers 5.15.1 -> 5.13.1.** numpy, cv2
+and torch were untouched and `ver2.imports` stayed green, but the checker only
+proves the import works -- CLIP was verified separately by actually embedding:
+512 dims, L2 norm 1.0. That check matters because `transformers` is what the
+`clip` sampler and the local embedder both run on.
+
 **The API calls `orchestrate`, never `driver`.** `ver2/driver.py` used to hold
 the whole run inline, which made it the one module breaking the rule every
 stage driver follows -- "driver.py: the CLI, argparse only, no pipeline logic".
@@ -607,6 +746,84 @@ once and the API answers 422 with them -- and a bad sampler name never becomes
 a job that fails a minute later. What cannot be known without opening the file
 still fails in the job: `--chunking vad` on silent audio is a 202, because
 whether a track has speech is not a property of the request.
+
+**Either stream may be switched off, and the grid policy has to survive it.**
+`use_video` and `use_audio` are independent, so `validate` rejects a policy
+whose stream is not running: `scene` is found while decoding frames, `vad` and
+`speaker` in the waveform, and asking for one without its stream is a
+contradiction rather than a preference to honour differently. `uniform` is
+arithmetic and works whatever is on -- audio-only, it is computed from the
+decoded track duration, and `_cover` is skipped because there is no video
+duration to reach. Whether a file *has* a soundtrack is not a property of the
+request, so "audio only, no audio track" is caught in `process`, not
+`validate`.
+
+An audio-only run writes `timeline.json` and `transcript.json` and nothing
+else. There is no describe stage to run -- a transcript is already the text
+that stage would produce -- and `embed`, `retrieve` and `aggregate` work off it
+unchanged. Two readers had to learn that a manifest is optional rather than
+missing: `embed.driver` reads a named `transcript.json` directly, and
+`db.fetch_manifest(required=False)` returns None instead of exiting, because
+no manifest means no descriptions either.
+
+**A form built from a registry defaults to whatever sorts first, and that was
+`stub`.** The transcriber select offered `transcribe.available()` in order, so
+the first option was the stub; an audio-only run through the browser completed
+in 10.6 s, reported 42 segments and 205 words, and wrote a transcript of
+`[stub0.0][stub0.1]`. Nothing was wrong enough to report. `/capabilities` now
+publishes `defaults` read off `orchestrate.Options` -- transcriber, diarizer,
+chunking, describer -- and the form selects those rather than position 0. The
+default lives in one place, and it is the dataclass the pipeline actually uses.
+
+**`[hidden]` needs `!important` once, not per rule.** `label.row` sets
+`display: flex`, and any author `display` beats the UA stylesheet's
+`[hidden] { display: none }` -- so hiding the frame-store row in audio-only
+mode set the attribute and changed nothing on screen. Exactly the `#lightbox`
+fault again, in a second place, three months later. One global
+`[hidden] { display: none !important }` is the fix, because the next author
+`display` will not remember either.
+
+**The export surface lists what exists, not what could exist.**
+`/videos/{id}/exports` is read from disk, so an audio-only video advertises no
+manifest rather than offering a link that 404s -- a broken link reads as
+breakage, not as a run that never had one. It is also the one place that knows
+summaries live under `aggregates/` while descriptions live a level up, and the
+browser's download links read it rather than assembling paths. `?download=1`
+only adds a `Content-Disposition`: content negotiation would be tidier, but a
+browser cannot set an `Accept` header on a plain link.
+
+**Every summary layer is recorded; only the topmost is embedded.** `summary`
+folds chunk lines 25 at a time into leaf summaries, folds those again while
+more than 25 remain, then makes one final structured call. The intermediate
+summaries used to be transient, which threw away a coarse account of the video
+that had already been paid for -- a leaf summary covers a real span and is the
+only description at that granularity, between one chunk and the whole file.
+They are kept in `layers`, each part carrying `chunk_ids`, `start_ts` and
+`end_ts`.
+
+The ids travel *with* the text through every fold, so a merge summary's span is
+the union of what it merged and nothing is reconstructed afterwards by parsing
+a string this module formatted itself. (`llm.chunk_rows` returns `(chunk_id,
+line)` for exactly this; `chunk_lines` is now a wrapper over it.) The span is
+then resolved through the timeline rather than carried as numbers, the same
+reason `chapters` resolves its spans instead of trusting the model's. Verified
+on Chernobyl at `batch=3`: 14 chunks -> 5 leaves -> 2 merges, both levels
+tiling 0.0-205.28 s contiguously with no gaps.
+
+`reduction_levels` records how many folds happened, which is how much
+paraphrase sits between the descriptions and the final text. At the shipped
+batch of 25 a 14-chunk video takes the single-call path and `layers` is `[]` --
+which says truthfully that no intermediate summary existed, rather than that
+one was discarded.
+
+**Storing them and embedding them are different decisions.** The layers stay
+out of the index because they paraphrase material the chunk vectors already
+hold: indexing them would return the same moment two or three times over under
+different wordings, which is the count-bias failure the moment aggregation
+guards against, reintroduced one level up. Everything else `aggregate` produces
+is statistical and a vector of a count answers nothing; `chapters` carries a
+summary per chapter and those are a table of contents, read in full rather than
+searched.
 
 **Job records die with the process; artifacts do not.** `GET /jobs` says so.
 `GET /videos` reads the `out/` directory rather than remembering, so a

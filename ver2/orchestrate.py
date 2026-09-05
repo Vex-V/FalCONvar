@@ -43,6 +43,7 @@ from ver2.audio.output import (MultiTranscriptSink, TranscriptDocument,
                                build_document)
 from ver2.audio.reader import cut, listen
 from ver2.timeline import Timeline
+from ver2.timeline import uniform as timeline_uniform
 from ver2.video.ingest.output import FileManifestWriter, FrameStore, MultiSink
 from ver2.video.ingest.pipeline import ingest
 
@@ -67,6 +68,7 @@ class Options:
     scene_threshold: float = 27.0
     scene_min_duration: float = 5.0
 
+    use_video: bool = True
     samplers: Sequence[Any] = ()          # built Sampler objects
     per_second: float = 1.0
     frame_store: bool = False
@@ -92,6 +94,7 @@ class Outcome:
     frames_sampled: int
     audio: dict[str, Any] = field(default_factory=dict)
     used_audio: bool = False
+    used_video: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +105,7 @@ class Outcome:
             "derived_from": self.timeline.derived_from,
             "timeline_fingerprint": self.timeline.fingerprint(),
             "frames_sampled": self.frames_sampled,
+            "used_video": self.used_video,
             "audio": self.audio if self.used_audio else None,
         }
 
@@ -115,9 +119,34 @@ def validate(options: Options) -> list[str]:
     problems = []
     if options.chunking not in POLICIES:
         problems.append(f"chunking must be one of {', '.join(POLICIES)}")
+    if not options.use_video and not options.use_audio:
+        problems.append("nothing to do: process the picture, the soundtrack, "
+                        "or both")
+    # A grid has to be derivable from a stream the run is actually reading.
+    # `scene` is found while decoding frames; `vad` and `speaker` are found in
+    # the waveform. Asking for either without its stream is not a preference
+    # that can be honoured a different way, it is a contradiction.
+    if not options.use_video and options.chunking == "scene":
+        problems.append("chunking 'scene' is found by the video pass, which "
+                        "this run is not doing")
+    if not options.use_audio and options.chunking in AUDIO_FIRST:
+        problems.append(f"chunking '{options.chunking}' is derived from the "
+                        "soundtrack, which this run is not reading")
     if options.chunking == "speaker" and options.diarizer == "none":
         problems.append("chunking 'speaker' needs a diarizer; 'none' cannot "
                         "produce speaker boundaries")
+    # A sampler may be paired with any question, but not with a name that does
+    # not exist: `yolo:overvew` would fall through to the scene question and
+    # answer something else at full price. Imported here because `ingest` does
+    # not depend on `describe` -- `prompts` is a leaf and costs nothing to read.
+    from ver2.video.describe.vlm import prompts
+    for sampler in options.samplers:
+        question = getattr(sampler, "prompt", None)
+        if question and question not in prompts.QUESTIONS:
+            problems.append(
+                f"sampler {sampler.sampler_id!r}: unknown question "
+                f"{question!r}; known: {', '.join(prompts.QUESTIONS)}")
+
     bad = [s for s in options.sinks if s not in SINKS]
     if bad or not options.sinks:
         problems.append(f"sinks must be some of {', '.join(SINKS)}")
@@ -209,6 +238,11 @@ def process(options: Options,
     if options.chunking in AUDIO_FIRST and not use_audio:
         raise ValueError(f"chunking '{options.chunking}' is derived from the "
                          f"soundtrack, and this run will read none")
+    if not options.use_video and not use_audio:
+        # Validation cannot catch this: whether a file carries a soundtrack is
+        # a property of the file, not of the request, so it is found here.
+        raise ValueError(f"{media.name} has no audio track, and this run was "
+                         "asked to skip the picture")
     say("start", {"video_id": video_id, "audio": audio_info.as_dict(),
                   "use_audio": use_audio, "chunking": options.chunking})
 
@@ -232,40 +266,55 @@ def process(options: Options,
             audio_result.transcript, audio_result.diarization,
             min_s=options.min_chunk, max_s=options.chunk_duration,
             silence_s=options.silence)
-        timeline = _cover(timeline, _video_duration(media))
+        if options.use_video:
+            timeline = _cover(timeline, _video_duration(media))
         say("grid", {"chunks": len(timeline), "policy": timeline.policy,
                      "fingerprint": timeline.fingerprint()})
 
-    store = FrameStore(out_dir / "store") if options.frame_store else None
-    chunking_options: dict[str, Any] = {}
-    if options.chunking == "scene":
-        chunking_options = {"threshold": options.scene_threshold,
-                            "min_duration_s": options.scene_min_duration}
-    elif timeline is not None:
-        chunking_options = {"timeline": timeline}
+    video_result = None
+    if options.use_video:
+        store = FrameStore(out_dir / "store") if options.frame_store else None
+        chunking_options: dict[str, Any] = {}
+        if options.chunking == "scene":
+            chunking_options = {"threshold": options.scene_threshold,
+                                "min_duration_s": options.scene_min_duration}
+        elif timeline is not None:
+            chunking_options = {"timeline": timeline}
 
-    say("video", {"why": "one decode pass"})
-    video_result = ingest(
-        str(media),
-        per_second=options.per_second,
-        chunking="fixed" if timeline is not None else options.chunking,
-        chunking_options=chunking_options,
-        chunk_duration_s=options.chunk_duration,
-        sampler_specs=list(options.samplers),
-        video_id=video_id,
-        sink=_manifest_sinks(options.sinks, out_dir),
-        store=store,
-        store_scope=options.store_scope,
-    )
-    say("video", {"chunks": len(video_result.chunks),
-                  "frames_sampled": video_result.frames_sampled})
+        say("video", {"why": "one decode pass"})
+        video_result = ingest(
+            str(media),
+            per_second=options.per_second,
+            chunking="fixed" if timeline is not None else options.chunking,
+            chunking_options=chunking_options,
+            chunk_duration_s=options.chunk_duration,
+            sampler_specs=list(options.samplers),
+            video_id=video_id,
+            sink=_manifest_sinks(options.sinks, out_dir),
+            store=store,
+            store_scope=options.store_scope,
+        )
+        say("video", {"chunks": len(video_result.chunks),
+                      "frames_sampled": video_result.frames_sampled})
+    else:
+        say("video", {"why": "skipped -- audio only"})
 
     if timeline is None:
-        timeline = Timeline(
-            spans=[(c.start_ts, c.end_ts) for c in video_result.chunks],
-            policy=options.chunking,
-            params={"duration_s": options.chunk_duration},
-            derived_from="video")
+        if video_result is not None:
+            timeline = Timeline(
+                spans=[(c.start_ts, c.end_ts) for c in video_result.chunks],
+                policy=options.chunking,
+                params={"duration_s": options.chunk_duration},
+                derived_from="video")
+        else:
+            # Audio only, on a `uniform` grid: the arithmetic is the same on
+            # either side, so there is nothing to propagate and no reason for
+            # the picture to have been decoded to produce it.
+            if audio_result is None:
+                say("audio", {"why": "measuring the track for a uniform grid"})
+                audio_result = listen(str(media), transcriber, diarizer)
+            timeline = timeline_uniform(audio_result.track.duration_s,
+                                        options.chunk_duration)
     write_json(out_dir / "timeline.json", timeline.as_dict())
 
     audio_stats: dict[str, Any] = {}
@@ -285,8 +334,9 @@ def process(options: Options,
         say("audio", audio_stats)
 
     outcome = Outcome(video_id=video_id, out_dir=out_dir, timeline=timeline,
-                      video_chunks=len(video_result.chunks),
-                      frames_sampled=video_result.frames_sampled,
-                      audio=audio_stats, used_audio=use_audio)
+                      video_chunks=len(video_result.chunks) if video_result else 0,
+                      frames_sampled=video_result.frames_sampled if video_result else 0,
+                      audio=audio_stats, used_audio=use_audio,
+                      used_video=options.use_video)
     say("done", outcome.as_dict())
     return outcome

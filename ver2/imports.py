@@ -280,6 +280,23 @@ INTERNAL: list[tuple[str, tuple[str, ...]]] = [
     ("ver2.embed.indexer", ("index_units", "IndexResult")),
 
     ("ver2.retrieve.search", ("Moment", "search", "to_moments")),
+    ("ver2.llm", ("complete", "client", "api_key", "LLMUnavailable")),
+    ("ver2.aggregate.base", ("Aggregator", "Context", "TIERS")),
+    ("ver2.aggregate.stats", ("StatsAggregator",)),
+    ("ver2.aggregate.speakers", ("SpeakerStatsAggregator",)),
+    ("ver2.aggregate.novelty", ("NoveltyAggregator",)),
+    ("ver2.aggregate.summary", ("SummaryAggregator",)),
+    ("ver2.aggregate.chapters", ("ChaptersAggregator",)),
+    ("ver2.aggregate.events", ("EventsAggregator",)),
+    ("ver2.aggregate.ner", ("NERAggregator",)),
+    ("ver2.aggregate.sentiment", ("SentimentAggregator",)),
+    ("ver2.aggregate.llm", ("chunk_lines", "pick_sources", "resolve_span")),
+    ("ver2.aggregate.output", ("AggregateDocuments", "AggregateSink",
+                               "MultiAggregateSink", "SupabaseAggregates")),
+    ("ver2.aggregate.reader", ("aggregate", "context_for", "Result")),
+    ("ver2.aggregate", ("available", "build", "by_tier", "resolve_order", "TIERS")),
+    ("ver2.embed.summaries", ("index_summary", "search")),
+
     ("ver2.orchestrate", ("process", "validate", "Options", "Outcome", "POLICIES")),
 
     # api/ is optional and sits outside ver2, but a broken import there is a
@@ -316,6 +333,7 @@ ENTRYPOINTS = [
     "ver2.video.describe.driver",
     "ver2.audio.driver",
     "ver2.driver",
+    "ver2.aggregate.driver",
     "ver2.embed.driver",
     "ver2.retrieve.driver",
     "ver2.recovery.recreate",

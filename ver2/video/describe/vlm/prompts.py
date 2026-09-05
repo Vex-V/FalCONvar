@@ -1,7 +1,9 @@
-"""What to ask about a chunk, given which sampler chose its frames.
+"""What to ask about a chunk.
 
-The manifest records *why* each frame was kept, and that is the most useful
-thing it knows. A person-change sampler fired because the people in shot
+Which question a chunk gets is recorded in the manifest, per sampler, and read
+back by `question_for`. Unset, it is the sampler's own name -- and that default
+is the point of this module: the manifest records *why* each frame was kept,
+and that is the most useful thing it knows. A person-change sampler fired because the people in shot
 changed; a scene-change sampler fired because the whole frame did; a text
 sampler fired because the writing on screen changed. Asking the same question
 of all of them throws that away and gets back the same generic caption three
@@ -26,8 +28,21 @@ all, so the scene call cannot spend tokens on -- or disagree about -- something
 already being answered better elsewhere. Exclusive ownership, decided per
 chunk, is what lets a chunk's answers be merged with nothing to reconcile.
 
-Prompts and schemas are data. A new sampler adds an entry; an unknown one falls
-back to the scene question. Nothing here imports anything.
+**A question is not tied to the sampler it is named after.** Any sampler may be
+paired with any of these -- `yolo:overview` keeps frames where the people
+changed and asks for prose instead of the structured people call. The names
+below are therefore a vocabulary, published as `QUESTIONS` and validated
+before a run rather than fallen through: `yolo:overvew` asking the scene
+question because of a typo is the silent-wrong-answer failure this codebase
+keeps finding.
+
+Pair carelessly and the measured cost is real: one question across several
+samplers returns near-identical captions for one moment, which is several
+near-identical embeddings in the index -- worse than one. The mechanism is
+open; the default is still one question per sampler.
+
+Prompts and schemas are data. A new sampler adds an entry; `scene` names the
+general question explicitly. Nothing here imports anything.
 """
 
 from __future__ import annotations
@@ -270,6 +285,19 @@ SPECIALIST_FIELDS: dict[str, dict[str, Any]] = {
     },
 }
 
+#: Every question that may be paired with a sampler. `scene` is the general
+#: one -- it has no BY_SAMPLER entry because it *is* the fallback template, and
+#: naming it explicitly is what lets `--sampler yolo:scene` be a request rather
+#: than a typo indistinguishable from one.
+QUESTIONS: tuple[str, ...] = ("scene",) + tuple(sorted(BY_SAMPLER))
+
+
+def questions() -> list[str]:
+    """The valid prompt names, for a CLI to validate against and an API to
+    publish. Read from the data above, so adding a question adds it here."""
+    return list(QUESTIONS)
+
+
 #: Which sampler owns a key outright when it is present on the same chunk. The
 #: scene question gives these up rather than answering them a second time.
 OWNER: dict[str, str] = {
@@ -279,8 +307,18 @@ OWNER: dict[str, str] = {
 }
 
 
-def owned_by(sampler: str, siblings: Sequence[str] = ()) -> list[str]:
-    """The keys this sampler fills on a chunk where ``siblings`` also ran."""
+def owned_by(question: str, siblings: Sequence[str] = ()) -> list[str]:
+    """The keys this question fills on a chunk where ``siblings`` are asked.
+
+    ``siblings`` is every *question* on the chunk, never the sampler ids.
+    `OWNER` is keyed by question, so passing ids worked only while the two
+    were always equal -- which stopped being true when any sampler could be
+    paired with any question. Passing ids now would let `clip` give up
+    `people` because a `yolo` sampler is present, while that sampler was asked
+    `overview`, which owns nothing: the field would vanish from the chunk with
+    every document still well-formed.
+    """
+    sampler = question
     if sampler in SPECIALIST_FIELDS:
         return list(SPECIALIST_FIELDS[sampler])
     taken = {key for key, owner in OWNER.items()
@@ -288,12 +326,14 @@ def owned_by(sampler: str, siblings: Sequence[str] = ()) -> list[str]:
     return [key for key in SCENE_FIELDS if key not in taken]
 
 
-def schema_for(sampler: str, siblings: Sequence[str] = ()) -> dict[str, Any]:
+def schema_for(question: str, siblings: Sequence[str] = ()) -> dict[str, Any]:
     """The strict response schema for one call.
 
-    ``siblings`` is every sampler on this chunk. It narrows the scene schema:
-    a field a specialist is answering is removed rather than asked for twice.
+    ``siblings`` is every *question* being asked about this chunk. It narrows
+    the scene schema: a field a specialist is answering is removed rather than
+    asked for twice.
     """
+    sampler = question
     if sampler in SPECIALIST_FIELDS:
         fields = SPECIALIST_FIELDS[sampler]
     else:
@@ -357,8 +397,8 @@ def question_for(context: dict[str, Any]) -> str:
     what to ask about it.
 
     But a sampler may name a question in its own config, and that is what lets
-    a positional sampler run any question on a clock -- `uniform` keeps a frame
-    every N seconds and says which question they are for, without having to be
+    a positional sampler run any question on a stride -- `uniform` keeps every
+    Nth decimated frame and says which question they are for, without having to be
     the sampler that would normally ask it. Reaching for the sampler *class*
     instead would mean constructing an EasyOCR or CLIP object purely to borrow
     its name, and would never extend to a question no sampler corresponds to.
@@ -384,13 +424,13 @@ def vocabulary_of(context: dict[str, Any]) -> str:
     return ", ".join(words) if words else "no vocabulary recorded"
 
 
-def for_sampler(sampler: str, context: dict[str, Any], frame_count: int) -> str:
-    """The instruction for one (chunk, sampler) call.
+def for_sampler(question: str, context: dict[str, Any], frame_count: int) -> str:
+    """The instruction for one (chunk, sampler) call, given its question.
 
     No "focus on X" line: the schema this sampler is given has no field for
     anything else, which enforces what a sentence could only ask for.
     """
-    template = BY_SAMPLER.get(sampler, SCENE)
+    template = BY_SAMPLER.get(question, SCENE)
     return template.format(
         n=frame_count,
         span=span_of(context),

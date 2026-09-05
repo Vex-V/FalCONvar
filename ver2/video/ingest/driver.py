@@ -68,40 +68,61 @@ def report(result: Result, show: int = 6) -> None:
 def _build_samplers(args) -> list[Sampler]:
     """The --sampler list, as objects.
 
-    A name may carry a question after a colon -- `uniform:text` keeps a frame
-    every N seconds and has the describe stage ask the text question about it,
-    without paying EasyOCR to decide *when*. The sampler id then defaults to
-    the question, so `uniform:text` and a real `text` sampler in one run collide
-    on purpose: they would write to the same key in the manifest.
+    Any name may carry a question after a colon: `name:prompt` pairs a strategy
+    for choosing frames with a question to ask about them, and the two are
+    independent. `uniform:text` reads the screen on a stride without paying
+    EasyOCR to decide *when*; `yolo:overview` keeps frames where the people
+    changed and asks for prose rather than the structured people call. Unpaired,
+    the question is the sampler's own name, which is the default worth having.
+
+    The id is `name:prompt` for a pairing, so two samplers asking one question
+    stay distinct -- `yolo:overview` and `clip:overview` hold different frames
+    and must not share a manifest key.
     """
+    # Imported here, not at module scope. `ingest` does not depend on
+    # `describe` -- that edge runs the other way and `imports.py` enforces it --
+    # and the pipeline still does not: a sampler records the question as an
+    # opaque string. This is the CLI, a composition root, and the only thing it
+    # wants is the vocabulary to reject a typo against. `prompts` imports
+    # nothing and `vlm/__init__` resolves its client lazily, so reading it costs
+    # no model, no key and no openai import.
+    from ver2.video.describe.vlm import prompts
+
     rate = {"min_interval_s": args.min_interval, "max_per_chunk": args.max_per_chunk}
     tuned = {} if args.threshold is None else {"threshold": args.threshold}
+    # Left unset, the positional samplers keep the default stride of 1. Unlike
+    # `--threshold`, one flag for both is right here: `overview` is a prompt,
+    # not a cadence, so it holds no stride of its own to be overridden.
+    stride = {} if args.every_frames is None else {"every_n": args.every_frames}
     built = []
     for entry in [n.strip() for n in args.sampler.split(",") if n.strip()]:
         name, _, prompt = entry.partition(":")
-        if prompt and name not in ("uniform", "overview"):
+        # Validated, not fallen through. An unknown question would quietly get
+        # the scene one, so `yolo:overvew` would run, cost money and answer
+        # something else entirely.
+        if prompt and prompt not in prompts.QUESTIONS:
             raise SystemExit(
-                f"--sampler {entry!r}: only `uniform` takes a question after a "
-                "colon. A change sampler already implies its own question.")
+                f"--sampler {entry!r}: unknown question {prompt!r}; "
+                f"known: {', '.join(prompts.QUESTIONS)}")
+        ask = {"prompt": prompt} if prompt else {}
         if name == "uniform":
-            built.append(samplers_mod.build(
-                name, every_s=args.every_seconds, prompt=prompt or None, **rate))
-        elif name == "overview":
-            built.append(samplers_mod.build(name, every_s=args.every_seconds, **rate))
+            built.append(samplers_mod.build(name, **ask, **stride, **rate))
         elif name == "clip":
-            built.append(samplers_mod.build(name, mode=args.mode, **tuned, **rate))
+            built.append(samplers_mod.build(name, mode=args.mode, **ask,
+                                            **tuned, **rate))
         elif name == "objects":
             vocab = (
                 [v.strip() for v in args.vocabulary.split(",") if v.strip()]
                 if args.vocabulary else None
             )
-            built.append(samplers_mod.build(name, vocabulary=vocab, **tuned, **rate))
+            built.append(samplers_mod.build(name, vocabulary=vocab, **ask,
+                                            **tuned, **rate))
         else:
             # Thresholds are left unset unless given: the useful value differs
             # by an order of magnitude between samplers (0.96 frame-level,
             # 0.83 person-level, 0.30 object-level) because they compare
             # different things, so each class keeps its calibrated default.
-            built.append(samplers_mod.build(name, **tuned, **rate))
+            built.append(samplers_mod.build(name, **ask, **tuned, **rate))
     return built
 
 
@@ -119,11 +140,14 @@ def main() -> int:
     ap.add_argument("--scene-min-duration", type=float, default=5.0,
                     help="scene chunking: ignore cuts arriving sooner (default 5)")
     ap.add_argument("--sampler", default="uniform",
-                    help=f"comma-separated; known: {', '.join(samplers_mod.available())}")
-    ap.add_argument("--every-seconds", type=float, default=3.0,
-                    help="uniform/overview: seconds between kept frames "
-                         "(default 3). Media time, not a frame count, so the "
-                         "cadence does not move with --per-second")
+                    help=f"comma-separated; known: {', '.join(samplers_mod.available())}. "
+                         "Any may carry a question after a colon, e.g. "
+                         "`yolo:overview` or `uniform:text`")
+    ap.add_argument("--every-frames", type=int, default=None,
+                    help="uniform/overview: stride over the decimated stream, "
+                         "in frames (default 1, every decimated frame). A count "
+                         "of the frames the sampler was offered, so the cadence "
+                         "in seconds is this divided by --per-second")
     ap.add_argument("--threshold", type=float, default=None,
                     help="change samplers: per-sampler default if unset")
     ap.add_argument("--target-rate", type=float, default=None,

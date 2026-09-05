@@ -49,9 +49,14 @@ no CORS and no base URL to configure. Four tabs:
 
 - **Search** — a question in, moments back, with each account of the window and
   the frames that prove it. Click a thumbnail to enlarge.
-- **Process a video** — pick a file, pick samplers and a chunk grid, watch the
-  job progress live.
-- **Library** — what has been processed, and per-video Describe / Embed buttons.
+- **Process a video** — pick a file, tick **the picture** and/or **the
+  soundtrack**, and only the options that choice reads are shown. A grid policy
+  whose stream is switched off is dimmed rather than hidden, so *why* it is
+  unavailable stays on screen. Watch the job progress live.
+- **Digest** — the video-level aggregates, by tier.
+- **Library** — what has been processed, per-video Describe / Embed buttons,
+  and a download link for every document the video produced (plus **all ↓** for
+  the lot in one file).
 - **Jobs** — this session's runs, with each stage and any traceback.
 
 Everything the form offers comes from `GET /capabilities`, so registering a
@@ -74,7 +79,7 @@ Same command; the schema is at **<http://127.0.0.1:8000/docs>**. See
 # process a file
 curl -s -X POST localhost:8000/videos \
      -F file=@media/Chernobyl.mp4 \
-     -F samplers=uniform:overview -F chunking=vad -F every_seconds=5
+     -F samplers=uniform:overview -F chunking=vad -F every_frames=5
 # -> {"job": {"id": "..."}, "video_id": "Chernobyl", "poll": "/jobs/..."}
 
 curl -s localhost:8000/jobs/<id>                       # poll until state=done
@@ -97,7 +102,7 @@ GPU or paid inference. Search answers in the request.
 
 ```bash
 python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
-python -m ver2.driver media/x.mp4 --sampler uniform:overview --every-seconds 5 \
+python -m ver2.driver media/x.mp4 --sampler uniform:overview --every-frames 5 \
        --chunking vad --frame-store --sink file,supabase
 ```
 
@@ -105,13 +110,27 @@ python -m ver2.driver media/x.mp4 --sampler uniform:overview --every-seconds 5 \
 arithmetic and needs neither pass first; `scene` is the video pass; `vad` and
 `speaker` are the audio pass, and so make audio run first.
 
+Either stream can be switched off:
+
+```bash
+python -m ver2.driver media/x.mp4 --no-video --chunking vad     # sound alone
+python -m ver2.driver media/x.mp4 --no-audio --chunking scene   # picture alone
+```
+
+`--no-video` writes `timeline.json` and `transcript.json` and no manifest, so
+there is nothing for `describe` to do — a transcript is already the text that
+stage would produce. `embed`, `retrieve` and `aggregate` all work off it
+unchanged. The policy still has to be derivable from a stream that is running:
+`--no-video --chunking scene` and `--no-audio --chunking vad` are both refused
+before anything is decoded.
+
 ### One stage at a time
 
 ```bash
 # video: which frames are worth describing, and why
 python -m ver2.video.ingest.driver media/test1.mp4 --sampler clip --frame-store
 python -m ver2.video.ingest.driver v.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text --every-seconds 10
+python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text --every-frames 10
 python -m ver2.video.ingest.calibrate v.mp4 --sampler clip   # what a threshold costs
 
 # audio alone: transcript + speakers, no describe stage
@@ -124,9 +143,21 @@ python -m ver2.video.describe.driver --video-id <id> --follow            # tail 
 
 # embed, then ask
 python -m ver2.embed.driver out/<id>/descriptions.json      # picks up transcript.json too
+python -m ver2.embed.driver out/<id>/transcript.json        # audio-only: no descriptions exist
 python -m ver2.retrieve.driver "people at the checkout" --moments 3
 python -m ver2.retrieve.driver "..." --sampler transcript   # only what was said
 ```
+
+### Handing the output to something else
+
+```bash
+curl localhost:8000/videos/<id>/exports              # what exists, with URLs
+curl localhost:8000/videos/<id>/export > <id>.json   # all of it, one document
+curl localhost:8000/videos/<id>/aggregates/summary   # just the summary
+curl localhost:8000/videos/<id>/transcript           # just the transcript
+```
+
+Or read `out/<id>/` directly — the API serves the same files unchanged.
 
 ### Recovery — three files, no checkout needed
 

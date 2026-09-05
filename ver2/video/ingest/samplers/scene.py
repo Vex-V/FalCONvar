@@ -50,8 +50,9 @@ class ClipChangeSampler(Sampler):
         min_interval_s: float = 0.0,
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
+        prompt: Optional[str] = None,
     ) -> None:
-        super().__init__(min_interval_s, max_per_chunk, sampler_id)
+        super().__init__(min_interval_s, max_per_chunk, sampler_id, prompt)
         if mode not in ("reference", "consecutive"):
             raise ValueError("mode must be 'reference' or 'consecutive'")
         if not 0.0 <= threshold <= 1.0:

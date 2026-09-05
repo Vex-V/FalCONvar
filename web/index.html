@@ -16,6 +16,7 @@
 <nav id="tabs">
   <button data-tab="search" class="on">Search</button>
   <button data-tab="upload">Process a video</button>
+  <button data-tab="digest">Digest</button>
   <button data-tab="library">Library</button>
   <button data-tab="jobs">Jobs</button>
 </nav>
@@ -26,6 +27,10 @@
     <input id="q" type="search" placeholder="what are you looking for?"
            value="the moment the reactor exploded" autocomplete="off">
     <select id="scope"><option value="">every video</option></select>
+    <select id="unit">
+      <option value="moments">moments</option>
+      <option value="videos">whole videos</option>
+    </select>
     <select id="sampler">
       <option value="">every question</option>
     </select>
@@ -39,6 +44,30 @@
   <div id="results"></div>
 </section>
 
+<!-- ------------------------------------------------------------- digest -->
+<section id="digest" class="tab">
+  <form id="digest-form">
+    <select id="digest-video"></select>
+    <select id="digest-tier">
+      <option value="free">free &mdash; arithmetic, no model</option>
+      <option value="local">local &mdash; adds GPU models</option>
+      <option value="llm">llm &mdash; adds paid calls</option>
+    </select>
+    <label class="row check" style="margin:0">
+      <input id="digest-force" type="checkbox">
+      <span>rebuild unchanged</span>
+    </label>
+    <button type="submit">Build</button>
+  </form>
+  <p class="hint">
+    What retrieval is bad at: how many, who most, what overall, which part is
+    unlike the rest. Everything at or below the chosen tier runs, cheapest
+    first, and anything whose inputs have not changed is left alone.
+  </p>
+  <div id="digest-job"></div>
+  <div id="digest-out"></div>
+</section>
+
 <!-- ------------------------------------------------------------- upload -->
 <section id="upload" class="tab">
   <form id="upload-form">
@@ -47,7 +76,23 @@
       <span id="file-name">choose a media file…</span>
     </label>
 
-    <fieldset>
+    <fieldset id="what">
+      <legend>What to process</legend>
+      <label class="row check">
+        <input id="use_video" type="checkbox" checked>
+        <span><b>the picture</b> &mdash; sample frames and describe them</span>
+      </label>
+      <label class="row check">
+        <input id="use_audio" type="checkbox" checked>
+        <span><b>the soundtrack</b> &mdash; transcribe it, and say who spoke</span>
+      </label>
+      <p class="hint" id="what-note">
+        Either alone, or both onto one shared chunk grid. The options below are
+        the ones your choice actually reads.
+      </p>
+    </fieldset>
+
+    <fieldset data-needs="video">
       <legend>Samplers &mdash; which frames are worth describing, and why</legend>
       <div id="samplers" class="chips"></div>
       <label class="row">
@@ -60,13 +105,28 @@
         matched one found 5.1.
       </p>
       <label class="row">
-        <span>uniform / overview cadence (s)</span>
-        <input id="every_seconds" type="number" value="5" min="0.5" step="0.5">
+        <span>uniform / overview stride (frames)</span>
+        <input id="every_frames" type="number" placeholder="1 (every frame)"
+               min="1" step="1">
       </label>
+      <p class="hint">
+        A stride over the <em>decimated</em> stream, not over seconds: a
+        sampler counts the frames it was offered, and how many of those there
+        are per second is <code>per_second</code>&rsquo;s business. This form
+        leaves that at 1, so here a stride of N is one frame every N seconds.
+        Blank means 1 &mdash; every decimated frame &mdash; for
+        <code>uniform</code> and <code>overview</code> alike:
+        <code>overview</code> is a different <em>question</em>, not a
+        different cadence.
+      </p>
     </fieldset>
 
     <fieldset>
       <legend>Chunk grid &mdash; which modality decides the boundaries</legend>
+      <p class="hint">
+        One grid per run. A policy whose stream is switched off is disabled
+        here rather than refused after the upload.
+      </p>
       <div id="chunking" class="chips radio"></div>
       <label class="row">
         <span>chunk length / maximum (s)</span>
@@ -74,16 +134,27 @@
       </label>
     </fieldset>
 
-    <fieldset>
+    <fieldset data-needs="audio">
       <legend>Audio</legend>
       <label class="row check">
-        <input id="use_audio" type="checkbox" checked>
-        <span>transcribe and diarize the soundtrack</span>
+        <input id="diarize" type="checkbox" checked>
+        <span>say who spoke &mdash; diarize as well as transcribe</span>
       </label>
       <p class="hint">
-        <code>vad</code> and <code>speaker</code> grids are derived from the
-        audio, so they need this on.
+        Whisper does not know who spoke and pyannote does not know what was
+        said; they are separate passes joined by word midpoints. Without a
+        diarizer every segment keeps <code>speaker: null</code>, which is
+        truthful &mdash; labelling everything <code>SPEAKER_00</code> is not.
+        A <code>speaker</code> grid needs this on.
       </p>
+      <label class="row">
+        <span>transcriber</span>
+        <select id="transcriber"></select>
+      </label>
+      <label class="row">
+        <span>language (blank detects)</span>
+        <input id="language" placeholder="en">
+      </label>
     </fieldset>
 
     <fieldset>
@@ -92,7 +163,7 @@
         <input id="sink_supabase" type="checkbox">
         <span>also write to Postgres (a local copy is always written)</span>
       </label>
-      <label class="row check">
+      <label class="row check" data-needs="video">
         <input id="frame_store" type="checkbox" checked>
         <span>keep the sampled frames, so describe and the UI can show them</span>
       </label>

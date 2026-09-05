@@ -39,6 +39,12 @@ def _units_for(args) -> tuple[list, list[str]]:
     if args.document:
         path = Path(args.document)
         document = json.loads(path.read_text(encoding="utf-8"))
+        # An audio-only run produces no descriptions at all, so the document
+        # named may be the transcript itself. Both are documents with a
+        # video_id and chunks; which one this is decides which reader runs.
+        if path.name == "transcript.json" or "transcript" in document:
+            units += units_mod.from_transcript(document)
+            return units, [f"{len(units)} transcript chunks"]
         units += units_mod.from_document(document)
         sources.append(f"{len(units)} descriptions")
         # The transcript beside it, unless refused. Announced rather than
@@ -53,11 +59,16 @@ def _units_for(args) -> tuple[list, list[str]]:
         return units, sources
 
     client = db.client_from_env()
-    manifest = db.fetch_manifest(client, args.video_id)
-    rows = db.fetch_descriptions(client, args.video_id)
-    bounds = {c["chunk_id"]: (c["start_ts"], c["end_ts"]) for c in manifest["chunks"]}
-    units += units_mod.from_rows(args.video_id, rows, bounds)
-    sources.append(f"{len(units)} descriptions")
+    # No manifest means no video pass ran, which means there are no
+    # descriptions to place either -- so this is an audio-only video rather
+    # than a missing one, and the transcript below is the whole answer.
+    manifest = db.fetch_manifest(client, args.video_id, required=False)
+    if manifest:
+        rows = db.fetch_descriptions(client, args.video_id)
+        bounds = {c["chunk_id"]: (c["start_ts"], c["end_ts"])
+                  for c in manifest["chunks"]}
+        units += units_mod.from_rows(args.video_id, rows, bounds)
+        sources.append(f"{len(units)} descriptions")
     if not args.no_transcript:
         document = db.fetch_transcript(client, args.video_id)
         if document:

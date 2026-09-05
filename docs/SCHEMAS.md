@@ -35,6 +35,7 @@ one thing to inspect, copy or delete.
 media ──video──> manifest.json ──describe──> descriptions.json ──┐
    │         └──> store/            (reads the store)            ├─embed─> vectors
    └────audio──> transcript.json ───────────────────────────────┘
+                                            └──aggregate──> aggregates/*.json
 ```
 
 **Records**: the manifest, the descriptions, and a transcript's `segments`.
@@ -205,15 +206,19 @@ prose that gets embedded; the rest is what a filter can use.
 | `text` | `visible_text[{text, context}]` |
 | `overview` | **none** — summary only |
 
-**The question is not always the sampler.** `prompts.question_for` reads
+**The question is not the sampler.** `prompts.question_for` reads
 `config.samplers[i].prompt` from the manifest and falls back to the sampler id,
-so a positional sampler can stand in for one it is not: `uniform:text` keeps a
-frame every N seconds and asks the *text* question about it, without paying
-EasyOCR at ingest to decide when. Because the prompt lives in the manifest's
+so any sampler can be paired with any question: `uniform:text` keeps every Nth
+decimated frame and asks the *text* question about it without paying EasyOCR at
+ingest to decide when, and `yolo:overview` asks for prose about frames the
+people sampler chose. The sampler id for a pairing is `name:prompt`, so two
+samplers asking one question stay distinct. `prompt` is absent from the config
+entirely when nothing is paired. Because the prompt lives in the manifest's
 config it is inside `manifest_fingerprint`, so changing it invalidates
 describe's resume the way editing `vlm/prompts.py` does.
 
-**`overview` owns no keys**, so it takes none from the scene question and costs
+**`overview` owns no keys** — it is a question, not a sampler — so it takes
+none from the scene question and costs
 a `clip` running beside it nothing. It also overrides the "at least 150 words"
 instruction every other prompt carries: that rule exists because the summary is
 what gets embedded and its length is a retrieval parameter, but an overview is
@@ -336,7 +341,7 @@ embedding anything. It is **not** what retrieval searches: a transcript chunk
 reaches retrieval by being embedded into `chunk_embeddings` with
 `sampler = 'transcript'`, which needs no schema change there because that
 table stores text with a time span and a transcript chunk is exactly that.
-## 7. Supabase — six tables
+## 7. Supabase — eight tables
 
 DDL in [`schema.sql`](../schema.sql), idempotent and safe to re-run.
 
@@ -378,7 +383,7 @@ means exact cosine search and no ANN index, which is correct at this scale.
 `search_embeddings()` does vector + full-text and fuses them with RRF.
 
 **It holds both modalities.** A description lands here with `sampler` set to the
-question that produced it (`clip`, `yolo`, `overview`, …); a transcript chunk
+question that produced it (`clip`, `yolo`, `uniform:overview`, …); a transcript chunk
 lands here with `sampler = 'transcript'`. No schema change was needed for the
 audio side, because this table stores text with a time span and a transcript
 chunk is exactly that -- which is the evidence the `embed`/`retrieve` split was
@@ -415,6 +420,114 @@ the description was read from the file or from Postgres. Measured on test1 over
 
 ---
 
+## 10. `aggregates/<name>.json` — the video-level answers
+
+One file per aggregator, all the same envelope:
+
+```json
+{ "aggregate_version": 1,
+  "aggregate_id": "summary",
+  "video_id": "Chernobyl",
+  "tier": "llm",
+  "depends_on": [],
+  "inputs_fingerprint": "62f75098b1adfb39",
+  "config": { "id": "summary", "tier": "llm",
+              "params": { "model": "gpt-5.4-mini", "batch": 25 } },
+  "elapsed_s": 8.41,
+  "payload": { … } }
+```
+
+`payload` is the only part that differs by aggregator. `inputs_fingerprint`
+hashes the descriptions and transcript the aggregate was built from, so
+re-running is a comparison rather than a re-spend: an aggregate over unchanged
+inputs cannot have changed either, and the LLM tier is the most expensive no-op
+available here.
+
+`tier` is `free` (arithmetic, no model, no network), `local` (a GPU model) or
+`llm` (paid calls). A run asks for a ceiling and everything at or below it runs,
+cheapest first — so a run that dies partway has produced the cheap results
+rather than none.
+
+### `summary` — reduced hierarchically, stored flat
+
+A long video's chunk lines run past any context, and a model handed all of them
+writes about the beginning and the end. So the summary folds:
+
+```
+chunk lines ──25 at a time──► leaf summaries ──25 at a time──► … ──► FINAL call
+                 layer 1                        layer 2              "summary"
+```
+
+`reduction_levels` records how many folds happened, which is how much
+paraphrase sits between the descriptions and the final text: `0` means one call
+saw everything, `2` means it saw summaries of summaries. Videos at or below one
+batch take the single-call path, because a tree over four lines adds a round
+trip and a layer of paraphrase for nothing — then `layers` is `[]`, which says
+truthfully that no intermediate summary ever existed. Measured: Chernobyl, 14
+chunks, `reduction_levels: 0`.
+
+**Every layer is kept.** Each part carries the chunk ids and the time span it
+covers, resolved from the timeline rather than carried along as numbers, so it
+agrees with the grid by construction. A leaf summary is the only account of the
+video at that granularity — between one chunk and the whole thing — and it has
+already been paid for.
+
+```json
+{ "summary": "…122 words…",
+  "key_points": ["…", "…"],
+  "topics": ["chernobyl", "nuclear disaster", "rbmk reactor"],
+  "based_on": ["overview", "transcript"],
+  "chunks": 14,
+  "reduction_levels": 2,
+  "layers": [
+    { "level": 1, "kind": "leaf", "parts": [
+        { "text": "The video opens with a dark, grainy title card…",
+          "chunk_ids": [0, 2], "start_ts": 0.0, "end_ts": 27.428 },
+        { "text": "The video shows a 3D animated RBMK-1000 reactor…",
+          "chunk_ids": [3, 5], "start_ts": 27.428, "end_ts": 74.922 } ] },
+    { "level": 2, "kind": "merge", "parts": [
+        { "text": "The video begins with a static-filled title card…",
+          "chunk_ids": [0, 8], "start_ts": 0.0, "end_ts": 127.391 } ] } ] }
+```
+
+The parts of a layer tile the video: contiguous, no gaps, no overlaps, and the
+last one reaches the same end as the timeline.
+
+`based_on` names the samplers whose descriptions fed it — an audio-only video
+reads `["transcript"]`, and the summary describes the *subject* rather than the
+artifact as a result.
+
+### `video_embeddings` — one vector per video
+
+**Only `summary` is embedded, and only its final text.** Everything else here
+is statistical, and a vector of a count answers nothing: "how many people" is a
+number to read, not a direction in space. `chapters` carries a summary per
+chapter and those are not embedded either — they are a table of contents, read
+in full rather than searched.
+
+The `layers` are stored but **not embedded**, and that is not the same
+decision. They paraphrase material the chunk vectors already hold, so indexing
+them would return the same moment two or three times over under different
+wordings — the failure the per-chunk aggregation guards against, reintroduced
+one level up.
+
+The embedded text is `summary` + `key points:` + `topics:` joined, for the same
+reason a description embeds its structured fields: every summary of every video
+repeats the same shape, and the distinctive content is in the lists.
+
+| | `chunk_embeddings` | `video_embeddings` |
+|---|---|---|
+| unit | one (chunk, sampler) | one video |
+| answers | *which twenty seconds* | *which video* |
+| written by | `embed` | `aggregate`, after `summary` |
+| searched by | `search_embeddings` | `search_videos` |
+
+Two tables rather than one because they are different units. Folding them
+together would put a whole-video "moment" beside real ones, competing on a
+scale it does not share.
+
+---
+
 ## The keys that tie it together
 
 | key | where | what it protects against |
@@ -426,6 +539,8 @@ the description was read from the file or from Postgres. Measured on test1 over
 | `model` (incl. `prompts`) | descriptions | resuming across a model or prompt change |
 | `text_hash` | embeddings | a vector built from text since rewritten |
 | `embedder` / collection name | embeddings | ranking 768-wide vectors against 1536-wide |
+| `inputs_fingerprint` | aggregates | re-spending the LLM tier on unchanged inputs |
+| `timeline_fingerprint` | timeline ↔ manifest ↔ transcript | the two passes silently cutting on different boundaries |
 
 
 ---

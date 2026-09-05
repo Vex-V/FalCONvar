@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -85,10 +85,14 @@ def health() -> dict[str, Any]:
 @app.post("/videos", status_code=202)
 async def upload(
     file: UploadFile = File(..., description="the media file"),
-    samplers: str = Form("clip", description="comma-separated; `uniform:text` allowed"),
+    use_video: bool = Form(True, description="describe the picture"),
+    samplers: str = Form("clip", description="comma-separated; `uniform:text` "
+                                             "allowed. Ignored without video"),
     chunking: str = Form("uniform"),
     chunk_duration: float = Form(20.0),
-    every_seconds: float = Form(3.0),
+    every_frames: Optional[int] = Form(None, description="uniform/overview: "
+                                        "stride over the decimated stream, in "
+                                        "frames. Unset leaves each its own"),
     vocabulary: Optional[str] = Form(None, description="objects: the class list"),
     threshold: Optional[float] = Form(None),
     per_second: float = Form(1.0),
@@ -111,19 +115,30 @@ async def upload(
     with target.open("wb") as out:
         shutil.copyfileobj(file.file, out)
 
-    names = [s.strip() for s in samplers.split(",") if s.strip()]
-    try:
-        built = service.build_samplers(names, {
-            "every_seconds": every_seconds, "vocabulary": vocabulary,
-            "threshold": threshold})
-    except (ValueError, KeyError) as exc:
-        target.unlink(missing_ok=True)
-        raise HTTPException(422, str(exc)) from None
+    # Samplers are the video pass's configuration, so they are built only when
+    # there is one. Validating them anyway would reject an audio-only run for
+    # the default value of a field it never reads.
+    built = []
+    if use_video:
+        names = [s.strip() for s in samplers.split(",") if s.strip()]
+        try:
+            built = service.build_samplers(names, {
+                "every_frames": every_frames, "vocabulary": vocabulary,
+                "threshold": threshold})
+        except (ValueError, KeyError) as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, str(exc)) from None
+        if not built:
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, {"problems": ["name at least one sampler, "
+                                                   "or turn the video pass off"]})
 
     options = orchestrate.Options(
         media=target, video_id=vid, chunking=chunking,
-        chunk_duration=chunk_duration, samplers=built, per_second=per_second,
-        frame_store=frame_store, use_audio=use_audio, transcriber=transcriber,
+        chunk_duration=chunk_duration, use_video=use_video, samplers=built,
+        per_second=per_second,
+        frame_store=frame_store and use_video,
+        use_audio=use_audio, transcriber=transcriber,
         diarizer=diarizer, language=language,
         sinks=[s.strip() for s in sinks.split(",") if s.strip()])
     problems = orchestrate.validate(options)
@@ -192,15 +207,95 @@ def list_videos() -> dict[str, Any]:
     return {"videos": service.videos()}
 
 
-@app.get("/videos/{video_id}/{name}")
-def artifact(video_id: str, name: str) -> Any:
-    if name not in ("manifest", "timeline", "descriptions", "transcript"):
-        raise HTTPException(404, "expected manifest, timeline, descriptions "
-                                 "or transcript")
+class AggregateRequest(BaseModel):
+    video_id: str
+    tier: str = Field("free", description="free | local | llm; runs everything "
+                                          "at or below it, cheapest first")
+    aggregators: Optional[list[str]] = Field(
+        None, description="explicit list, overriding tier")
+    sinks: list[str] = Field(default_factory=lambda: ["file"])
+    force: bool = Field(False, description="rebuild even where inputs are unchanged")
+
+
+@app.post("/aggregate", status_code=202)
+def aggregate(request: AggregateRequest) -> dict[str, Any]:
+    """Queue a video-level pass over what the chunk stages wrote.
+
+    Queued rather than immediate because the tiers differ by orders of
+    magnitude: `free` is arithmetic and answers in milliseconds, `llm` is
+    several paid calls. One endpoint for both, and the job is what makes that
+    honest.
+    """
+    job = runner.submit("aggregate", request.video_id, lambda j: service.aggregate(
+        request.video_id, request.tier, request.aggregators, request.sinks,
+        request.force, on_progress=progress(j)))
+    return {"job": job.as_dict(), "poll": f"/jobs/{job.id}"}
+
+
+@app.get("/videos/{video_id}/exports")
+def exports(video_id: str) -> dict[str, Any]:
+    """What this video can hand to another service, and where each thing is.
+
+    The discovery route for a consumer that is not this browser: it lists the
+    documents that actually exist, so an audio-only video advertises no
+    manifest rather than offering a 404.
+    """
     try:
-        return service.artifact(video_id, name)
+        return service.exports(video_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from None
+
+
+@app.get("/videos/{video_id}/export")
+def export(video_id: str, download: bool = False) -> Any:
+    """Everything the video produced, as one document.
+
+    `?download=1` sets a filename, for a browser saving it rather than a
+    program reading it.
+    """
+    try:
+        payload = service.bundle(video_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return _maybe_download(payload, f"{video_id}.json", download)
+
+
+def _maybe_download(payload: Any, filename: str, download: bool) -> Any:
+    """The same JSON either way; a header is the only difference.
+
+    Content negotiation would be the tidier answer, but a browser cannot set
+    an Accept header on a plain link, and a link is what the Library tab has.
+    """
+    if not download:
+        return payload
+    return JSONResponse(payload, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/videos/{video_id}/aggregates")
+def aggregates(video_id: str) -> dict[str, Any]:
+    """Everything this video knows about itself above the chunk level."""
+    return {"video_id": video_id, "aggregates": service.aggregates(video_id)}
+
+
+@app.get("/videos/{video_id}/aggregates/{name}")
+def one_aggregate(video_id: str, name: str, download: bool = False) -> Any:
+    found = service.aggregates(video_id).get(name)
+    if found is None:
+        raise HTTPException(404, f"{video_id} has no {name} aggregate")
+    return _maybe_download(found, f"{video_id}-{name}.json", download)
+
+
+@app.get("/videos/{video_id}/{name}")
+def artifact(video_id: str, name: str, download: bool = False) -> Any:
+    if name not in service.ARTIFACTS:
+        raise HTTPException(404, "expected one of "
+                                 + ", ".join(service.ARTIFACTS))
+    try:
+        payload = service.artifact(video_id, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return _maybe_download(payload, f"{video_id}-{name}.json", download)
 
 
 @app.get("/videos/{video_id}/frames/{index}")
@@ -256,3 +351,27 @@ if WEB.is_dir():
     @app.get("/", include_in_schema=False)
     def home() -> RedirectResponse:
         return RedirectResponse("/app/")
+
+
+class VideoSearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+    embedder: Optional[str] = None
+    model: Optional[str] = None
+
+
+@app.post("/search/videos")
+def search_videos(request: VideoSearchRequest) -> dict[str, Any]:
+    """Which video, rather than which moment.
+
+    Ranks whole-video summaries. A chunk that mentions reactors is not the same
+    thing as a video that is about them, and `/search` answers only the first
+    -- which is why this is a separate endpoint returning a different unit
+    rather than a flag on that one.
+    """
+    try:
+        found = service.search_videos(request.query, request.limit,
+                                      request.embedder, request.model)
+    except Exception as exc:                            # noqa: BLE001
+        raise HTTPException(502, f"video search failed: {exc}") from None
+    return {"query": request.query, "videos": found}

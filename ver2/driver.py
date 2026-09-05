@@ -44,10 +44,14 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--scene-min-duration", type=float, default=5.0)
 
     video = ap.add_argument_group("video")
+    video.add_argument("--no-video", action="store_true",
+                       help="skip the picture entirely: transcribe the "
+                            "soundtrack and write no manifest")
     video.add_argument("--per-second", type=float, default=1.0)
     video.add_argument("--sampler", default="clip")
-    video.add_argument("--every-seconds", type=float, default=3.0,
-                       help="uniform/overview: seconds between kept frames")
+    video.add_argument("--every-frames", type=int, default=None,
+                       help="uniform/overview: stride over the decimated "
+                            "stream, in frames (default 1)")
     video.add_argument("--threshold", type=float, default=None)
     video.add_argument("--vocabulary", default=None)
     video.add_argument("--mode", default="reference")
@@ -80,7 +84,9 @@ def options_from(args) -> orchestrate.Options:
         min_chunk=args.min_chunk, silence=args.silence,
         scene_threshold=args.scene_threshold,
         scene_min_duration=args.scene_min_duration,
-        samplers=_build_samplers(args), per_second=args.per_second,
+        use_video=not args.no_video,
+        samplers=() if args.no_video else _build_samplers(args),
+        per_second=args.per_second,
         frame_store=bool(args.frame_store), store_scope=args.store_scope,
         use_audio=not args.no_audio, transcriber=args.transcriber,
         audio_model=args.audio_model, language=args.language,
@@ -112,6 +118,8 @@ def report(stage: str, detail: dict) -> None:
     elif stage == "grid":
         print(f"        {detail['chunks']} chunks from {detail['policy']}, "
               f"fingerprint {detail['fingerprint']}")
+    elif stage == "video" and detail.get("why", "").startswith("skipped"):
+        print(f"{gap}[video] {detail['why']}", flush=True)
     elif stage == "video" and "why" in detail:
         print(f"{gap}[video] {detail['why']}", flush=True)
     elif stage == "video":
