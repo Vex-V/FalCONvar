@@ -11,7 +11,7 @@ Everything under `ver2/`. Version 1 has been deleted.
 ## Layout
 
 ```
-web/           the browser client: one page, no build step
+web/           the browser client: one page, no build step (DEPRECATED)
   index.html     the form, the search box, the moment cards
   app.js         fetch + render; everything offered comes from /capabilities
   style.css
@@ -82,11 +82,19 @@ ver2/
     supabase_manifest.py  STANDALONE: video id -> manifest file (urllib only)
     supabase_description.py  STANDALONE: video id -> description document
   imports.py     import everything, exercise it, report what loaded
-eval/
+eval/            measurement harness, run from the checkout; not installed
   queries.py     literal/paraphrase query pairs, disjointness verified
   render_ab.py   A/B a change to what gets embedded, paired bootstrap
   retrieval.py   the shipped path, with and without its lexical half
   aggregation.py how a chunk scores from its descriptions' ranks
+  results/       what those runs produced; reproducible, so gitignored
+db/schema.sql    runnable DDL: every table, function and RLS policy
+docs/            ROUTES, RUN, SCHEMAS
+data/            EVERYTHING a run writes; gitignored
+  out/<id>/      manifest, timeline, store, descriptions, transcript, aggregates
+  uploads/       what the API parked until the run read it
+weights/         detector and embedder checkpoints; a cache, not output
+pyproject.toml   declares the packages so `python -m` works from anywhere
 ```
 
 15650 lines, 132 files.
@@ -100,13 +108,13 @@ python -m ver2.video.ingest.driver video.mp4 --sampler uniform,clip,yolo,objects
 python -m ver2.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
 python -m ver2.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
 python -m ver2.video.ingest.calibrate video.mp4 --sampler clip
-python -m ver2.video.describe.driver out/<id>/manifest.json     # describe -> json
+python -m ver2.video.describe.driver data/out/<id>/manifest.json     # describe -> json
 python -m ver2.video.describe.driver --video-id <id> --sink file,supabase
 python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live ingest
-python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
+python -m ver2.video.describe.driver data/out/<id>/manifest.json --describer openai
        --model gpt-5.4-mini --sink file,supabase          # costs money
-python -m ver2.embed.driver out/<id>/descriptions.json     # -> pgvector
-python -m ver2.embed.driver out/<id>/transcript.json      # audio-only video
+python -m ver2.embed.driver data/out/<id>/descriptions.json     # -> pgvector
+python -m ver2.embed.driver data/out/<id>/transcript.json      # audio-only video
 python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
 python -m ver2.retrieve.driver "people at the checkout" --moments 3
 python -m ver2.retrieve.driver "..." --sampler yolo        # one question only
@@ -114,7 +122,7 @@ python -m ver2.retrieve.driver "..." --index qdrant        # dense only, says so
 python -m ver2.recovery.supabase_manifest --list          # what is published
 python -m ver2.recovery.supabase_manifest <id>            # -> <id>.json
 python -m ver2.recovery.supabase_description <id>         # -> descriptions json
-python -m ver2.recovery.recreate out/<id>/manifest.json --out rebuilt/
+python -m ver2.recovery.recreate data/out/<id>/manifest.json --out rebuilt/
 python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
 python -m ver2.driver media/x.mp4 --no-video --chunking vad    # sound alone
 python -m ver2.driver media/x.mp4 --no-audio --chunking scene  # picture alone
@@ -128,21 +136,22 @@ python -m uvicorn api.main:app --port 8000   # / for the site, /docs for the sch
 python -m ver2.aggregate.driver <id> --tier free   # no model, no network
 python -m ver2.aggregate.driver <id> --tier llm    # + summary, chapters, events
 python -m ver2.imports                      # after ANY install
-python -m eval.queries out/<id>/descriptions.json   # -> eval/query_pairs.json
+python -m eval.queries data/out/<id>/descriptions.json   # -> eval/results/query_pairs.json
 python -m eval.render_ab                    # compare renderings, paired CI
 python -m eval.retrieval                    # hybrid vs dense on the shipped path
 python -m eval.aggregation                  # chunk scoring, count-bias check
-# schema.sql       runnable DDL: every table, function and RLS policy
+# db/schema.sql       runnable DDL: every table, function and RLS policy
 # docs/SCHEMAS.md  what every field means, local JSON and Postgres alike
 # docs/ROUTES.md   the HTTP surface and the reasoning behind it
 # docs/RUN.md      how to run the web app, the API and every CLI
 ```
 
-**Everything a video produces lives under `out/<video-id>/`** — `manifest.json`,
+**Everything a run writes lives under `data/`, and everything one video
+produces under `data/out/<video-id>/`** — `manifest.json`,
 `store/`, `descriptions.json`. Grouped by video rather than by artifact type, so
 one video's whole output is one thing to inspect, copy or delete, and later
 stages add to it without a new top-level directory. Bare `--frame-store` uses
-`out/<video-id>/store/`; an explicit path is used exactly as given.
+`data/out/<video-id>/store/`; an explicit path is used exactly as given.
 
 ---
 
@@ -665,6 +674,14 @@ seconds where describing costs inference. Instead each row carries
 and store being moved, and changes when the sampling changes. Staleness is a
 comparison, not a deletion.
 
+**The web client is deprecated, not deleted.** Development is on the
+pipeline and the API; the page is frozen against what `/capabilities`
+published when it was last touched, so an option missing there is a gap in
+the page rather than in the pipeline. It stays because two of the faults
+recorded here -- `#lightbox`, and `queue()` detaching a live progress box --
+were findable only in a real browser, and because watching a job run is
+still the fastest way to see the whole flow at once.
+
 **The site is served by the API, at `/app` rather than `/`.** Same origin, so
 the browser client needs no CORS and no base URL -- but not the root, because
 `GET /videos` is an API route and a site mounted there would shadow it. The
@@ -826,7 +843,7 @@ summary per chapter and those are a table of contents, read in full rather than
 searched.
 
 **Job records die with the process; artifacts do not.** `GET /jobs` says so.
-`GET /videos` reads the `out/` directory rather than remembering, so a
+`GET /videos` reads the `data/out/` directory rather than remembering, so a
 restarted server still knows everything it produced.
 
 **One chunk grid per run, and either modality may decide it.** `timeline.py`
@@ -944,6 +961,25 @@ than on a cliff. Whisper returns zero segments there and names the language
 so the guard exists to skip a model load and to make "no speech" a reported
 fact, not to make a fine judgement.
 
+**Paths are anchored to the checkout, never to the working directory.**
+`ver2/paths.py` imports nothing, like `timeline.py`, and every stage reads
+`OUT_ROOT` from it rather than writing `Path("out")` a ninth time. That was not
+cosmetic: `python -m ver2.…` only worked from the root, which is why each stage
+driver carries a `sys.path.insert`. Now a run from anywhere writes to the same
+place. `FALCONVAR_DATA` moves the lot and `FALCONVAR_DATA=.` restores the old
+root layout -- a *process* variable, not a `.env` key, because `.env` is read by
+`load_env()` at the top of an entry point, which is later than these constants
+resolve, and a path that moved depending on how early it was read would be
+worse than one that cannot go in `.env` at all.
+
+The bug this fixed: `WEIGHTS_DIR` was `Path(__file__).parents[3] / "weights"`,
+which resolves to `ver2/video/weights` -- a directory that has never existed. So
+`weight_path()` fell through to the bare filename every time and ultralytics
+downloaded wherever its own settings pointed, while the comment above it
+explained that weights are kept in one place so they are not scattered. Nothing
+failed and nothing reported it. A parent count is a fact about a file's depth in
+the tree, which is exactly the fact a reorganisation changes.
+
 **`media_ts` is the only clock a decision may use.** Never wall time, never
 frame counts.
 
@@ -1042,7 +1078,7 @@ uses -- a word cannot belong to two speakers) and `.speaker_embeddings`, a
 256-d vector per speaker, which is the only route to identity across files
 since labels are per-run clusterings.
 
-**`schema.sql` could not repair its own `fts` column, and now can.** `add
+**`db/schema.sql` could not repair its own `fts` column, and now can.** `add
 column if not exists fts` is a no-op when the column exists, so an `fts`
 generated by an earlier version of the file — over `content` alone, before the
 structured values were folded in — survived a re-run untouched. Nothing
@@ -1106,5 +1142,15 @@ frame count) — `--force` overrides.
   matches everything. Needs an `enum` on the fields meant to be filtered.
 - **Live sources.** `Frame.gap_before` and `Frame.discontinuity` are the seams,
   always `0`/`False` for a file.
+- **Entity narratives.** v0 linked the same person or object across chunks --
+  clustering the specialists' per-entity embeddings -- and then asked the LLM
+  for one narrative per entity: how to recognise them, what they did across the
+  whole video, in order. Nothing in `aggregate/` does this. It is the one
+  question the current aggregators cannot answer, because every one of them
+  reads chunks as independent documents, and `yolo`/`objects` already return
+  one bound object per entity, which is the input it needs. The v0 code
+  (`v0aggregators/entities.py`, `object_entities.py`) was deleted in the root
+  cleanup rather than ported; it is in git history if the prompts are worth
+  rereading.
 - **Tests.** There is no test suite; verification is `imports.py`, recreate's
   byte-comparison, and the retrieval measurements recorded above.

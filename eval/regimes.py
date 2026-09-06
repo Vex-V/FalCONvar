@@ -48,7 +48,7 @@ def probe(index, emb, cfg, query, truth):
 
 def main():
     db.load_env()
-    pairs = json.loads(Path("eval/query_pairs.json").read_text(encoding="utf-8"))
+    pairs = json.loads(Path("eval/results/query_pairs.json").read_text(encoding="utf-8"))
     emb = embedders_mod.build("openai")
     index = index_mod.build(["pgvector"])
     cfg = emb.config()
@@ -88,8 +88,8 @@ def main():
          sorted(lex_only, key=lambda r: (score(r["dense"]), -score(r["lexical"]))))
     show("BOTH agree at rank 1", both)
     show("HYBRID beats either half alone", lifted)
-    Path("eval/regimes.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    print("\n-> eval/regimes.json")
+    Path("eval/results/regimes.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    print("\n-> eval/results/regimes.json")
 
 
 if __name__ == "__main__":

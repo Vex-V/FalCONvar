@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
+from ver2 import paths
 from . import build, resolve_order
 from .base import Context
 
@@ -107,6 +108,6 @@ def aggregate(
     return result
 
 
-def context_for(video_id: str, out_root: Path = Path("out")) -> Context:
+def context_for(video_id: str, out_root: Path = paths.OUT_ROOT) -> Context:
     """The context for one video, read off disk."""
     return Context.from_dir(video_id, Path(out_root) / video_id)

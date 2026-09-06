@@ -20,6 +20,7 @@ from pathlib import Path
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from ver2 import paths
 from ver2 import db, timeline as timeline_mod
 from ver2.audio import diarize as diarize_mod
 from ver2.audio import segment as segment_mod
@@ -97,7 +98,7 @@ def main() -> int:
 
     db.load_env()
     video_id = args.video_id or args.media.stem
-    out = args.out or Path("out") / video_id / "transcript.json"
+    out = args.out or paths.OUT_ROOT / video_id / "transcript.json"
 
     info = source.probe(args.media)
     if not info.has_audio:

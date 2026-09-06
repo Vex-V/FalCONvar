@@ -262,3 +262,18 @@ details.layer > summary:hover { color: var(--ink); }
 .layer-part { margin: .6rem 0 .6rem .8rem; border-left: 2px solid var(--line); padding-left: .7rem; }
 .layer-part .ts { display: block; font-size: .7rem; color: var(--dim); font-variant-numeric: tabular-nums; }
 .layer-part p { margin: .2rem 0 0; font-size: .82rem; }
+
+/* --------------------------------------------------------------- deprecated
+   The page still works; it is simply no longer the surface being developed.
+   Loud enough that nobody reports a missing option here as a missing feature,
+   quiet enough that watching a job run is still pleasant. */
+#deprecated {
+  background: color-mix(in srgb, var(--warm) 14%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--warm) 45%, var(--line));
+  color: var(--ink);
+  padding: 0.6rem 1rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+#deprecated strong { color: var(--warm); }
+#deprecated a { color: var(--accent); }

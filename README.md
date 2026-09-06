@@ -87,7 +87,8 @@ cp .env.example .env                   # keys for OpenAI and Supabase
 python -m uvicorn api.main:app --port 8000
 ```
 
-Then <http://localhost:8000/app> for the browser client, or
+Then <http://localhost:8000/app> for the browser client (deprecated; see
+below), or
 <http://localhost:8000/docs> for the API schema.
 
 From the command line, one file end to end:
@@ -101,14 +102,14 @@ python -m ver2.aggregate.driver x --tier llm
 python -m ver2.retrieve.driver "people at the checkout" --moments 3
 ```
 
-Everything one file produces lives under `out/<video-id>/`. Grouped by video
+Everything one file produces lives under `data/out/<video-id>/`. Grouped by video
 rather than by artifact type, so one video's whole output is one thing to
 inspect, copy or delete.
 
 ## Layout
 
 ```
-web/            the browser client: one page, no build step
+web/            the browser client: one page, no build step (deprecated)
 api/            HTTP in front of it all; slow stages queued, search immediate
 ver2/
   driver.py     the CLI for both streams
@@ -123,7 +124,7 @@ ver2/
   aggregate/    video-level structure over what the chunk stages wrote
   recovery/     STANDALONE: rebuild a store from a manifest + the video
 eval/           the measurements behind the choices, reproducible
-schema.sql      runnable DDL: every table, function and RLS policy
+db/schema.sql   runnable DDL: every table, function and RLS policy
 docs/           SCHEMAS.md · ROUTES.md · RUN.md
 ```
 
@@ -150,7 +151,7 @@ optional and additive — `--sink file,supabase` writes both, file first. Vector
 go to pgvector by default because it is the half with a lexical index; Qdrant
 runs embedded with no server and is dense-only.
 
-Run `schema.sql` once against a fresh database. It is idempotent and repairs
+Run `db/schema.sql` once against a fresh database. It is idempotent and repairs
 its own generated columns.
 
 ## Not built

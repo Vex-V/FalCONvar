@@ -4,7 +4,9 @@ Eleven endpoints in `api/main.py`. The live schema is always at `/docs`; this
 file is the reasoning behind it, which the schema cannot carry.
 
 Everything is same-origin: the browser client is served by the same app at
-`/app`, so there is no CORS and no base URL to configure.
+`/app`, so there is no CORS and no base URL to configure. That page is
+**deprecated for now** — the routes below are the surface being developed,
+and the browser client does not cover all of them.
 
 ---
 
@@ -169,7 +171,7 @@ a restart loses the record of the run, never its output.
                          "descriptions": true, "transcript": true } } ] }
 ```
 
-Read off the `out/` directory rather than remembered. That is why a restarted
+Read off the `data/out/` directory rather than remembered. That is why a restarted
 server still knows everything it produced.
 
 ## GET `/videos/{video_id}/{name}`

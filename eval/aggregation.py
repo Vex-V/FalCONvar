@@ -80,7 +80,7 @@ def rank_of(scores, truth):
 
 def main():
     db.load_env()
-    pairs = json.loads(Path("eval/query_pairs.json").read_text(encoding="utf-8"))
+    pairs = json.loads(Path("eval/results/query_pairs.json").read_text(encoding="utf-8"))
     emb = embedders_mod.build("openai")
     index = index_mod.build(["pgvector"])
     cfg = emb.config()

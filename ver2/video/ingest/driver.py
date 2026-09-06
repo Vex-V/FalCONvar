@@ -14,6 +14,7 @@ from typing import Any
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from ver2 import paths
 from ver2.video.ingest import chunker as chunker_mod
 from ver2.video.ingest import samplers as samplers_mod
 from ver2.video.ingest.output import FileManifestWriter, FrameStore, MultiSink
@@ -196,7 +197,7 @@ def main() -> int:
     # thing to inspect, copy or delete, and it keeps growing cleanly as later
     # stages add artifacts of their own.
     video_id = args.video_id or Path(args.video).stem
-    home = Path("out") / video_id
+    home = paths.OUT_ROOT / video_id
     if args.out is None:
         args.out = home / "manifest.json"
     if args.frame_store is True:

@@ -21,10 +21,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from ver2 import paths
 from ..units import Unit, collection_name, embedder_key
 from .base import Hit
 
-DEFAULT_PATH = Path("out") / "qdrant"
+DEFAULT_PATH = paths.OUT_ROOT / "qdrant"
 
 
 class QdrantIndex:

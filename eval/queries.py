@@ -133,7 +133,7 @@ if __name__ == "__main__":
     from ver2 import db
     db.load_env()
     doc = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-    out = Path(sys.argv[2] if len(sys.argv) > 2 else "eval/query_pairs.json")
+    out = Path(sys.argv[2] if len(sys.argv) > 2 else "eval/results/query_pairs.json")
     pairs = generate(doc)
     disjoint = sum(not overlap(p["literal"], p["paraphrase"]) for p in pairs)
     out.write_text(json.dumps(pairs, indent=2), encoding="utf-8")

@@ -7,6 +7,22 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!--
+  DEPRECATED, not deleted. The backend and the HTTP API are where the work is
+  going; this page is frozen at whatever `/capabilities` happens to publish and
+  is no longer kept in step with it. It still runs, which is the point -- it is
+  the quickest way to watch a job go through -- but treat anything it cannot
+  express as a gap in the page, not in the pipeline, and reach for the CLIs or
+  `/docs` instead. Two of the faults recorded in CLAUDE.md were only findable
+  in a real browser, so it is worth keeping rather than removing.
+-->
+<div id="deprecated" role="note">
+  <strong>This page is deprecated.</strong> Development is on the pipeline and
+  the HTTP API; the form here lags <code>/capabilities</code> and does not
+  expose everything a run can be given &mdash; sampler/prompt pairing beyond
+  the listed ones, for instance. Use the CLIs or
+  <a href="/docs">the API schema</a> for anything it cannot express.
+</div>
 <header>
   <h1>FalCON<span>var</span></h1>
   <p class="tag">A video goes in; a searchable index of moments comes out.</p>

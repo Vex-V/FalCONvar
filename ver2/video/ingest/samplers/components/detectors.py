@@ -15,6 +15,8 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+from ver2 import paths
+
 # Ultralytics resolves a bare filename against the working directory and
 # downloads it if absent, which scatters weights wherever the command was run
 # from. Keeping them in one place means looking there first.
@@ -24,7 +26,7 @@ import numpy as np
 # text encoder on first use. That is a second, separate CLIP from the one
 # ClipChangeSampler loads through HuggingFace -- different libraries, different
 # formats, different jobs. Deleting it costs a re-download, not a failure.
-WEIGHTS_DIR = Path(__file__).resolve().parents[3] / "weights"
+WEIGHTS_DIR = paths.WEIGHTS
 
 
 def weight_path(name: str) -> str:

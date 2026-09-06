@@ -31,7 +31,7 @@ SUPABASE_SECRET_KEY=          # sb_secret_...      writes, bypasses RLS
 SUPABASE_PUBLISHABLE_KEY=     # sb_publishable_... reads, under RLS
 ```
 
-For the Postgres index, run [`schema.sql`](../schema.sql) in the Supabase SQL
+For the Postgres index, run [`db/schema.sql`](../schema.sql) in the Supabase SQL
 editor. It is idempotent and safe to re-run.
 
 ---
@@ -43,6 +43,8 @@ python -m uvicorn api.main:app --port 8000
 ```
 
 Then open **<http://127.0.0.1:8000/>** — it redirects to `/app/`.
+
+> **Deprecated for now.** The pipeline and the HTTP API are where development is; this page still runs and is still the quickest way to watch a job go through, but it lags `/capabilities` and does not expose everything a run can be given. Use the CLIs or `/docs` for anything it cannot express.
 
 The page is served by the same process as the API, so there is no second server,
 no CORS and no base URL to configure. Four tabs:
@@ -137,13 +139,13 @@ python -m ver2.video.ingest.calibrate v.mp4 --sampler clip   # what a threshold 
 python -m ver2.audio.driver media/x.mp4 --chunking speaker
 
 # describe: one call per (chunk, sampler)
-python -m ver2.video.describe.driver out/<id>/manifest.json              # stub, free
-python -m ver2.video.describe.driver out/<id>/manifest.json --describer openai
+python -m ver2.video.describe.driver data/out/<id>/manifest.json              # stub, free
+python -m ver2.video.describe.driver data/out/<id>/manifest.json --describer openai
 python -m ver2.video.describe.driver --video-id <id> --follow            # tail a live ingest
 
 # embed, then ask
-python -m ver2.embed.driver out/<id>/descriptions.json      # picks up transcript.json too
-python -m ver2.embed.driver out/<id>/transcript.json        # audio-only: no descriptions exist
+python -m ver2.embed.driver data/out/<id>/descriptions.json      # picks up transcript.json too
+python -m ver2.embed.driver data/out/<id>/transcript.json        # audio-only: no descriptions exist
 python -m ver2.retrieve.driver "people at the checkout" --moments 3
 python -m ver2.retrieve.driver "..." --sampler transcript   # only what was said
 ```
@@ -157,7 +159,7 @@ curl localhost:8000/videos/<id>/aggregates/summary   # just the summary
 curl localhost:8000/videos/<id>/transcript           # just the transcript
 ```
 
-Or read `out/<id>/` directly — the API serves the same files unchanged.
+Or read `data/out/<id>/` directly — the API serves the same files unchanged.
 
 ### Recovery — three files, no checkout needed
 
@@ -165,7 +167,7 @@ Or read `out/<id>/` directly — the API serves the same files unchanged.
 python -m ver2.recovery.supabase_manifest --list
 python -m ver2.recovery.supabase_manifest <id>          # -> <id>.json
 python -m ver2.recovery.supabase_description <id>
-python -m ver2.recovery.recreate <id>.json --out rebuilt/ --verify out/<id>/store
+python -m ver2.recovery.recreate <id>.json --out rebuilt/ --verify data/out/<id>/store
 ```
 
 `recovery/` imports nothing from `ver2`. Hand someone those files, a video id
@@ -176,7 +178,7 @@ and the video, and they rebuild the frame store byte for byte.
 ## Where the output goes
 
 ```
-out/<video-id>/
+data/out/<video-id>/
   timeline.json      the chunk grid + the policy that produced it
   manifest.json      which frames were kept, and why
   store/             those frames, keyed by source frame index

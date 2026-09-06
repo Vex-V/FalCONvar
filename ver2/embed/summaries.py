@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from ver2 import paths
 from ver2 import db
 
 from .units import embedder_key, text_hash
@@ -46,7 +47,7 @@ def _render(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return "\n\n".join(p for p in parts if p), structured
 
 
-def index_summary(video_id: str, embedder: Any, out_root: Path = Path("out"),
+def index_summary(video_id: str, embedder: Any, out_root: Path = paths.OUT_ROOT,
                   client: Any = None, force: bool = False) -> Optional[dict[str, Any]]:
     """Embed one video's summary aggregate. Returns None when there is none."""
     path = Path(out_root) / video_id / "aggregates" / "summary.json"

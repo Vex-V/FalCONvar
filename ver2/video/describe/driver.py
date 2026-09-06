@@ -15,6 +15,7 @@ from typing import Any, Optional
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from ver2 import paths
 from ver2.video.describe import describers as describers_mod
 from ver2.video.describe import input as input_mod
 from ver2.video.describe.input import StoreUnavailable
@@ -110,7 +111,7 @@ def main() -> int:
     if args.out is None:
         # Beside the manifest and the store it read, under the video's own
         # directory: out/<video-id>/descriptions.json.
-        args.out = Path("out") / video_id / "descriptions.json"
+        args.out = paths.OUT_ROOT / video_id / "descriptions.json"
 
     built = []
     for n in names:

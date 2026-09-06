@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from ver2 import db
+from ver2 import db, paths
 from ver2.audio import diarize as diarize_mod
 from ver2.audio import segment as segment_mod
 from ver2.audio import source as audio_source
@@ -59,7 +59,7 @@ class Options:
 
     media: Path
     video_id: Optional[str] = None
-    out_root: Path = Path("out")
+    out_root: Path = paths.OUT_ROOT
 
     chunking: str = "uniform"
     chunk_duration: float = 20.0

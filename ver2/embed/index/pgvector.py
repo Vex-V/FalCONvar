@@ -7,7 +7,7 @@ than reconciled in Python afterwards.
 
 It is also the half of the hybrid that can do full text. `search_descriptions`
 runs the vector ranking and a `tsvector` ranking and fuses them with RRF,
-inside one query. See schema.sql for why RRF rather than a weighted sum.
+inside one query. See db/schema.sql for why RRF rather than a weighted sum.
 
 Vectors go in as a bracketed string because that is pgvector's text input form
 and PostgREST speaks JSON, not the binary protocol.
@@ -37,7 +37,7 @@ class PgVectorIndex:
         self.client = client or db.client_from_env(url, key, write=True)
 
     def ensure(self, embedder: dict[str, Any]) -> None:
-        # DDL is schema.sql's job: the table is shared by every embedder and
+        # DDL is db/schema.sql's job: the table is shared by every embedder and
         # creating it from application code would mean each run asserting a
         # shape the others also assert. A missing table surfaces on first write.
         return None

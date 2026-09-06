@@ -1,0 +1,46 @@
+# Packaging exists here for one reason: to stop `python -m ver2.…` depending on
+# the working directory. Before it, every documented command worked only from
+# the checkout root, and the stage drivers each carried a `sys.path.insert` so
+# they could still be run as scripts. `pip install -e .` makes the four
+# packages importable from anywhere and those workarounds unnecessary.
+#
+# It is deliberately not a distribution: no version bumping, no wheel, no
+# console_scripts. `python -m` is the documented interface and it stays that
+# way -- a second spelling of every command would be a second thing to keep
+# correct in the docs.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falconvar"
+version = "2.0.0"
+description = "Video and audio in, searchable moments out."
+requires-python = ">=3.12"
+# Pins live in requirements.txt, which is what is actually installed. Repeating
+# them here would create two lists that drift; this file declares the packages,
+# not the environment.
+dependencies = []
+
+[tool.setuptools]
+# Explicit rather than discovered: `docs`, `web`, `db` and `data` are not
+# Python, and auto-discovery would either pick them up or refuse to guess.
+packages = [
+    "ver2",
+    "ver2.aggregate", "ver2.aggregate.output",
+    "ver2.audio", "ver2.audio.diarize", "ver2.audio.output",
+    "ver2.audio.segment", "ver2.audio.transcribe",
+    "ver2.embed", "ver2.embed.embedders", "ver2.embed.index",
+    "ver2.recovery", "ver2.retrieve",
+    "ver2.video", "ver2.video.describe", "ver2.video.describe.describers",
+    "ver2.video.describe.input", "ver2.video.describe.output",
+    "ver2.video.describe.vlm",
+    "ver2.video.ingest", "ver2.video.ingest.chunker",
+    "ver2.video.ingest.output", "ver2.video.ingest.samplers",
+    "ver2.video.ingest.samplers.components", "ver2.video.ingest.source",
+    "api",
+]
+# `eval/` is deliberately absent: it is a measurement harness run from the
+# checkout (`python -m eval.retrieval`), not something to install alongside the
+# pipeline. It has no `__init__.py` for the same reason.

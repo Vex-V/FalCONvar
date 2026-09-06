@@ -117,7 +117,7 @@ def main():
 
     db.load_env()
     doc = json.loads(Path("out/test1/descriptions.json").read_text(encoding="utf-8"))
-    pairs = json.loads(Path("eval/query_pairs.json").read_text(encoding="utf-8"))
+    pairs = json.loads(Path("eval/results/query_pairs.json").read_text(encoding="utf-8"))
     units = units_of(doc)
     emb = embedders_mod.build("openai")
 
@@ -153,8 +153,8 @@ def main():
         print(f"{name:<20}{row['lit_top1']:<11.3f}{row['lit_mrr']:<10.3f}"
               f"{row['par_top1']:<11.3f}{row['par_mrr']:<10.3f}"
               f"{row['pairwise']:<14.3f}{row['chars']}")
-    Path("eval/render_ab.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print("\n-> eval/render_ab.json")
+    Path("eval/results/render_ab.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print("\n-> eval/results/render_ab.json")
 
 
 if __name__ == "__main__":

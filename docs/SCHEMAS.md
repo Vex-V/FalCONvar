@@ -2,7 +2,7 @@
 
 One reference for what the pipeline produces, in all four places it lands:
 local JSON, the frame store, Postgres, and the vector index. Runnable DDL is in
-[`schema.sql`](../schema.sql); this file explains what the fields mean and how the
+[`db/schema.sql`](../schema.sql); this file explains what the fields mean and how the
 copies correspond.
 
 ---
@@ -10,7 +10,7 @@ copies correspond.
 ## Where everything lives
 
 ```
-out/<video-id>/
+data/out/<video-id>/
   timeline.json        the chunk grid + the policy behind it <- whichever pass
   manifest.json        which frames were kept, and why      <- video ingest
   store/               those frames, keyed by frame index   <- video ingest
@@ -120,7 +120,7 @@ finished — it distinguishes "no more chunks yet" from "no more chunks ever".
 **The same frame appears under every sampler that kept it.** On test1, 105
 frame records cover 80 distinct frames — the store holds one copy per index.
 
-## 2. The frame store — `out/<video-id>/store/`
+## 2. The frame store — `data/out/<video-id>/store/`
 
 Files named `%07d.jpg` by **source frame index**, matching `frames[].index`.
 Not keyed by sampler, because samplers overlap heavily and keying per sampler
@@ -343,7 +343,7 @@ reaches retrieval by being embedded into `chunk_embeddings` with
 table stores text with a time span and a transcript chunk is exactly that.
 ## 7. Supabase — eight tables
 
-DDL in [`schema.sql`](../schema.sql), idempotent and safe to re-run.
+DDL in [`db/schema.sql`](../schema.sql), idempotent and safe to re-run.
 
 ### `video_manifests` + `video_chunks` — the manifest, as rows
 Identical content to `manifest.json`; `chunks.samplers` holds the frame records

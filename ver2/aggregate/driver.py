@@ -14,6 +14,7 @@ from pathlib import Path
 if __package__ in (None, ""):                       # allow running as a script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from ver2 import paths
 from ver2 import db
 from ver2 import aggregate as aggregate_mod
 from ver2.aggregate.output import (AggregateDocuments, MultiAggregateSink)
@@ -56,7 +57,7 @@ def main() -> int:
     ap.add_argument("--tier", default="free", choices=aggregate_mod.TIERS,
                     help="the most expensive tier to run (default free: no "
                          "model, no network, no cost)")
-    ap.add_argument("--out-root", type=Path, default=Path("out"))
+    ap.add_argument("--out-root", type=Path, default=paths.OUT_ROOT)
     ap.add_argument("--sink", default="file",
                     help="comma-separated: file, supabase (default file)")
     ap.add_argument("--embedder", default=None,

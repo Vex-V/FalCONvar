@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ver2 import aggregate as aggregate_mod
-from ver2 import db, orchestrate
+from ver2 import db, orchestrate, paths
 from ver2.embed import defaults as embed_defaults
 from ver2.embed import embedders as embedders_mod
 from ver2.embed import index as index_mod
@@ -34,8 +34,10 @@ from ver2.video.describe.output import DescriptionDocument, MultiDescriptionSink
 from ver2.video.describe.reader import describe as run_describe
 from ver2.video.ingest import samplers as samplers_mod
 
-OUT_ROOT = Path("out")
-UPLOADS = Path("uploads")
+# Anchored to the checkout, not the working directory, so the server answers
+# the same wherever it was launched from. `FALCONVAR_DATA` moves both.
+OUT_ROOT = paths.OUT_ROOT
+UPLOADS = paths.UPLOADS
 
 
 def build_samplers(names: Sequence[str],
