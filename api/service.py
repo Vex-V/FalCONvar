@@ -18,21 +18,21 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ver2 import aggregate as aggregate_mod
-from ver2 import db, orchestrate, paths
-from ver2.embed import defaults as embed_defaults
-from ver2.embed import embedders as embedders_mod
-from ver2.embed import index as index_mod
-from ver2.embed import units as units_mod
-from ver2.aggregate.output import AggregateDocuments, MultiAggregateSink
-from ver2.aggregate.reader import aggregate as run_aggregate, context_for
-from ver2.embed import summaries as summaries_mod
-from ver2.embed.indexer import index_units
-from ver2.retrieve.search import search as search_moments
-from ver2.video.describe import describers as describers_mod
-from ver2.video.describe.output import DescriptionDocument, MultiDescriptionSink
-from ver2.video.describe.reader import describe as run_describe
-from ver2.video.ingest import samplers as samplers_mod
+from falconvar import aggregate as aggregate_mod
+from falconvar import db, orchestrate, paths
+from falconvar.embed import defaults as embed_defaults
+from falconvar.embed import embedders as embedders_mod
+from falconvar.embed import index as index_mod
+from falconvar.embed import units as units_mod
+from falconvar.aggregate.output import AggregateDocuments, MultiAggregateSink
+from falconvar.aggregate.reader import aggregate as run_aggregate, context_for
+from falconvar.embed import summaries as summaries_mod
+from falconvar.embed.indexer import index_units
+from falconvar.retrieve.search import search as search_moments
+from falconvar.video.describe import describers as describers_mod
+from falconvar.video.describe.output import DescriptionDocument, MultiDescriptionSink
+from falconvar.video.describe.reader import describe as run_describe
+from falconvar.video.ingest import samplers as samplers_mod
 
 # Anchored to the checkout, not the working directory, so the server answers
 # the same wherever it was launched from. `FALCONVAR_DATA` moves both.
@@ -52,7 +52,7 @@ def build_samplers(names: Sequence[str],
     An unknown question is a ValueError here, which `main.py` turns into a 422 --
     rather than a run that quietly asks the scene question and bills for it.
     """
-    from ver2.video.describe.vlm import prompts
+    from falconvar.video.describe.vlm import prompts
     settings = settings or {}
     rate = {"min_interval_s": settings.get("min_interval", 0.0),
             "max_per_chunk": settings.get("max_per_chunk")}
@@ -109,7 +109,7 @@ def describe(video_id: str, describer: str = "openai",
         if name == "file":
             built.append(DescriptionDocument(out_dir / "descriptions.json"))
         else:
-            from ver2.video.describe.output import SupabaseDescriptions
+            from falconvar.video.describe.output import SupabaseDescriptions
 
             built.append(SupabaseDescriptions())
     sink = built[0] if len(built) == 1 else MultiDescriptionSink(*built)
@@ -287,10 +287,10 @@ def frame_path(video_id: str, index: int, out_root: Path = OUT_ROOT) -> Path:
 def available() -> dict[str, Any]:
     """What this deployment can be asked for. Read from the registries, so a
     new sampler or embedder appears here without anyone editing a list."""
-    from ver2.audio import diarize as diarize_mod
-    from ver2.audio import transcribe as transcribe_mod
+    from falconvar.audio import diarize as diarize_mod
+    from falconvar.audio import transcribe as transcribe_mod
 
-    from ver2.video.describe.vlm import prompts
+    from falconvar.video.describe.vlm import prompts
 
     return {
         "samplers": samplers_mod.available(),
@@ -360,7 +360,7 @@ def aggregate(video_id: str, tier: str = "free",
         if name == "file":
             built.append(documents)
         else:
-            from ver2.aggregate.output import SupabaseAggregates
+            from falconvar.aggregate.output import SupabaseAggregates
 
             built.append(SupabaseAggregates())
     sink = built[0] if len(built) == 1 else MultiAggregateSink(*built)

@@ -21,10 +21,10 @@ import statistics
 import random
 from pathlib import Path
 
-from ver2 import db
-from ver2.embed import embedders as embedders_mod
-from ver2.embed import index as index_mod
-from ver2.retrieve.search import to_moments
+from falconvar import db
+from falconvar.embed import embedders as embedders_mod
+from falconvar.embed import index as index_mod
+from falconvar.retrieve.search import to_moments
 
 
 def rank_of(hits, chunk_id):

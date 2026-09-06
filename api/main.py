@@ -1,7 +1,7 @@
 """HTTP in front of the pipeline.
 
 Routes, request shapes and status codes. The work is `api/service.py`, which is
-the pipeline in terms a request can supply; the pipeline proper is `ver2/`, and
+the pipeline in terms a request can supply; the pipeline proper is `falconvar/`, and
 nothing here reaches past `service`.
 
 Three kinds of endpoint, and the difference is how long they take:
@@ -13,7 +13,7 @@ Three kinds of endpoint, and the difference is how long they take:
                   is minutes of GPU or inference, so they return a job id and
                   the caller polls `/jobs/{id}`.
   **introspective** `/capabilities` reads the registries, so a sampler added
-                  to `ver2` appears in the API without anyone editing a list.
+                  to `falconvar` appears in the API without anyone editing a list.
 
 Uploads are written to `uploads/` under the id they will be processed as, and
 the id is derived from the filename rather than chosen by the client, because
@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 
 from api import service
 from api.jobs import Runner, progress
-from ver2 import db, orchestrate
+from falconvar import db, orchestrate
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):

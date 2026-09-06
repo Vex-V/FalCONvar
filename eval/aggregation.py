@@ -31,9 +31,9 @@ import random
 import statistics
 from pathlib import Path
 
-from ver2 import db
-from ver2.embed import embedders as embedders_mod
-from ver2.embed import index as index_mod
+from falconvar import db
+from falconvar.embed import embedders as embedders_mod
+from falconvar.embed import index as index_mod
 
 
 def make(kind: str, k: int, w: float = 0.0):

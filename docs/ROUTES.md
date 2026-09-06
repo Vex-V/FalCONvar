@@ -19,7 +19,7 @@ design:
 |---|---|---|
 | **immediate** | `/health`, `/capabilities`, `/videos` (GET), `/videos/{id}/{name}`, `/videos/{id}/export(s)`, `/videos/{id}/frames/{n}`, `/search` | one query or one file read; tens of milliseconds |
 | **queued** | `/videos` (POST), `/describe`, `/embed` | minutes of GPU or paid inference; returns `202` and a job id |
-| **introspective** | `/capabilities` | reads the registries, so `ver2` gaining a sampler needs no edit here |
+| **introspective** | `/capabilities` | reads the registries, so `falconvar` gaining a sampler needs no edit here |
 
 **Search is immediate on purpose.** It is one embedding call and one SQL query,
 so making it a job would add a poll to something that answers faster than the
@@ -63,7 +63,7 @@ list:
 }
 ```
 
-Registering a sampler in `ver2` makes it appear here, and therefore in the web
+Registering a sampler in `falconvar` makes it appear here, and therefore in the web
 form, with nothing else edited. That is the reason this endpoint exists rather
 than the client hardcoding a list.
 
@@ -131,7 +131,7 @@ rather than silently reporting success.
 { "video_id": "Chernobyl", "embedder": null, "model": null, "indexes": null }
 ```
 
-202 + job id. Nulls fall through to `ver2/embed/defaults.py`. Embeds the
+202 + job id. Nulls fall through to `falconvar/embed/defaults.py`. Embeds the
 descriptions **and** the transcript if there is one — both land in
 `chunk_embeddings`, distinguished only by `sampler`. Only units whose text has
 changed are re-embedded; the rest are skipped on a hash comparison.

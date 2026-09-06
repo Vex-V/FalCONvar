@@ -4,7 +4,7 @@ Video RAG ingestion. A video goes in; a **manifest** comes out saying which
 frames are worth describing, grouped into retrievable chunks, with enough
 addressing information to fetch those frames back later.
 
-Everything under `ver2/`. Version 1 has been deleted.
+Everything under `falconvar/`. Version 1 has been deleted.
 
 ---
 
@@ -19,7 +19,7 @@ api/           HTTP in front of it all
   main.py        routes; queued for the slow stages, immediate for search
   service.py     the pipeline in terms a request can supply
   jobs.py        one background worker, in-memory job records
-ver2/
+falconvar/
   driver.py      the CLI for both streams (argparse only)
   orchestrate.py BOTH streams, one grid: open, split, decide the policy, run
   timeline.py    the shared chunk grid: spans + the policy that produced them
@@ -102,40 +102,40 @@ pyproject.toml   declares the packages so `python -m` works from anywhere
 ## Commands
 
 ```bash
-python -m ver2.video.ingest.driver media/test2.mp4 --sampler clip --frame-store
-python -m ver2.video.ingest.driver video.mp4 --sampler uniform,clip,yolo,objects,text \
+python -m falconvar.video.ingest.driver media/test2.mp4 --sampler clip --frame-store
+python -m falconvar.video.ingest.driver video.mp4 --sampler uniform,clip,yolo,objects,text \
        --min-interval 3 --chunking scene --scene-threshold 15
-python -m ver2.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
-python -m ver2.video.ingest.calibrate video.mp4 --sampler clip
-python -m ver2.video.describe.driver data/out/<id>/manifest.json     # describe -> json
-python -m ver2.video.describe.driver --video-id <id> --sink file,supabase
-python -m ver2.video.describe.driver --video-id <id> --follow    # tail a live ingest
-python -m ver2.video.describe.driver data/out/<id>/manifest.json --describer openai
+python -m falconvar.video.ingest.driver video.mp4 --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video.ingest.driver video.mp4 --sink file,supabase   # both; file is primary
+python -m falconvar.video.ingest.calibrate video.mp4 --sampler clip
+python -m falconvar.video.describe.driver data/out/<id>/manifest.json     # describe -> json
+python -m falconvar.video.describe.driver --video-id <id> --sink file,supabase
+python -m falconvar.video.describe.driver --video-id <id> --follow    # tail a live ingest
+python -m falconvar.video.describe.driver data/out/<id>/manifest.json --describer openai
        --model gpt-5.4-mini --sink file,supabase          # costs money
-python -m ver2.embed.driver data/out/<id>/descriptions.json     # -> pgvector
-python -m ver2.embed.driver data/out/<id>/transcript.json      # audio-only video
-python -m ver2.embed.driver --video-id <id> --index pgvector,qdrant
-python -m ver2.retrieve.driver "people at the checkout" --moments 3
-python -m ver2.retrieve.driver "..." --sampler yolo        # one question only
-python -m ver2.retrieve.driver "..." --index qdrant        # dense only, says so
-python -m ver2.recovery.supabase_manifest --list          # what is published
-python -m ver2.recovery.supabase_manifest <id>            # -> <id>.json
-python -m ver2.recovery.supabase_description <id>         # -> descriptions json
-python -m ver2.recovery.recreate data/out/<id>/manifest.json --out rebuilt/
-python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
-python -m ver2.driver media/x.mp4 --no-video --chunking vad    # sound alone
-python -m ver2.driver media/x.mp4 --no-audio --chunking scene  # picture alone
-python -m ver2.driver media/x.mp4 --sampler clip --chunking vad   # audio grid
-python -m ver2.driver media/x.mp4 --sampler clip --chunking scene # video grid
-python -m ver2.audio.driver media/x.mp4 --chunking speaker        # audio alone
-python -m ver2.video.ingest.driver v.mp4 --sampler uniform:overview   # prose only
-python -m ver2.video.ingest.driver v.mp4 --sampler yolo:overview      # their frames, prose
-python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text        --every-frames 10                    # read the screen on a stride
+python -m falconvar.embed.driver data/out/<id>/descriptions.json     # -> pgvector
+python -m falconvar.embed.driver data/out/<id>/transcript.json      # audio-only video
+python -m falconvar.embed.driver --video-id <id> --index pgvector,qdrant
+python -m falconvar.retrieve.driver "people at the checkout" --moments 3
+python -m falconvar.retrieve.driver "..." --sampler yolo        # one question only
+python -m falconvar.retrieve.driver "..." --index qdrant        # dense only, says so
+python -m falconvar.recovery.supabase_manifest --list          # what is published
+python -m falconvar.recovery.supabase_manifest <id>            # -> <id>.json
+python -m falconvar.recovery.supabase_description <id>         # -> descriptions json
+python -m falconvar.recovery.recreate data/out/<id>/manifest.json --out rebuilt/
+python -m falconvar.driver media/x.mp4 --sampler clip --chunking uniform
+python -m falconvar.driver media/x.mp4 --no-video --chunking vad    # sound alone
+python -m falconvar.driver media/x.mp4 --no-audio --chunking scene  # picture alone
+python -m falconvar.driver media/x.mp4 --sampler clip --chunking vad   # audio grid
+python -m falconvar.driver media/x.mp4 --sampler clip --chunking scene # video grid
+python -m falconvar.audio.driver media/x.mp4 --chunking speaker        # audio alone
+python -m falconvar.video.ingest.driver v.mp4 --sampler uniform:overview   # prose only
+python -m falconvar.video.ingest.driver v.mp4 --sampler yolo:overview      # their frames, prose
+python -m falconvar.video.ingest.driver v.mp4 --sampler uniform:text        --every-frames 10                    # read the screen on a stride
 python -m uvicorn api.main:app --port 8000   # / for the site, /docs for the schema
-python -m ver2.aggregate.driver <id> --tier free   # no model, no network
-python -m ver2.aggregate.driver <id> --tier llm    # + summary, chapters, events
-python -m ver2.imports                      # after ANY install
+python -m falconvar.aggregate.driver <id> --tier free   # no model, no network
+python -m falconvar.aggregate.driver <id> --tier llm    # + summary, chapters, events
+python -m falconvar.imports                      # after ANY install
 python -m eval.queries data/out/<id>/descriptions.json   # -> eval/results/query_pairs.json
 python -m eval.render_ab                    # compare renderings, paired CI
 python -m eval.retrieval                    # hybrid vs dense on the shipped path
@@ -157,13 +157,13 @@ stages add to it without a new top-level directory. Bare `--frame-store` uses
 
 ## Invariants — do not break these
 
-**`recovery/` imports nothing from `ver2`.** Hand someone those files, a
+**`recovery/` imports nothing from `falconvar`.** Hand someone those files, a
 manifest (or just a video id) and the video, and they rebuild the store byte
 for byte with only `av`, `opencv-python`, `numpy`. If recovery imported the
 pipeline it could lean on a default living in code rather than in the
 manifest, and the manifest's claim to be authoritative would go untested.
 `imports.py` enforces this by AST-parsing every file in `recovery/`; a
-`from ver2...` in any of them fails the check.
+`from falconvar...` in any of them fails the check.
 
 **The recovery kit is split by question.** `supabase_manifest.py` answers
 *where is the manifest* and `supabase_description.py` *what was said about it*
@@ -549,7 +549,7 @@ manifest arrives as parsed JSON and the chunk stream as rows, so neither needs
 an import; the store is the single class it imports from `ingest`. Anything
 more would mean depending on how ingest works rather than on what it produced.
 `imports.py` enforces this by AST-parsing every file under `describe/` and
-rejecting any `ver2.video.ingest` import other than `FrameStore`.
+rejecting any `falconvar.video.ingest` import other than `FrameStore`.
 
 **Describing reads the frame store and nothing else.** No seek-the-video
 fallback: the store exists so this stage has its frames in hand, and a
@@ -685,7 +685,7 @@ still the fastest way to see the whole flow at once.
 **The site is served by the API, at `/app` rather than `/`.** Same origin, so
 the browser client needs no CORS and no base URL -- but not the root, because
 `GET /videos` is an API route and a site mounted there would shadow it. The
-form is built from `GET /capabilities`, so a sampler registered in `ver2`
+form is built from `GET /capabilities`, so a sampler registered in `falconvar`
 appears in the browser without anyone editing JavaScript.
 
 **Two bugs in that page were only findable in a real browser**, and both were
@@ -734,16 +734,16 @@ ones in every search. Everything else `aggregate` produces is statistical, and
 a vector of a count answers nothing.
 
 **Installing `gliner` downgraded transformers 5.15.1 -> 5.13.1.** numpy, cv2
-and torch were untouched and `ver2.imports` stayed green, but the checker only
+and torch were untouched and `falconvar.imports` stayed green, but the checker only
 proves the import works -- CLIP was verified separately by actually embedding:
 512 dims, L2 norm 1.0. That check matters because `transformers` is what the
 `clip` sampler and the local embedder both run on.
 
-**The API calls `orchestrate`, never `driver`.** `ver2/driver.py` used to hold
+**The API calls `orchestrate`, never `driver`.** `falconvar/driver.py` used to hold
 the whole run inline, which made it the one module breaking the rule every
 stage driver follows -- "driver.py: the CLI, argparse only, no pipeline logic".
 A server importing an argparse module to reach the work behind it would have
-made that permanent, so the run moved to `ver2/orchestrate.py` and the CLI
+made that permanent, so the run moved to `falconvar/orchestrate.py` and the CLI
 became a shim over it. Verified: the CLI's output is unchanged.
 
 Progress is a **callback**, not a print. The two callers want opposite things
@@ -962,9 +962,9 @@ so the guard exists to skip a model load and to make "no speech" a reported
 fact, not to make a fine judgement.
 
 **Paths are anchored to the checkout, never to the working directory.**
-`ver2/paths.py` imports nothing, like `timeline.py`, and every stage reads
+`falconvar/paths.py` imports nothing, like `timeline.py`, and every stage reads
 `OUT_ROOT` from it rather than writing `Path("out")` a ninth time. That was not
-cosmetic: `python -m ver2.…` only worked from the root, which is why each stage
+cosmetic: `python -m falconvar.…` only worked from the root, which is why each stage
 driver carries a `sys.path.insert`. Now a run from anywhere writes to the same
 place. `FALCONVAR_DATA` moves the lot and `FALCONVAR_DATA=.` restores the old
 root layout -- a *process* variable, not a `.env` key, because `.env` is read by
@@ -973,7 +973,7 @@ resolve, and a path that moved depending on how early it was read would be
 worse than one that cannot go in `.env` at all.
 
 The bug this fixed: `WEIGHTS_DIR` was `Path(__file__).parents[3] / "weights"`,
-which resolves to `ver2/video/weights` -- a directory that has never existed. So
+which resolves to `falconvar/video/weights` -- a directory that has never existed. So
 `weight_path()` fell through to the bare filename every time and ultralytics
 downloaded wherever its own settings pointed, while the comment above it
 explained that weights are kept in one place so they are not scattered. Nothing
@@ -1066,7 +1066,7 @@ encode, not at import. `nvidia-cublas-cu12` installs it to
 `os.add_dll_directory` does not help because the load happens lazily inside an
 already-initialised C++ extension. The version is a contract -- this project's
 torch is cu130 and ships `cublas64_13.dll`, which is not a substitute.
-`ver2/audio/cuda.py` loads each by absolute path with `ctypes.WinDLL` first,
+`falconvar/audio/cuda.py` loads each by absolute path with `ctypes.WinDLL` first,
 which puts it in the process module table so the by-name request resolves.
 Call `enable()` before constructing any CUDA-backed audio model.
 
@@ -1105,7 +1105,7 @@ whichever wins depends on install order and nothing warns you. Uninstalling one
 **breaks the others** (they share the directory) — repair with
 `pip install --force-reinstall --no-deps opencv-python==5.0.0.93`.
 
-**Run `python -m ver2.imports` after any install.** Adding PaddleOCR silently
+**Run `python -m falconvar.imports` after any install.** Adding PaddleOCR silently
 downgraded numpy 2.4.4 -> 2.3.5 and swapped `cv2` 5.0.0 -> 4.10.0.
 
 **`PYTHONIOENCODING=utf-8`** is needed for some third-party libraries that

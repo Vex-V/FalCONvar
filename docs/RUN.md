@@ -2,7 +2,7 @@
 
 Three ways in, all over the same code: a web page, an HTTP API, and a set of
 CLIs. Nothing is a wrapper around anything else — the CLI and the API both call
-`ver2/orchestrate.py`, and the web page calls the API.
+`falconvar/orchestrate.py`, and the web page calls the API.
 
 ---
 
@@ -10,7 +10,7 @@ CLIs. Nothing is a wrapper around anything else — the CLI and the API both cal
 
 ```bash
 pip install -r requirements.txt
-python -m ver2.imports          # after ANY install, including this one
+python -m falconvar.imports          # after ANY install, including this one
 ```
 
 `imports.py` imports every library and internal module, exercises each enough to
@@ -62,7 +62,7 @@ no CORS and no base URL to configure. Four tabs:
 - **Jobs** — this session's runs, with each stage and any traceback.
 
 Everything the form offers comes from `GET /capabilities`, so registering a
-sampler in `ver2` makes it appear here with no JavaScript edited.
+sampler in `falconvar` makes it appear here with no JavaScript edited.
 
 For development, `--reload` picks up changes to `api/` and `web/`:
 
@@ -103,8 +103,8 @@ GPU or paid inference. Search answers in the request.
 ### Both streams at once
 
 ```bash
-python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
-python -m ver2.driver media/x.mp4 --sampler uniform:overview --every-frames 5 \
+python -m falconvar.driver media/x.mp4 --sampler clip --chunking uniform
+python -m falconvar.driver media/x.mp4 --sampler uniform:overview --every-frames 5 \
        --chunking vad --frame-store --sink file,supabase
 ```
 
@@ -115,8 +115,8 @@ arithmetic and needs neither pass first; `scene` is the video pass; `vad` and
 Either stream can be switched off:
 
 ```bash
-python -m ver2.driver media/x.mp4 --no-video --chunking vad     # sound alone
-python -m ver2.driver media/x.mp4 --no-audio --chunking scene   # picture alone
+python -m falconvar.driver media/x.mp4 --no-video --chunking vad     # sound alone
+python -m falconvar.driver media/x.mp4 --no-audio --chunking scene   # picture alone
 ```
 
 `--no-video` writes `timeline.json` and `transcript.json` and no manifest, so
@@ -130,24 +130,24 @@ before anything is decoded.
 
 ```bash
 # video: which frames are worth describing, and why
-python -m ver2.video.ingest.driver media/test1.mp4 --sampler clip --frame-store
-python -m ver2.video.ingest.driver v.mp4 --sampler objects --vocabulary "crate,pallet"
-python -m ver2.video.ingest.driver v.mp4 --sampler uniform:text --every-frames 10
-python -m ver2.video.ingest.calibrate v.mp4 --sampler clip   # what a threshold costs
+python -m falconvar.video.ingest.driver media/test1.mp4 --sampler clip --frame-store
+python -m falconvar.video.ingest.driver v.mp4 --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video.ingest.driver v.mp4 --sampler uniform:text --every-frames 10
+python -m falconvar.video.ingest.calibrate v.mp4 --sampler clip   # what a threshold costs
 
 # audio alone: transcript + speakers, no describe stage
-python -m ver2.audio.driver media/x.mp4 --chunking speaker
+python -m falconvar.audio.driver media/x.mp4 --chunking speaker
 
 # describe: one call per (chunk, sampler)
-python -m ver2.video.describe.driver data/out/<id>/manifest.json              # stub, free
-python -m ver2.video.describe.driver data/out/<id>/manifest.json --describer openai
-python -m ver2.video.describe.driver --video-id <id> --follow            # tail a live ingest
+python -m falconvar.video.describe.driver data/out/<id>/manifest.json              # stub, free
+python -m falconvar.video.describe.driver data/out/<id>/manifest.json --describer openai
+python -m falconvar.video.describe.driver --video-id <id> --follow            # tail a live ingest
 
 # embed, then ask
-python -m ver2.embed.driver data/out/<id>/descriptions.json      # picks up transcript.json too
-python -m ver2.embed.driver data/out/<id>/transcript.json        # audio-only: no descriptions exist
-python -m ver2.retrieve.driver "people at the checkout" --moments 3
-python -m ver2.retrieve.driver "..." --sampler transcript   # only what was said
+python -m falconvar.embed.driver data/out/<id>/descriptions.json      # picks up transcript.json too
+python -m falconvar.embed.driver data/out/<id>/transcript.json        # audio-only: no descriptions exist
+python -m falconvar.retrieve.driver "people at the checkout" --moments 3
+python -m falconvar.retrieve.driver "..." --sampler transcript   # only what was said
 ```
 
 ### Handing the output to something else
@@ -164,13 +164,13 @@ Or read `data/out/<id>/` directly — the API serves the same files unchanged.
 ### Recovery — three files, no checkout needed
 
 ```bash
-python -m ver2.recovery.supabase_manifest --list
-python -m ver2.recovery.supabase_manifest <id>          # -> <id>.json
-python -m ver2.recovery.supabase_description <id>
-python -m ver2.recovery.recreate <id>.json --out rebuilt/ --verify data/out/<id>/store
+python -m falconvar.recovery.supabase_manifest --list
+python -m falconvar.recovery.supabase_manifest <id>          # -> <id>.json
+python -m falconvar.recovery.supabase_description <id>
+python -m falconvar.recovery.recreate <id>.json --out rebuilt/ --verify data/out/<id>/store
 ```
 
-`recovery/` imports nothing from `ver2`. Hand someone those files, a video id
+`recovery/` imports nothing from `falconvar`. Hand someone those files, a video id
 and the video, and they rebuild the frame store byte for byte.
 
 ---
@@ -195,7 +195,7 @@ or delete.
 
 ## Choosing the stack
 
-`ver2/embed/defaults.py` decides which embedder and which index, and **both the
+`falconvar/embed/defaults.py` decides which embedder and which index, and **both the
 embed and retrieve CLIs read it** — they must name the same embedder or the
 ranking is well-formed and meaningless. Flag beats environment beats the
 constants:
@@ -216,7 +216,7 @@ of the hybrid; `--index qdrant` is dense-only and says so on every search.
 **`cublas64_12.dll` is not found**, on a machine where CUDA plainly works.
 CTranslate2 (under faster-whisper) asks Windows for it *by name* at the first
 encode, not at import, and the wheels put it somewhere on no search path.
-`ver2/audio/cuda.py` preloads it; `python -m ver2.imports` reports whether that
+`falconvar/audio/cuda.py` preloads it; `python -m falconvar.imports` reports whether that
 succeeded rather than only that the import worked.
 
 **pyannote refuses to download.** The model is gated: set `HF_TOKEN` *and*

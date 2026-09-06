@@ -81,7 +81,7 @@ aggregates.
 
 ```bash
 pip install -r requirements.txt
-python -m ver2.imports                 # after ANY install: what actually loaded
+python -m falconvar.imports                 # after ANY install: what actually loaded
 cp .env.example .env                   # keys for OpenAI and Supabase
 
 python -m uvicorn api.main:app --port 8000
@@ -94,12 +94,12 @@ below), or
 From the command line, one file end to end:
 
 ```bash
-python -m ver2.driver media/x.mp4 --sampler clip --chunking uniform
-python -m ver2.driver media/x.mp4 --no-video --chunking vad    # sound alone
-python -m ver2.video.describe.driver out/x/manifest.json --describer openai
-python -m ver2.embed.driver out/x/descriptions.json
-python -m ver2.aggregate.driver x --tier llm
-python -m ver2.retrieve.driver "people at the checkout" --moments 3
+python -m falconvar.driver media/x.mp4 --sampler clip --chunking uniform
+python -m falconvar.driver media/x.mp4 --no-video --chunking vad    # sound alone
+python -m falconvar.video.describe.driver out/x/manifest.json --describer openai
+python -m falconvar.embed.driver out/x/descriptions.json
+python -m falconvar.aggregate.driver x --tier llm
+python -m falconvar.retrieve.driver "people at the checkout" --moments 3
 ```
 
 Everything one file produces lives under `data/out/<video-id>/`. Grouped by video
@@ -111,7 +111,7 @@ inspect, copy or delete.
 ```
 web/            the browser client: one page, no build step (deprecated)
 api/            HTTP in front of it all; slow stages queued, search immediate
-ver2/
+falconvar/
   driver.py     the CLI for both streams
   orchestrate.py both streams, one grid — what the CLI and the API both call
   timeline.py   the shared chunk grid: spans + the policy that produced them
@@ -128,7 +128,7 @@ db/schema.sql   runnable DDL: every table, function and RLS policy
 docs/           SCHEMAS.md · ROUTES.md · RUN.md
 ```
 
-`recovery/` imports nothing from `ver2`, and `imports.py` enforces it by
+`recovery/` imports nothing from `falconvar`, and `imports.py` enforces it by
 parsing the files. Hand someone those three files, a video id and the video,
 and they rebuild the frame store byte for byte with `av`, `opencv` and `numpy`.
 

@@ -14,11 +14,11 @@ easyocr==1.7.2             # text          (detector only; nothing is read)
 # batch and pull-based, which would mean a second decode pass.
 scenedetect==0.7.1
 
-# --- api (optional): only `api/` needs these, ver2 runs without them
+# --- api (optional): only `api/` needs these, falconvar runs without them
 fastapi
 uvicorn[standard]
 python-multipart
 
-# --- audio (optional): only ver2/audio needs these
+# --- audio (optional): only falconvar/audio needs these
 faster-whisper
 pyannote.audio

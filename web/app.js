@@ -5,7 +5,7 @@
  * routes it calls matters more than anything a bundler buys.
  *
  * Everything the form can offer comes from GET /capabilities, so a sampler
- * registered in ver2 shows up here without this file being edited.
+ * registered in falconvar shows up here without this file being edited.
  */
 
 const $ = (s) => document.querySelector(s);

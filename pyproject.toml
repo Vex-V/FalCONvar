@@ -1,4 +1,4 @@
-# Packaging exists here for one reason: to stop `python -m ver2.…` depending on
+# Packaging exists here for one reason: to stop `python -m falconvar.…` depending on
 # the working directory. Before it, every documented command worked only from
 # the checkout root, and the stage drivers each carried a `sys.path.insert` so
 # they could still be run as scripts. `pip install -e .` makes the four
@@ -27,18 +27,18 @@ dependencies = []
 # Explicit rather than discovered: `docs`, `web`, `db` and `data` are not
 # Python, and auto-discovery would either pick them up or refuse to guess.
 packages = [
-    "ver2",
-    "ver2.aggregate", "ver2.aggregate.output",
-    "ver2.audio", "ver2.audio.diarize", "ver2.audio.output",
-    "ver2.audio.segment", "ver2.audio.transcribe",
-    "ver2.embed", "ver2.embed.embedders", "ver2.embed.index",
-    "ver2.recovery", "ver2.retrieve",
-    "ver2.video", "ver2.video.describe", "ver2.video.describe.describers",
-    "ver2.video.describe.input", "ver2.video.describe.output",
-    "ver2.video.describe.vlm",
-    "ver2.video.ingest", "ver2.video.ingest.chunker",
-    "ver2.video.ingest.output", "ver2.video.ingest.samplers",
-    "ver2.video.ingest.samplers.components", "ver2.video.ingest.source",
+    "falconvar",
+    "falconvar.aggregate", "falconvar.aggregate.output",
+    "falconvar.audio", "falconvar.audio.diarize", "falconvar.audio.output",
+    "falconvar.audio.segment", "falconvar.audio.transcribe",
+    "falconvar.embed", "falconvar.embed.embedders", "falconvar.embed.index",
+    "falconvar.recovery", "falconvar.retrieve",
+    "falconvar.video", "falconvar.video.describe", "falconvar.video.describe.describers",
+    "falconvar.video.describe.input", "falconvar.video.describe.output",
+    "falconvar.video.describe.vlm",
+    "falconvar.video.ingest", "falconvar.video.ingest.chunker",
+    "falconvar.video.ingest.output", "falconvar.video.ingest.samplers",
+    "falconvar.video.ingest.samplers.components", "falconvar.video.ingest.source",
     "api",
 ]
 # `eval/` is deliberately absent: it is a measurement harness run from the

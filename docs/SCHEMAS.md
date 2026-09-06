@@ -51,7 +51,7 @@ a disagreement is a comparison rather than a silent drift.
 
 ## 1. `manifest.json`
 
-Written by `ver2.video.ingest`, rewritten atomically as each chunk closes, so a
+Written by `falconvar.video.ingest`, rewritten atomically as each chunk closes, so a
 reader always sees a whole document. `complete` says whether ingestion
 finished — it distinguishes "no more chunks yet" from "no more chunks ever".
 
@@ -131,7 +131,7 @@ burnt-in clock as 11:17:40 when it read 11:17:19.
 
 ## 3. `descriptions.json`
 
-Written by `ver2.video.describe`, one entry per `(chunk, sampler)` pair — which is
+Written by `falconvar.video.describe`, one entry per `(chunk, sampler)` pair — which is
 the unit one describer call covers.
 
 ```jsonc
@@ -278,7 +278,7 @@ silently edit boundaries another pass decided.
 
 ## 6. `transcript.json`
 
-Written by `ver2.audio`, whole rather than incrementally: transcription and
+Written by `falconvar.audio`, whole rather than incrementally: transcription and
 diarization are single passes over the entire file that produce nothing until
 they produce everything, so there is no partial state a reader could see.
 
@@ -292,7 +292,7 @@ they produce everything, so there is no partial state a reader could see.
   "language": "en", "language_probability": 0.9907,
   "speakers": ["SPEAKER_00"],
   "model": { "transcriber": {...}, "diarizer": {...} },
-  "timeline": { /* the whole grid, see ver2/timeline.py */ },
+  "timeline": { /* the whole grid, see falconvar/timeline.py */ },
 
   "segments": [{            // THE RECORD -- independent of any chunk grid
     "start": 6.99, "end": 13.39, "speaker": "SPEAKER_00",

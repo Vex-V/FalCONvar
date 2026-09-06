@@ -90,8 +90,8 @@ def prompt_for(content: str, count: int, forbidden: list[str]) -> str:
 def generate(document: dict, per_unit: int = 3, model: str = "gpt-5.4-mini") -> list[dict]:
     from openai import OpenAI
 
-    from ver2.embed.units import render
-    from ver2.video.describe.vlm.openai_client import _api_key
+    from falconvar.embed.units import render
+    from falconvar.video.describe.vlm.openai_client import _api_key
 
     client = OpenAI(api_key=_api_key())
     pairs: list[dict] = []
@@ -130,7 +130,7 @@ def _ask(client, model: str, content: str, count: int, forbidden: list[str]) -> 
 
 
 if __name__ == "__main__":
-    from ver2 import db
+    from falconvar import db
     db.load_env()
     doc = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     out = Path(sys.argv[2] if len(sys.argv) > 2 else "eval/results/query_pairs.json")

@@ -23,9 +23,9 @@ import json
 import math
 from pathlib import Path
 
-from ver2.embed.index.base import Hit
-from ver2.embed.units import Unit
-from ver2.retrieve.search import to_moments
+from falconvar.embed.index.base import Hit
+from falconvar.embed.units import Unit
+from falconvar.retrieve.search import to_moments
 
 
 def render_values_insertion(structured):
@@ -112,8 +112,8 @@ def rank_of(chunk_id, query_vec, units, vectors):
 
 
 def main():
-    from ver2 import db
-    from ver2.embed import embedders as embedders_mod
+    from falconvar import db
+    from falconvar.embed import embedders as embedders_mod
 
     db.load_env()
     doc = json.loads(Path("out/test1/descriptions.json").read_text(encoding="utf-8"))
