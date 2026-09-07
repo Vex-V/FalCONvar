@@ -12,7 +12,7 @@ from ...shared import paths, sinks
 from ...shared.documents import Produced
 from . import embedders as embedders_mod
 from . import units as units_mod
-from . import backends
+from . import indexes as backends
 
 DEFAULT_EMBEDDER = "openai"
 

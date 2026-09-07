@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
-    from .components.descriptors import RegionDescriptor
-    from .components.detectors import ObjectDetector
+    from .perception.descriptors import RegionDescriptor
+    from .perception.detectors import ObjectDetector
 
 
 class TextChangeSampler(DetectionChangeSampler):
@@ -46,10 +46,10 @@ class TextChangeSampler(DetectionChangeSampler):
         sampler_id: Optional[str] = None,
         prompt: Optional[str] = None,
     ) -> None:
-        from .components.descriptors import TextLayoutDescriptor
+        from .perception.descriptors import TextLayoutDescriptor
 
         if detector is None:
-            from .components.detectors import TextRegionDetector
+            from .perception.detectors import TextRegionDetector
 
             detector = TextRegionDetector(languages=languages)
         super().__init__(

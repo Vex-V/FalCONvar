@@ -36,7 +36,7 @@ class Describer(Protocol):
     def config(self) -> dict[str, Any]: ...
 
 
-_LAZY = {"openai": "openai_client:OpenAIDescriber"}
+_LAZY = {"openai": "backends.openai_client:OpenAIDescriber"}
 _REGISTRY: dict[str, Any] = {}
 
 

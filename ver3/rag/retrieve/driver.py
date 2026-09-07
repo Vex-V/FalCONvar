@@ -15,7 +15,7 @@ from ...boundaries import load as load_timeline
 from ...shared import paths
 from ..embed import embedders as embedders_mod
 from ..embed.driver import DEFAULT_EMBEDDER, DEFAULT_INDEX
-from ..embed import backends
+from ..embed import indexes as backends
 from .search import Moment, to_moments
 
 

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
-    from .components.descriptors import RegionDescriptor
-    from .components.detectors import ObjectDetector
+    from .perception.descriptors import RegionDescriptor
+    from .perception.detectors import ObjectDetector
 
 
 class PersonChangeSampler(DetectionChangeSampler):
@@ -47,10 +47,10 @@ class PersonChangeSampler(DetectionChangeSampler):
         sampler_id: Optional[str] = None,
         prompt: Optional[str] = None,
     ) -> None:
-        from .components.descriptors import CropEmbeddingDescriptor
+        from .perception.descriptors import CropEmbeddingDescriptor
 
         if detector is None:
-            from .components.detectors import YoloPersonDetector
+            from .perception.detectors import YoloPersonDetector
 
             detector = YoloPersonDetector()
         super().__init__(

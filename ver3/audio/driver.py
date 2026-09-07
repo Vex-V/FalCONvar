@@ -49,7 +49,7 @@ def run(video_id: str,
                  video_id=video_id)
     written = sinks.write(video_id, "raw_transcript", raw.as_dict(), sink)
     return Produced(
-        video_id=video_id, component="listen", backend=",".join(written),
+        video_id=video_id, component="audio", backend=",".join(written),
         artifacts={"raw_transcript": written.get("file", "")},
         stats={**raw.stats, "silent": raw.silent},
         skipped=["transcribe", "diarize"] if raw.silent else [],

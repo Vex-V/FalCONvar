@@ -101,7 +101,7 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
         artifacts["store"] = str(store.root)
 
     return Produced(
-        video_id=video_id, component="ingest", backend=",".join(written),
+        video_id=video_id, component="video", backend=",".join(written),
         artifacts=artifacts,
         stats={**manifest.stats,
                "timeline_fingerprint": manifest.timeline_fingerprint,

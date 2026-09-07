@@ -177,9 +177,9 @@ class NoDiarizer:
 #: name -> "module:Class", resolved on first use so nothing heavy is imported
 #: for a run that does not ask for it.
 TRANSCRIBERS: dict[str, Any] = {"stub": StubTranscriber,
-                                "whisper": "whisper:WhisperTranscriber"}
+                                "whisper": "backends.whisper:WhisperTranscriber"}
 DIARIZERS: dict[str, Any] = {"none": NoDiarizer,
-                             "pyannote": "pyannote:PyannoteDiarizer"}
+                             "pyannote": "backends.pyannote:PyannoteDiarizer"}
 
 
 def _resolve(registry: dict[str, Any], name: str, kind: str):

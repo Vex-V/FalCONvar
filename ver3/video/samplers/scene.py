@@ -10,7 +10,7 @@ from ..reader import Frame
 from .base import Sampler
 
 if TYPE_CHECKING:
-    from .components.embedders import FrameEmbedder
+    from .perception.embedders import FrameEmbedder
 
 
 class ClipChangeSampler(Sampler):
@@ -58,7 +58,7 @@ class ClipChangeSampler(Sampler):
         if not 0.0 <= threshold <= 1.0:
             raise ValueError("threshold must be a cosine similarity in [0, 1]")
         if embedder is None:
-            from .components.embedders import CLIPEmbedder
+            from .perception.embedders import CLIPEmbedder
 
             embedder = CLIPEmbedder()
         self.embedder = embedder

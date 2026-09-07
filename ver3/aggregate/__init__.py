@@ -15,7 +15,8 @@ import importlib
 from typing import Any
 
 from .base import TIERS, Context, missing, resolve_order
-from .free import CoverageAggregator, SpeakersAggregator, StatsAggregator
+from .statistics import (CoverageAggregator, SpeakersAggregator,
+                         StatsAggregator)
 
 REGISTRY: dict[str, Any] = {
     cls.name: cls for cls in
@@ -25,15 +26,15 @@ REGISTRY: dict[str, Any] = {
 #: name -> ("module:Class", tier, about). Resolved on first use, so a `--tier
 #: free` run never imports the LLM client and never needs a key.
 _LAZY: dict[str, tuple[str, str, str]] = {
-    "ner": ("local:NERAggregator", "local",
+    "ner": ("model.ner:NERAggregator", "local",
             "named entities, and which chunks each appears in"),
-    "sentiment": ("local:SentimentAggregator", "local",
+    "sentiment": ("model.sentiment:SentimentAggregator", "local",
                   "tone per chunk, and where it turns"),
-    "summary": ("text:SummaryAggregator", "llm",
+    "summary": ("llm.summary:SummaryAggregator", "llm",
                 "what the whole video is about, in one pass over every chunk"),
-    "chapters": ("text:ChaptersAggregator", "llm",
+    "chapters": ("llm.chapters:ChaptersAggregator", "llm",
                  "a table of contents: contiguous chapters over the video"),
-    "events": ("text:EventsAggregator", "llm",
+    "events": ("llm.events:EventsAggregator", "llm",
                "discrete things that happened, each pinned to a chunk"),
 }
 

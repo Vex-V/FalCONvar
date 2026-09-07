@@ -8,7 +8,8 @@ from ..boundaries import load as load_timeline
 from ..video import load as load_manifest
 from ..shared import env, paths, sinks
 from ..shared.documents import Descriptions, Produced
-from . import base, prompts, stub  # noqa: F401  -- stub self-registers
+from . import base, prompts
+from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
 
 DEFAULT_DESCRIBER = "openai"

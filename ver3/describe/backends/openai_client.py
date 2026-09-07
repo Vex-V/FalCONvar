@@ -25,9 +25,9 @@ import json
 import os
 from typing import Any, Optional, Sequence
 
-from .base import Description
-from .frames import LoadedFrame
-from . import prompts
+from ..base import Description
+from ..frames import LoadedFrame
+from .. import prompts
 
 #: What the caller asked for. Model ids change faster than this file will, so
 #: it is a plain default rather than a validated constant -- pass --model to
@@ -43,7 +43,7 @@ DEFAULT_MAX_TOKENS = 2000
 #: Resolving the key lives in `falconvar/llm.py`, which the aggregate stage also
 #: uses. Four copies of connect-and-complain is what made `db.py` necessary;
 #: this is the same lesson applied before it happens again.
-from ..shared.llm import KEY_VARS, api_key as _api_key
+from ...shared.llm import KEY_VARS, api_key as _api_key
 
 
 class DescriberUnavailable(Exception):

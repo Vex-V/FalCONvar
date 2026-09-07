@@ -13,9 +13,9 @@ from ..reader import Frame
 from .base import Sampler
 
 if TYPE_CHECKING:
-    from .components.descriptors import RegionDescriptor
-    from .components.detectors import ObjectDetector
-    from .components.embedders import FrameEmbedder
+    from .perception.descriptors import RegionDescriptor
+    from .perception.detectors import ObjectDetector
+    from .perception.embedders import FrameEmbedder
 
 
 class DetectionChangeSampler(Sampler):
