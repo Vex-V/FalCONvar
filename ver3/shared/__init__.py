@@ -12,6 +12,10 @@ Three modules, and two of them import nothing at all:
                   where `falconvar` grew four near-identical `output/` packages.
     env.py        reading `.env` at the top of an entry point. Keys only --
                   paths resolve earlier than this can run.
+    llm.py        the text model call, and the one list of key names.
+    db.py         the Supabase client, and the one list of ITS key names.
+    rows.py       documents -> rows. The only module that knows table names.
+    schemas.py    JSON Schema generated from the dataclasses above.
 
 Nothing here knows what a component does. A module that only one component
 needs does not belong here -- it belongs in that component.

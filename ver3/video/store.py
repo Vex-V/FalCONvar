@@ -47,6 +47,32 @@ class FrameStore:
         self.bytes_written += path.stat().st_size
         return path
 
+    def prune(self, keep: set[int]) -> list[int]:
+        """Delete stored frames no longer named, and say which.
+
+        A store accumulates across runs: ingesting with `uniform` and then with
+        `clip` leaves the first run's frames behind, because nothing tells the
+        directory that a new manifest supersedes the old one. That is disk
+        wasted on frames no manifest addresses, and it makes a byte-comparison
+        against the store report orphans that are not mismatches.
+
+        Not automatic. Deleting frames is the one irreversible thing this
+        component can do, and a caller who is about to describe from an older
+        manifest wants them kept -- so it happens when asked.
+        """
+        if not self.root.exists():
+            return []
+        removed = []
+        for path in sorted(self.root.glob(f"*.{self.format}")):
+            try:
+                index = int(path.stem)
+            except ValueError:
+                continue                     # not ours; leave it alone
+            if index not in keep:
+                path.unlink()
+                removed.append(index)
+        return removed
+
     def config(self) -> dict[str, Any]:
         return {"root": str(self.root), "format": self.format,
                 "quality": self.quality}

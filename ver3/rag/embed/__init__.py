@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from .driver import DEFAULT_EMBEDDER, collect, main, run
+from . import backends
+from .driver import (DEFAULT_EMBEDDER, DEFAULT_INDEX, collect, main, run)
 from .embedders import Embedder, EmbedderUnavailable, available, build
-from .index import LocalIndex, index_path
+from .backends.local import LocalIndex, index_path
 from .units import Unit, from_descriptions, from_transcript, render
 
-__all__ = ["DEFAULT_EMBEDDER", "Embedder", "EmbedderUnavailable", "LocalIndex",
+__all__ = ["DEFAULT_EMBEDDER", "DEFAULT_INDEX", "Embedder", "backends", "EmbedderUnavailable", "LocalIndex",
            "Unit", "available", "build", "collect", "from_descriptions",
            "from_transcript", "index_path", "main", "render", "run"]

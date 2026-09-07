@@ -73,6 +73,7 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
         vocabulary: Optional[Sequence[str]] = None,
         frame_store: bool = True,
         store_scope: str = "sampled",
+        prune_store: bool = False,
         sink: str | Sequence[str] = "file") -> Produced:
     """One decode pass over the picture, onto a grid decided elsewhere."""
     media = load_media(video_id)
@@ -87,6 +88,13 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
              if frame_store else None)
     manifest = ingest(media, timeline, built, per_second, store, store_scope)
 
+    pruned: list[int] = []
+    if store is not None and prune_store:
+        # After the pass, so a failure mid-run leaves the old store whole.
+        named = {f["index"] for c in manifest.chunks
+                 for b in c["samplers"].values() for f in b["frames"]}
+        pruned = store.prune(named)
+
     written = sinks.write(video_id, "manifest", manifest.as_dict(), sink)
     artifacts = {"manifest": written.get("file", "")}
     if store is not None and store.written:
@@ -98,7 +106,8 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
         stats={**manifest.stats,
                "timeline_fingerprint": manifest.timeline_fingerprint,
                "manifest_fingerprint": manifest.fingerprint(),
-               "samplers": manifest.sampler_ids()},
+               "samplers": manifest.sampler_ids(),
+               "pruned_frames": len(pruned)},
         skipped=[] if store is not None else ["store"],
     )
 
@@ -129,6 +138,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--vocabulary", default=None,
                     help="objects: comma-separated class names")
     ap.add_argument("--no-frame-store", action="store_true")
+    ap.add_argument("--prune-store", action="store_true",
+                    help="delete stored frames this manifest does not name. "
+                         "A store accumulates across runs; this is the only "
+                         "irreversible thing ingest can do, so it is opt-in")
     ap.add_argument("--store-scope", default="sampled",
                     choices=("sampled", "decimated"))
     ap.add_argument("--sink", default="file")
@@ -141,7 +154,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         produced = run(args.video_id, args.sampler, args.per_second, args.every_n,
                        args.min_interval, args.max_per_chunk, args.threshold,
                        vocab, not args.no_frame_store, args.store_scope,
-                       args.sink)
+                       args.prune_store, args.sink)
     except (KeyError, ValueError, FileNotFoundError, UnreadableSource,
             sinks.UnknownBackend) as exc:
         print(f"error: {exc}")
@@ -160,6 +173,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  elapsed      {s['elapsed_s']:.2f}s")
     if "stored_frames" in s:
         print(f"  stored       {s['stored_frames']} frames, {s['stored_mb']:g} MB")
+    if s.get("pruned_frames"):
+        print(f"  pruned       {s['pruned_frames']} frames no longer named")
     print()
     for sampler_id in s["samplers"]:
         counts = [c["samplers"].get(sampler_id, {}).get("frame_count", 0)

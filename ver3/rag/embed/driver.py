@@ -12,7 +12,7 @@ from ...shared import paths, sinks
 from ...shared.documents import Produced
 from . import embedders as embedders_mod
 from . import units as units_mod
-from .index import LocalIndex
+from . import backends
 
 DEFAULT_EMBEDDER = "openai"
 
@@ -29,36 +29,65 @@ def collect(video_id: str) -> list[units_mod.Unit]:
     return out
 
 
+DEFAULT_INDEX = "local"
+
+
 def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
         model: Optional[str] = None,
         batch: int = 64,
+        index_name: str | Sequence[str] = DEFAULT_INDEX,
         sink: str | Sequence[str] = "file") -> Produced:
+    """Embed what changed, into one or more indexes.
+
+    Several indexes take the same vectors: embedding is the paid half and the
+    backends are the cheap one, so writing to `local,qdrant` costs one set of
+    API calls rather than two.
+    """
     built = embedders_mod.build(embedder, **({"model": model} if model else {}))
-    index = LocalIndex(video_id, built.key)
+    names = ([n.strip() for n in index_name.split(",") if n.strip()]
+             if isinstance(index_name, str) else list(index_name))
+    indexes = [(n, backends.build(n, video_id, built.key)) for n in names]
+    index = indexes[0][1]
 
     wanted = collect(video_id)
     if not wanted:
         raise FileNotFoundError(
             f"{video_id}: nothing to embed -- no descriptions and no transcript")
 
-    stored = index.stored_hashes()
-    changed = [u for u in wanted if stored.get(u.key) != u.text_hash]
+    # Per index, not once. A unit needs embedding if *any* target lacks it or
+    # holds a different hash -- otherwise adding a second backend later would
+    # fill it only with what changed since, a subset nothing reports as
+    # incomplete. This is also why the vectors must exist before any upsert:
+    # an unchanged unit carries `vector=None`, and a backend handed one writes
+    # nothing and says it succeeded.
+    stored = {name: target.stored_hashes() for name, target in indexes}
+    needs: dict[str, list[units_mod.Unit]] = {name: [] for name, _ in indexes}
+    for unit in wanted:
+        for name in needs:
+            if stored[name].get(unit.key) != unit.text_hash:
+                needs[name].append(unit)
 
+    changed = [u for u in wanted
+               if any(u in needs[name] for name in needs)]
     for start in range(0, len(changed), batch):
         window = changed[start:start + batch]
         for unit, vector in zip(window, built.embed([u.content for u in window])):
             unit.vector = vector
 
-    index.upsert(changed)
-    dropped = index.prune({u.key for u in wanted})
-    path = index.save()
+    live = {u.key for u in wanted}
+    artifacts: dict[str, str] = {}
+    dropped = 0
+    for name, target in indexes:
+        target.upsert(needs[name])
+        dropped += target.prune(live)
+        artifacts[name] = str(target.save())
 
     return Produced(
-        video_id=video_id, component="embed", backend="file",
-        artifacts={"index": str(path)},
+        video_id=video_id, component="embed", backend=",".join(names),
+        artifacts=artifacts,
         stats={"units": len(wanted), "embedded": len(changed),
                "unchanged": len(wanted) - len(changed), "pruned": dropped,
-               "embedder": built.key,
+               "embedder": built.key, "indexes": names,
                "samplers": sorted({u.sampler_id for u in wanted})},
     )
 
@@ -73,11 +102,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                     choices=embedders_mod.available())
     ap.add_argument("--model", default=None)
     ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--index", default=DEFAULT_INDEX, dest="index_name",
+                    help=f"comma-separated; known: "
+                         f"{', '.join(backends.available())}")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     try:
-        produced = run(args.video_id, args.embedder, args.model, args.batch)
+        produced = run(args.video_id, args.embedder, args.model, args.batch,
+                       args.index_name)
     except (KeyError, ValueError, FileNotFoundError,
             embedders_mod.EmbedderUnavailable) as exc:
         print(f"error: {exc}")
@@ -93,7 +126,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  embedded     {s['embedded']}   ({s['unchanged']} unchanged)")
     if s["pruned"]:
         print(f"  pruned       {s['pruned']}   (chunks that no longer exist)")
-    print(f"\nindex -> {produced.artifacts['index']}")
+    print()
+    for name, where in produced.artifacts.items():
+        print(f"  {name:<12} -> {where}")
     return 0
 
 

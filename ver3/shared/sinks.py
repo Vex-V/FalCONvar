@@ -75,11 +75,11 @@ def write(video_id: str, artifact: str, document: dict[str, Any],
           on_problem: Optional[Callable[[str], None]] = None) -> dict[str, str]:
     """Put one document where the caller asked. Returns {backend: location}.
 
-    ``to_supabase`` is passed in rather than imported, so this module knows
-    nothing about the database: a component that has rows to write supplies the
-    function that writes them, and one that does not simply never asks for that
-    backend. That keeps `sinks` free of `db`, and `db` out of the import path
-    of every file-only run.
+    ``to_supabase`` may be passed in, but it is normally looked up by artifact
+    name from `rows.WRITERS` -- imported *inside* the branch, so a file-only
+    run never loads the database client and never needs a key. A document with
+    no row mapping cannot be written to Postgres, and saying so beats writing
+    nothing and reporting success.
     """
     written: dict[str, str] = {}
     for backend in parse(sink):
@@ -87,13 +87,15 @@ def write(video_id: str, artifact: str, document: dict[str, Any],
             written["file"] = str(write_json(paths.artifact(video_id, artifact),
                                              document))
         elif backend == "supabase":
-            if to_supabase is None:
-                # Asked for, but this component has no row mapping. Saying so
-                # beats silently writing nothing and reporting success.
+            handler = to_supabase
+            if handler is None:
+                from . import rows
+                handler = rows.writer_for(artifact)
+            if handler is None:
                 raise UnknownBackend(
                     f"{artifact!r} has no Postgres representation to write")
             try:
-                to_supabase(video_id, document)
+                handler(video_id, document)
                 written["supabase"] = f"{artifact}@supabase"
             except Exception as exc:                        # noqa: BLE001
                 # Best-effort by design: the file is what the next component

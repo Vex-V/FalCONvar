@@ -4,9 +4,9 @@ Reads the finished documents, never the video and never another component's
 modules. Answers the questions embeddings cannot: counts, coverage, who
 dominated, how much of this is speech.
 
-Three tiers, cheapest first. `free` is arithmetic; `llm` adds paid calls and
-is registered lazily, so importing this pulls in no client and needs no key.
-The `local` tier -- GPU models for entities and sentiment -- is the one gap.
+Three tiers, cheapest first. `free` is arithmetic, `local` adds GPU models,
+`llm` adds paid calls. Both dear tiers are registered lazily, so importing this
+pulls in neither torch nor an API client and needs no key.
 """
 
 from __future__ import annotations
@@ -25,6 +25,10 @@ REGISTRY: dict[str, Any] = {
 #: name -> ("module:Class", tier, about). Resolved on first use, so a `--tier
 #: free` run never imports the LLM client and never needs a key.
 _LAZY: dict[str, tuple[str, str, str]] = {
+    "ner": ("local:NERAggregator", "local",
+            "named entities, and which chunks each appears in"),
+    "sentiment": ("local:SentimentAggregator", "local",
+                  "tone per chunk, and where it turns"),
     "summary": ("text:SummaryAggregator", "llm",
                 "what the whole video is about, in one pass over every chunk"),
     "chapters": ("text:ChaptersAggregator", "llm",
