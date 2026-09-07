@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cuts",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "detector",
+    "document",
+    "source",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "cuts"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "detector": {
+      "type": "string"
+    },
+    "params": {
+      "type": "object"
+    },
+    "cuts": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "scores": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "stats": {
+      "type": "object"
+    }
+  }
+}

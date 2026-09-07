@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Descriptions",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "descriptions"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "timeline_fingerprint": {
+      "type": "string"
+    },
+    "manifest_fingerprint": {
+      "type": "string"
+    },
+    "model": {
+      "type": "object"
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "stats": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RawTranscript",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "raw_transcript"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "object"
+    },
+    "track": {
+      "type": "object"
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "words": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "stats": {
+      "type": "object"
+    },
+    "speakers": {
+      "type": [
+        "string",
+        "array"
+      ]
+    }
+  }
+}

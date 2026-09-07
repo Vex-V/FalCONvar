@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "timeline_fingerprint",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "manifest"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "timeline_fingerprint": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object"
+    },
+    "config": {
+      "type": "object"
+    },
+    "stats": {
+      "type": "object"
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "fingerprint": {
+      "type": [
+        "string",
+        "array"
+      ]
+    }
+  }
+}

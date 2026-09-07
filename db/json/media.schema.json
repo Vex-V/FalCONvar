@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Media",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "audio",
+    "container_format",
+    "document",
+    "duration_s",
+    "path",
+    "version",
+    "video",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "media"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "container_format": {
+      "type": "string"
+    },
+    "duration_s": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "video": {},
+    "audio": {}
+  }
+}

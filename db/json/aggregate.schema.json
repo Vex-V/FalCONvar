@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aggregate",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "aggregate_id",
+    "document",
+    "tier",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "aggregate"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "aggregate_id": {
+      "type": "string"
+    },
+    "tier": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "inputs_fingerprint": {
+      "type": "string"
+    },
+    "stats": {
+      "type": "object"
+    }
+  }
+}

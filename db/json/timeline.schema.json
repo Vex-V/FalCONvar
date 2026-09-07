@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Timeline",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "spans",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "timeline"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "number"
+        }
+      }
+    },
+    "policy": {
+      "type": "string"
+    },
+    "params": {
+      "type": "object"
+    },
+    "derived_from": {
+      "type": "string"
+    },
+    "fingerprint": {
+      "type": [
+        "string",
+        "array"
+      ]
+    }
+  }
+}
