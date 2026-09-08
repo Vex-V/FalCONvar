@@ -2,7 +2,8 @@
 --
 -- Paste the whole thing into the Supabase SQL editor and run it. It is
 -- idempotent: running it twice is a no-op except where a re-run is the point
--- (see `fts` below).
+-- (see `fts` below), so this is also how to apply a change to any one part --
+-- there is no separate patch file to keep in step with it.
 --
 -- AFTERWARDS, one thing the SQL cannot do:
 --   Dashboard > Settings > API > Exposed schemas: add `ver3`
@@ -287,15 +288,33 @@ language sql stable as $$
     order by c.embedding <=> p_query_vector
     limit greatest(p_limit * 4, 40)
   ),
+  -- ANY term, not every term.
+  --
+  -- `websearch_to_tsquery` ANDs its terms, so one word absent from the corpus
+  -- silences the whole lexical half: measured here, "reactor exploded" ranked
+  -- 2 rows and "the moment the reactor exploded" ranked 0, because "moment"
+  -- appears in no chunk. That is the opposite of what fusing wants -- a half
+  -- with a partial opinion reporting none -- and it disagrees with the other
+  -- two backends, which both score any overlap.
+  --
+  -- Replacing `&` with `|` in the rendered tsquery keeps the parser's stemming,
+  -- stopword removal and phrase handling and only loosens the conjunction.
+  -- `ts_rank_cd` then does the work AND was doing badly: more overlap ranks
+  -- higher, rather than partial overlap ranking nowhere.
+  --
+  -- A negated term (`-word` becomes `!'word'`) is the one case this loosens
+  -- too far, turning an exclusion into "or anything lacking it". Rare from a
+  -- search box, and RRF bounds the damage to one term of two.
+  query_or as (
+    select nullif(replace(
+             websearch_to_tsquery('english', coalesce(p_query_text, ''))::text,
+             '&', '|'), '')::tsquery as q
+  ),
   by_text as (
     select c.video_id, c.chunk_id, c.sampler_id,
-           row_number() over (
-             order by ts_rank_cd(c.fts,
-                       websearch_to_tsquery('english', p_query_text)) desc
-           ) as rank
-    from candidates c
-    where p_query_text is not null and p_query_text <> ''
-      and c.fts @@ websearch_to_tsquery('english', p_query_text)
+           row_number() over (order by ts_rank_cd(c.fts, o.q) desc) as rank
+    from candidates c cross join query_or o
+    where o.q is not null and c.fts @@ o.q
     limit greatest(p_limit * 4, 40)
   ),
   fused as (

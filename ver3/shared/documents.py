@@ -523,6 +523,54 @@ class Descriptions:
 
 
 # --------------------------------------------------------------------------
+# 8 · embedded  --  what text was embedded. For reading, not for searching.
+# --------------------------------------------------------------------------
+
+@dataclass
+class Embedded:
+    """Every unit's text, beside the hash that keys it.
+
+    **No vectors.** This exists to be opened and read -- to see exactly what
+    text a chunk contributed to the index -- and 1536 floats per unit is the
+    part of that answer nobody can read. The vectors live in whichever real
+    index the run wrote to.
+
+    **One file per video, not per embedder.** `units.render()` produces the
+    same text whichever model will embed it; only the vectors differ. A file
+    per embedder would be several identical copies of the readable half.
+
+    Written alongside the real index because the question it answers -- "what
+    did this chunk actually contribute" -- is the one asked when a ranking
+    looks wrong, and it is the measurement that established embedding the
+    summary *and* the structured fields (0.705 against 0.528 MRR).
+    """
+
+    video_id: str
+    timeline_fingerprint: str = ""
+    units: list[dict[str, Any]] = field(default_factory=list)
+
+    def text_of(self, chunk_id: int, sampler_id: str) -> str:
+        for unit in self.units:
+            if unit["chunk_id"] == chunk_id and unit["sampler_id"] == sampler_id:
+                return unit.get("content", "")
+        return ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"document": "embedded", "version": 1,
+                "video_id": self.video_id,
+                "timeline_fingerprint": self.timeline_fingerprint,
+                "count": len(self.units),
+                "samplers": sorted({u["sampler_id"] for u in self.units}),
+                "units": self.units}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Embedded":
+        return cls(video_id=d["video_id"],
+                   timeline_fingerprint=d.get("timeline_fingerprint", ""),
+                   units=d.get("units", []))
+
+
+# --------------------------------------------------------------------------
 # 9 · aggregate  --  video-level structure over what the chunks said
 # --------------------------------------------------------------------------
 
@@ -595,9 +643,10 @@ class Produced:
 DOCUMENTS = {"media": Media, "raw_transcript": RawTranscript,
              "cuts": Cuts, "timeline": Timeline, "manifest": Manifest,
              "transcript": Transcript, "descriptions": Descriptions,
+             "embedded": Embedded,
              "aggregate": Aggregate}
 
 __all__ = ["PRECISION", "VideoStream", "AudioStream", "Media",
            "RawTranscript", "Cuts", "Timeline", "Manifest", "Transcript",
-           "Descriptions", "Aggregate", "Produced", "fingerprint_of",
+           "Descriptions", "Embedded", "Aggregate", "Produced", "fingerprint_of",
            "DOCUMENTS"]

@@ -60,27 +60,50 @@ def run(video_id: str, tier: str = "free",
             continue
 
         path = directory / f"{name}.json"
-        if not force and path.exists():
-            stored = Aggregate.from_dict(sinks.read_json(path))
-            if stored.inputs_fingerprint == fingerprint:
-                current += 1
-                ran.append(name)
-                produced[name] = str(path)
-                continue
 
-        payload = aggregator.run(context)
-        document = Aggregate(video_id=video_id, aggregate_id=name,
-                             tier=aggregator.tier, payload=payload,
-                             inputs_fingerprint=fingerprint,
-                             stats={"about": aggregator.about})
-        produced[name] = str(sinks.write_json(path, document.as_dict()))
+        # The fingerprint governs whether to RECOMPUTE, not whether to write.
+        # Those are different questions: a run that adds a backend has nothing
+        # to recompute and everything to write, and conflating them means the
+        # new destination silently stays empty while the run reports success.
+        # Exactly the bug `embed` had across two indexes.
+        stored = None
+        if not force and path.exists():
+            candidate = Aggregate.from_dict(sinks.read_json(path))
+            if candidate.inputs_fingerprint == fingerprint:
+                stored = candidate
+
+        if stored is not None:
+            current += 1
+            document = stored
+        else:
+            payload = aggregator.run(context)
+            document = Aggregate(video_id=video_id, aggregate_id=name,
+                                 tier=aggregator.tier, payload=payload,
+                                 inputs_fingerprint=fingerprint,
+                                 stats={"about": aggregator.about})
+
+        # Not `sinks.write`: that resolves one path per artifact name, and each
+        # aggregator writes its own file under `aggregates/`. The file half is
+        # therefore explicit here, and the row half goes through the same
+        # writer every other component uses -- so `--sink supabase` means the
+        # same thing for this component as for the rest.
+        backends = sinks.parse(sink)
+        if "file" in backends and stored is None:
+            produced[name] = str(sinks.write_json(path, document.as_dict()))
+        elif "file" in backends:
+            produced[name] = str(path)
+        if "supabase" in backends:
+            from ..shared import rows
+            rows.WRITERS["aggregate"](video_id, document.as_dict())
+            produced.setdefault(name, "aggregate@supabase")
         ran.append(name)
 
     return Produced(
-        video_id=video_id, component="aggregate", backend="file",
+        video_id=video_id, component="aggregate",
+        backend=",".join(sinks.parse(sink)),
         artifacts=produced,
         stats={"tier": tier, "ran": len(ran), "current": current,
-               "written": len(ran) - current, "aggregates": ran,
+               "computed": len(ran) - current, "aggregates": ran,
                "skipped": skipped},
         skipped=sorted(skipped),
     )
@@ -101,13 +124,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="a cost ceiling; cheaper tiers still run")
     ap.add_argument("--only", default=None, help="comma-separated aggregator names")
     ap.add_argument("--force", action="store_true", help="rebuild what is current")
+    ap.add_argument("--sink", default="file", help="file | supabase | both")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     only = ([n.strip() for n in args.only.split(",") if n.strip()]
             if args.only else None)
     try:
-        produced = run(args.video_id, args.tier, only, args.force)
+        produced = run(args.video_id, args.tier, only, args.force, args.sink)
     except (KeyError, ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}")
         return 1
@@ -118,8 +142,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     s = produced.stats
     print(f"{produced.video_id}   tier={s['tier']}")
-    print(f"  ran          {s['ran']}   ({s['written']} written, "
-          f"{s['current']} already current)")
+    print(f"  ran          {s['ran']}   ({s['computed']} computed, "
+          f"{s['current']} reused)   -> {produced.backend}")
     for name in s["aggregates"]:
         print(f"    {name}")
     for name, why in s["skipped"].items():

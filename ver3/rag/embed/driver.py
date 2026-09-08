@@ -11,6 +11,7 @@ from typing import Optional, Sequence
 from ...shared import paths, sinks
 from ...shared.documents import Produced
 from . import embedders as embedders_mod
+from . import readable
 from . import units as units_mod
 from . import indexes as backends
 
@@ -29,7 +30,7 @@ def collect(video_id: str) -> list[units_mod.Unit]:
     return out
 
 
-DEFAULT_INDEX = "local"
+DEFAULT_INDEX = "qdrant"
 
 
 def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
@@ -76,6 +77,17 @@ def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
 
     live = {u.key for u in wanted}
     artifacts: dict[str, str] = {}
+
+    # Written whatever the index, because it answers a question no index can:
+    # what text did this chunk actually contribute. Free -- the units are
+    # already in hand and the vectors are left out.
+    from ...boundaries import load as load_timeline
+    try:
+        fingerprint = load_timeline(video_id).fingerprint()
+    except Exception:                                    # noqa: BLE001
+        fingerprint = ""
+    artifacts["embedded"] = readable.write(video_id, wanted, fingerprint)
+
     dropped = 0
     for name, target in indexes:
         target.upsert(needs[name])

@@ -76,6 +76,7 @@ ARTIFACTS: dict[str, str] = {
     "manifest": "manifest.json",
     "transcript": "transcript.json",
     "descriptions": "descriptions.json",
+    "embedded": "embedded.json",
 }
 
 #: Artifacts that are directories rather than documents.

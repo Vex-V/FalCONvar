@@ -63,7 +63,8 @@ class Options:
     describer: str = describe.driver.DEFAULT_DESCRIBER   # costs money
     embedder: str = embed.DEFAULT_EMBEDDER               # costs money
     tier: str = "free"                                   # a cost ceiling
-    sink: str = "file"
+    sink: str = "file"                       # where documents go
+    index: str = embed.DEFAULT_INDEX         # where vectors go
 
 
 @dataclass
@@ -169,10 +170,10 @@ def process(options: Options,
         step(describe.run(video_id, options.describer, sink=options.sink))
 
     # 8 · vectors, from both modalities
-    step(embed.run(video_id, options.embedder))
+    step(embed.run(video_id, options.embedder, index_name=options.index))
 
     # 9 · video-level structure
-    step(aggregate.run(video_id, options.tier))
+    step(aggregate.run(video_id, options.tier, sink=options.sink))
 
     return run
 
@@ -196,7 +197,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--describer", default=describe.driver.DEFAULT_DESCRIBER)
     ap.add_argument("--embedder", default=embed.DEFAULT_EMBEDDER)
     ap.add_argument("--tier", default="free", choices=aggregate.TIERS)
-    ap.add_argument("--sink", default="file")
+    ap.add_argument("--sink", default="file",
+                    help="where documents go: file | supabase | both")
+    ap.add_argument("--index", default=embed.DEFAULT_INDEX,
+                    help=f"where vectors go; known: "
+                         f"{', '.join(embed.indexes.available())}")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -204,7 +209,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         source=args.source, video_id=args.video_id, policy=args.policy,
         use_video=not args.no_video, use_audio=not args.no_audio,
         sampler=args.sampler, describer=args.describer,
-        embedder=args.embedder, tier=args.tier, sink=args.sink)
+        embedder=args.embedder, tier=args.tier, sink=args.sink,
+        index=args.index)
 
     problems = validate(options)
     if problems:

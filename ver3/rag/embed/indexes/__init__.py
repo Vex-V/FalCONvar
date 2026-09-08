@@ -1,22 +1,24 @@
-"""Where vectors live. One protocol, three places to put them.
+"""Where vectors live. One protocol, two places to put them.
 
-    local      one JSON file per (video, embedder). No service to run, and
-               the only one that works with nothing installed.
-    qdrant     embedded or served. Dense only.
+    qdrant     embedded (a path, no service) or served (a url). The default.
     supabase   Postgres with pgvector, through the REST client.
 
-**All three fuse a dense and a lexical ranking**, because on the reference
-corpus the lexical half is worth 0.429 against 0.714 top-1 and each half is
-strong exactly where the other fails -- BM25 scored 59% top-1 on literal
-queries and 18% on paraphrases, dense 23% on both.
+**Both fuse a dense and a lexical ranking**, because on the reference corpus
+the lexical half is worth 0.429 against 0.714 top-1, and each half is strong
+exactly where the other fails -- BM25 scored 59% top-1 on literal queries and
+18% on paraphrases, dense 23% on both.
 
-`local` fuses in Python, `supabase` in an RPC over `tsvector`, and `qdrant`
-server-side with `Fusion.RRF` over a sparse vector carrying `Modifier.IDF`.
-An earlier note here called Qdrant dense-only; that was inherited from
-`falconvar` and was a claim about the *implementation*, not the database, which
-has had sparse vectors since 1.7 and native fusion since 1.10. `has_lexical`
-therefore describes what a backend was built to do, and any False there is a
-gap in this code rather than in the store.
+`qdrant` fuses server-side with `Fusion.RRF` over a sparse vector carrying
+`Modifier.IDF`; `supabase` in an RPC over `tsvector`. `has_lexical` describes
+what a backend was built to do, so a False there would be a gap in this code
+rather than in the store -- there is none now.
+
+**There used to be a third, a JSON file ranked in Python.** It was called
+`local`, which measured the wrong axis: embedded Qdrant is equally local, needs
+no service either, and ranks better. What it uniquely offered was being
+*readable*, and that survives as `embedded.json` -- written by `embed`
+alongside the real index, holding the text and none of the vectors. Nothing
+searches it, so it needs no ranking code to drift from these two.
 
 **The embedder key is in the collection name, in every backend.** A mismatch
 across widths fails loudly; a mismatch between two models of the *same* width
@@ -71,7 +73,6 @@ def tokenize(text: str) -> list[str]:
 #: name -> ("module:Class", has_lexical_half). Resolved on first use, so a
 #: local run imports neither a Qdrant client nor a Postgres one.
 _BACKENDS: dict[str, tuple[str, bool]] = {
-    "local": ("local:LocalIndex", True),
     "qdrant": ("qdrant:QdrantIndex", True),
     "supabase": ("supabase:SupabaseIndex", True),
 }
