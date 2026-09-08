@@ -1,266 +1,69 @@
-# Routes — the HTTP surface
+# Routes
 
-Eleven endpoints in `api/main.py`. The live schema is always at `/docs`; this
-file is the reasoning behind it, which the schema cannot carry.
+The HTTP surface is `api/`, over `ver3`. Run it with:
 
-Everything is same-origin: the browser client is served by the same app at
-`/app`, so there is no CORS and no base URL to configure. That page is
-**deprecated for now** — the routes below are the surface being developed,
-and the browser client does not cover all of them.
+    python -m uvicorn api.main:app --port 8000
 
----
+`/docs` is the generated schema and is the authority on request and response
+shapes; this file records the reasoning the schema cannot carry.
 
-## The shape of it
+## Three shapes of route
 
-The endpoints divide by **how long they take**, and that division is the whole
-design:
+**Immediate** -- reading what exists, and searching. Milliseconds.
 
-| kind | endpoints | why |
+**Queued** -- anything that decodes, transcribes or pays a model. A 202 with a
+job id, and the caller polls. Slow work runs **one job at a time**: every heavy
+stage contends for the same 8 GiB GPU, so two videos at once does not halve the
+wall clock, it doubles the resident weights.
+
+**Uniform** -- `POST /videos/{id}/run/{component}` runs *any* component,
+because every one of them is `run(video_id, ...) -> Produced`. `falconvar`
+needed a route and a handler per stage; here adding a component adds a row to
+`service.COMPONENTS` and this route already serves it.
+
+## The endpoints
+
+| method | path | |
 |---|---|---|
-| **immediate** | `/health`, `/capabilities`, `/videos` (GET), `/videos/{id}/{name}`, `/videos/{id}/export(s)`, `/videos/{id}/frames/{n}`, `/search` | one query or one file read; tens of milliseconds |
-| **queued** | `/videos` (POST), `/describe`, `/embed` | minutes of GPU or paid inference; returns `202` and a job id |
-| **introspective** | `/capabilities` | reads the registries, so `falconvar` gaining a sampler needs no edit here |
+| GET | `/health` | liveness, and how many jobs are queued |
+| GET | `/capabilities` | every registry, plus the defaults read off `workflow.Options` |
+| POST | `/videos` | upload a file and queue the whole pipeline. **202** |
+| POST | `/videos/{id}/run/{component}` | queue one component. **202** |
+| GET | `/jobs` | every job this process remembers |
+| GET | `/jobs/{job_id}` | one job: state, stage, history, stats |
+| GET | `/videos` | every video with an output directory |
+| GET | `/videos/{id}` | what this video has, with URLs |
+| GET | `/videos/{id}/artifacts/{name}` | one document. `?download=1` adds a filename |
+| GET | `/videos/{id}/aggregates` | which aggregates exist |
+| GET | `/videos/{id}/aggregates/{name}` | one aggregate |
+| GET | `/videos/{id}/frames/{index}` | one stored frame as JPEG |
+| POST | `/search` | ranked moments |
 
-**Search is immediate on purpose.** It is one embedding call and one SQL query,
-so making it a job would add a poll to something that answers faster than the
-poll interval.
+## Why some things are the way they are
 
-**Processing is queued on purpose, one at a time.** Every heavy stage contends
-for the same GPU: CLIP and YOLO during ingest, Whisper and pyannote during the
-audio pass. Two videos at once does not halve the wall clock, it doubles the
-resident weights and invites an allocator failure halfway through the more
-expensive one. A queue of one is the honest shape of the hardware.
+**Validation is synchronous even though the work is not.** `workflow.validate`
+returns problems as a list, so a policy that needs a stream the run is not
+reading is a 422 the caller sees at once rather than a job that fails a minute
+later. What cannot be known without opening the file -- whether a track carries
+speech -- still fails inside the job, because that is a property of the media
+rather than of the request.
 
----
+**The id comes from the filename, not the client.** It keys every table, every
+output directory and every Qdrant payload, so it is derived and sanitised
+rather than accepted.
 
-## GET `/health`
+**`/videos` is read from disk, not remembered.** A restarted server still knows
+everything it produced. `GET /jobs` says the converse plainly: job records die
+with the process, artifacts do not.
 
-```json
-{ "ok": true, "queued": 0 }
-```
+**The export list holds what exists, not what could exist.** An audio-only
+video advertises no manifest rather than offering a link that 404s -- a broken
+link reads as breakage rather than as a stage that never ran.
 
-`queued` is the depth of the work queue, not a count of running jobs — there is
-only ever one of those.
+**`?download=1` only adds a `Content-Disposition`.** Content negotiation would
+be tidier, but a browser cannot set an `Accept` header on a plain link.
 
-## GET `/capabilities`
-
-What this deployment can be asked for, read from the registries rather than a
-list:
-
-```json
-{
-  "samplers":     ["clip", "objects", "text", "uniform", "yolo"],
-  "prompts":      ["scene", "clip", "objects", "overview", "text", "uniform", "yolo"],
-  "pairings":     ["uniform:overview", "uniform:text"],
-  "chunking":     ["uniform", "scene", "vad", "speaker"],
-  "describers":   ["openai", "stub"],
-  "transcribers": ["stub", "whisper"],
-  "diarizers":    ["none", "pyannote"],
-  "embedders":    ["local", "openai"],
-  "indexes":      ["qdrant", "pgvector"],
-  "sinks":        ["file", "supabase"],
-  "defaults":     { "embedder": "openai", "index": "pgvector" }
-}
-```
-
-Registering a sampler in `falconvar` makes it appear here, and therefore in the web
-form, with nothing else edited. That is the reason this endpoint exists rather
-than the client hardcoding a list.
-
----
-
-## POST `/videos` — upload and process
-
-`multipart/form-data`. Returns **202** with a job id; the work happens on the
-worker.
-
-| field | default | notes |
-|---|---|---|
-| `file` | — | the media file |
-| `use_video` | `true` | sample frames and describe them. Off: no manifest, no frame store, no describe stage |
-| `use_audio` | `true` | transcribe and diarize. Off: no transcript |
-| `samplers` | `clip` | comma-separated. Any entry may be `name:prompt` — `yolo:overview` keeps the people sampler's frames and asks for prose. An unknown question is a 422. Read only when `use_video` |
-| `chunking` | `uniform` | `uniform` \| `scene` \| `vad` \| `speaker` |
-| `chunk_duration` | `20` | uniform: the length; everything else: the maximum |
-| `every_frames` | `1` | `uniform` stride over the **decimated** stream, in frames; 1 is every decimated frame. The cadence in seconds is this over `per_second` |
-| `vocabulary` | — | `objects` only. **No useful default**: a mismatched list found 2.4 detections/frame where a matched one found 5.1 |
-| `threshold` | per-sampler | leave unset; the useful value differs by an order of magnitude between samplers |
-| `per_second` | `1.0` | decimation rate |
-| `frame_store` | `true` | keep the sampled pixels; describe reads only from here. Forced off without video |
-| `transcriber` / `diarizer` | `whisper` / `pyannote` | `stub` and `none` need no model |
-| `language` | — | skip Whisper's language detection |
-| `sinks` | `file` | `file,supabase` writes both; file is primary |
-| `video_id` | from the filename | keys four tables and the output directory |
-
-**Either stream alone, or both.** `use_video` and `use_audio` are independent,
-and the grid policy has to be derivable from a stream that is actually running:
-`scene` is found while decoding frames, `vad` and `speaker` in the waveform.
-Asking for one without its stream is a **422**, not a preference that can be
-honoured some other way. `uniform` is arithmetic and works whatever is on.
-
-Audio alone writes `timeline.json` and `transcript.json` and nothing else.
-There is no describe stage to run — a transcript is already the text that stage
-would produce — so `embed`, `retrieve` and `aggregate` all work directly off it.
-
-**Validation is synchronous even though the work is not.** A bad sampler name,
-`chunking=speaker` with `diarizer=none`, or neither stream selected, is a
-**422** the caller sees at once,
-and the upload is deleted rather than left behind. What cannot be known without
-opening the file still fails inside the job: `chunking=vad` on a silent track is
-a **202**, because whether a track has speech is not a property of the request.
-
-**The id comes from the filename, not the client.** It is also the key every
-table, every output directory and every Qdrant payload uses, so it is stripped
-to `[A-Za-z0-9_-]` before anything is written.
-
-## POST `/describe`
-
-```json
-{ "video_id": "Chernobyl", "describer": "openai",
-  "model": null, "sinks": ["file"], "limit": null }
-```
-
-202 + job id. `limit` stops after N describer calls, which is how to sample a
-long video without paying for all of it. Resume is automatic and keyed on the
-manifest fingerprint *and* the model block, so switching describers re-runs
-rather than silently reporting success.
-
-## POST `/embed`
-
-```json
-{ "video_id": "Chernobyl", "embedder": null, "model": null, "indexes": null }
-```
-
-202 + job id. Nulls fall through to `falconvar/embed/defaults.py`. Embeds the
-descriptions **and** the transcript if there is one — both land in
-`chunk_embeddings`, distinguished only by `sampler`. Only units whose text has
-changed are re-embedded; the rest are skipped on a hash comparison.
-
----
-
-## GET `/jobs` and `/jobs/{job_id}`
-
-```json
-{ "id": "4e21db3a3b5d", "kind": "ingest", "video_id": "test",
-  "state": "done", "stage": "done", "elapsed_s": 69.31,
-  "result": { "chunks": 15, "frames_sampled": 51, ... },
-  "error": null,
-  "history": [ { "stage": "video", "at": 1.2, "chunks": 15 } ] }
-```
-
-`state` is `queued` \| `running` \| `done` \| `failed`. `history` is every
-progress callback in order, so a poller that missed the middle of a run can
-still see what happened rather than only where it ended.
-
-On failure, `error` carries the message and `detail.traceback` the last 4 KB of
-the stack — because a failure four stages into a pipeline is not diagnosable
-from its last line, and there is no terminal here to have watched it happen.
-
-**Job records live in memory and die with the process.** `GET /jobs` says so in
-its own payload. What a job *produced* is on disk and in Postgres regardless, so
-a restart loses the record of the run, never its output.
-
----
-
-## GET `/videos`
-
-```json
-{ "videos": [ { "video_id": "Chernobyl", "chunks": 14, "policy": "vad",
-                "frames": 47, "timeline_fingerprint": "ecc94042102dc605",
-                "has": { "manifest": true, "timeline": true,
-                         "descriptions": true, "transcript": true } } ] }
-```
-
-Read off the `data/out/` directory rather than remembered. That is why a restarted
-server still knows everything it produced.
-
-## GET `/videos/{video_id}/{name}`
-
-`name` is one of `manifest`, `timeline`, `descriptions`, `transcript`. Returns
-the document as written; see [SCHEMAS.md](SCHEMAS.md) for what each field means.
-Anything else is a 404 rather than a path traversal.
-
-`?download=1` adds a `Content-Disposition` filename. The body is identical
-either way — content negotiation would be tidier, but a browser cannot set an
-`Accept` header on a plain link, and a link is what the Library tab has.
-
-## GET `/videos/{video_id}/exports` — what can be handed to another service
-
-```json
-{ "video_id": "Chernobyl",
-  "bundle": "/videos/Chernobyl/export",
-  "exports": [
-    { "kind": "artifact",  "name": "transcript", "bytes": 79662,
-      "about": "words, speakers and turns, cut to the same grid",
-      "url": "/videos/Chernobyl/transcript" },
-    { "kind": "aggregate", "name": "summary", "bytes": 2270,
-      "about": "what the whole video is about, in one pass over every chunk",
-      "url": "/videos/Chernobyl/aggregates/summary" } ] }
-```
-
-The discovery route for a consumer that is not this browser. It lists what
-**exists**: an audio-only video advertises no manifest rather than offering a
-link that 404s, which reads as breakage rather than as a run that never had
-one. A caller wanting "the summaries" should not have to know that summaries
-live under `aggregates/` while descriptions live a level up, and this is the
-one place that mapping is written down — the browser's download links read it
-too.
-
-## GET `/videos/{video_id}/export` — all of it, once
-
-Every document the video produced, as one object: `manifest`, `timeline`,
-`descriptions`, `transcript`, and `aggregates` keyed by id. **Absent documents
-are absent keys**, not nulls, so the shape says what the run actually did.
-
-Four requests plus one per aggregate is a lot of round trips for a consumer
-that wants the lot. `?download=1` names the file `<video_id>.json`.
-
-## GET `/videos/{video_id}/frames/{index}`
-
-One JPEG, exactly as ingest wrote it — no decode, no resize. The `index` is a
-source frame index, which is what `frame_indexes` on a search result contains,
-so a client can show the evidence for a moment without a second round trip to
-work out what to ask for.
-
-404 when the run kept no frame store, or when that frame was not one a sampler
-selected. The message says which.
-
----
-
-## POST `/search`
-
-```json
-{ "query": "the moment the reactor exploded",
-  "video_id": null, "sampler": null, "moments": 5, "limit": 20 }
-```
-
-```json
-{ "query": "...",
-  "frames": "/videos/{video_id}/frames/{index}",
-  "moments": [ {
-    "video_id": "Chernobyl", "chunk_id": 7,
-    "start_ts": 94.4, "end_ts": 110.9, "score": 0.1326,
-    "samplers": ["overview", "transcript"],
-    "frame_indexes": [2375, 2500, 2625, 2750],
-    "descriptions": { "overview": "A 3D cutaway…", "transcript": "At 1.23 a.m.…" }
-  } ] }
-```
-
-`limit` is how many **descriptions** to rank; `moments` how many **windows** to
-return. The first should be comfortably larger than the second, or a chunk
-cannot benefit from agreement between its own descriptions.
-
-**`descriptions` is a map, and its size is the point.** Two entries means two
-independent accounts of the same window both matched — what was seen and what
-was said, or two samplers that never saw each other's output. That agreement is
-what the per-sampler split exists to produce.
-
-**`sampler` narrows to one sampler id** — which for a pairing is `name:prompt`
-(`yolo:overview`), not the question alone (`yolo`, `text`, `transcript`,
-…) and gives up exactly that: with one sampler a chunk can contribute at most
-one description, so a moment's score collapses to a single `1/(k+1)` and there
-is nothing left to fuse.
-
-A 502 here means the index refused the query — usually an embedder that does not
-match the one the index was built with, which is caught rather than returning a
-well-formed ranking that means nothing.
+**`/search` names its embedder.** It must be the one that built the index: a
+mismatch across widths fails loudly, but two models of the same width return a
+well-formed ranking that means nothing. The embedder key is in the collection
+name, so a wrong name searches a collection that does not exist.

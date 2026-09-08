@@ -97,7 +97,23 @@ class Runner:
             job, work = self._queue.get()
             job.state, job.started_at = "running", time.time()
             try:
-                job.result = work(job)
+                result = work(job)
+                job.result = result
+                # A whole-workflow job reports through `progress` as it goes; a
+                # single component has no callback to report through, because
+                # components do not take one -- they are one step, and a step
+                # that emitted its own progress would be reporting to itself.
+                # So the return value is recorded here, and a one-component job
+                # ends up with the same shape a workflow job builds up.
+                if hasattr(result, "as_dict"):
+                    job.detail = result.as_dict()
+                    if not job.history:
+                        job.stage = getattr(result, "component", job.kind)
+                        job.history = [{
+                            "component": job.stage,
+                            "artifacts": job.detail.get("artifacts", {}),
+                            "stats": job.detail.get("stats", {}),
+                        }]
                 job.state = "done"
             except Exception as exc:                    # noqa: BLE001
                 # The message and the traceback, because a failure four stages
@@ -111,15 +127,19 @@ class Runner:
                 self._queue.task_done()
 
 
-def progress(job: Job) -> Callable[[str, dict], None]:
-    """An `on_progress` callback that writes into a job.
+def progress(job: Job) -> Callable[[str, Any], None]:
+    """An `on_step` for `workflow.process`, as a job's latest state.
 
-    The other half of the split `orchestrate.process` was built around: the CLI
-    prints these, a job stores the latest and appends to a history.
+    ver3 components emit `(component, Produced)` rather than `(stage, dict)`,
+    and `Produced` already says what was written and what was skipped -- so a
+    poller gets the same record the CLI prints, without this having to invent
+    a second vocabulary for it.
     """
-    def report(stage: str, detail: dict) -> None:
-        job.stage = stage
+    def report(component: str, produced: Any) -> None:
+        job.stage = component
+        detail = produced.as_dict() if hasattr(produced, "as_dict") else {}
         job.detail = detail
-        job.history.append({"stage": stage, "at": round(time.time(), 3),
-                            **{k: v for k, v in detail.items() if k != "traceback"}})
+        job.history.append({"component": component,
+                            "artifacts": detail.get("artifacts", {}),
+                            "stats": detail.get("stats", {})})
     return report

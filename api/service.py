@@ -1,402 +1,201 @@
-"""The pipeline, as functions a request handler can call.
+"""The pipeline in terms a request can supply.
 
-Everything here is a thin translation between HTTP-shaped values (strings from
-a form, a video id from a path) and the library. No route handling, no
-FastAPI, no argparse -- so the same functions serve the API, a notebook, or a
-test, and none of them has to learn the pipeline twice.
+**Every component has the same signature**, so this is a dispatch table rather
+than one function per stage. `falconvar`'s API needed a separate route and a
+separate handler for describe, embed and aggregate because those stages took
+different arguments and returned different things; here they all take a
+`video_id` and keyword arguments and return a `Produced`, so one route serves
+all of them and adding a component adds a row.
 
-The one thing this file genuinely owns is **building samplers from strings**.
-The CLI does it in `video/ingest/driver._build_samplers` from an argparse
-namespace; a form post arrives as a list and a dict instead. Rather than
-construct a fake namespace, the rules live here once, in the shape a request
-actually has.
+Nothing here does pipeline work. It resolves names to callables, validates what
+a request asked for against the registries, and reads what is on disk.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional
 
-from falconvar import aggregate as aggregate_mod
-from falconvar import db, orchestrate, paths
-from falconvar.embed import defaults as embed_defaults
-from falconvar.embed import embedders as embedders_mod
-from falconvar.embed import index as index_mod
-from falconvar.embed import units as units_mod
-from falconvar.aggregate.output import AggregateDocuments, MultiAggregateSink
-from falconvar.aggregate.reader import aggregate as run_aggregate, context_for
-from falconvar.embed import summaries as summaries_mod
-from falconvar.embed.indexer import index_units
-from falconvar.retrieve.search import search as search_moments
-from falconvar.video.describe import describers as describers_mod
-from falconvar.video.describe.output import DescriptionDocument, MultiDescriptionSink
-from falconvar.video.describe.reader import describe as run_describe
-from falconvar.video.ingest import samplers as samplers_mod
+from ver3 import aggregate, audio, boundaries, cut, describe, media, video
+from ver3 import workflow
+from ver3.describe import prompts
+from ver3.rag import embed, retrieve
+from ver3.shared import paths, sinks
+from ver3.shared.documents import Produced
+from ver3.video import samplers as samplers_mod
 
-# Anchored to the checkout, not the working directory, so the server answers
-# the same wherever it was launched from. `FALCONVAR_DATA` moves both.
-OUT_ROOT = paths.OUT_ROOT
+#: Where an upload is parked until a run reads it.
 UPLOADS = paths.UPLOADS
 
 
-def build_samplers(names: Sequence[str],
-                   settings: Optional[dict[str, Any]] = None) -> list:
-    """Sampler objects from `["yolo", "uniform:text"]` plus a settings dict.
-
-    The colon form is the same one the CLI takes, and every sampler accepts it:
-    `name:prompt` pairs a strategy for choosing frames with a question to ask
-    about them. `yolo:overview` keeps frames where the people changed and asks
-    for prose; unpaired, the question is the sampler's own name.
-
-    An unknown question is a ValueError here, which `main.py` turns into a 422 --
-    rather than a run that quietly asks the scene question and bills for it.
-    """
-    from falconvar.video.describe.vlm import prompts
-    settings = settings or {}
-    rate = {"min_interval_s": settings.get("min_interval", 0.0),
-            "max_per_chunk": settings.get("max_per_chunk")}
-    tuned = ({} if settings.get("threshold") is None
-             else {"threshold": settings["threshold"]})
-    # Absent, the positional samplers keep the default stride of 1. Passed,
-    # it reaches every one of them: `overview` is a prompt rather than a
-    # cadence, so `overview` and `uniform:overview` -- the same question under
-    # two spellings -- must keep the same frames.
-    stride = ({} if settings.get("every_frames") is None
-              else {"every_n": settings["every_frames"]})
-
-    built = []
-    for entry in names:
-        name, _, prompt = entry.partition(":")
-        if prompt and prompt not in prompts.QUESTIONS:
-            raise ValueError(
-                f"{entry!r}: unknown question {prompt!r}; "
-                f"known: {', '.join(prompts.QUESTIONS)}")
-        ask = {"prompt": prompt} if prompt else {}
-        if name == "uniform":
-            built.append(samplers_mod.build(name, **ask, **stride, **rate))
-        elif name == "objects":
-            vocab = settings.get("vocabulary")
-            if isinstance(vocab, str):
-                vocab = [v.strip() for v in vocab.split(",") if v.strip()]
-            built.append(samplers_mod.build(name, vocabulary=vocab or None,
-                                            **ask, **tuned, **rate))
-        elif name == "clip":
-            built.append(samplers_mod.build(name, mode=settings.get("mode",
-                                                                    "reference"),
-                                            **ask, **tuned, **rate))
-        else:
-            built.append(samplers_mod.build(name, **ask, **tuned, **rate))
-    return built
+def _boundaries_evidence(video_id: str, **kwargs) -> Produced:
+    produced = boundaries.evidence(video_id, **kwargs)
+    if produced is None:
+        return Produced(video_id=video_id, component="boundaries.evidence",
+                        backend="none", stats={"needed": False},
+                        skipped=["evidence"])
+    return produced
 
 
-def ingest(options: orchestrate.Options, on_progress=None) -> dict[str, Any]:
-    """Both streams onto one grid. Returns what a caller can show."""
-    return orchestrate.process(options, on_progress=on_progress).as_dict()
+#: component name -> the callable a request can invoke. The only place that
+#: knows a component's public entry point, and the reason one route runs any of
+#: them. Order matches `workflow.COMPONENTS`.
+COMPONENTS: dict[str, Callable[..., Produced]] = {
+    "audio": audio.run,
+    "boundaries.evidence": _boundaries_evidence,
+    "boundaries": boundaries.run,
+    "video": video.run,
+    "cut": cut.run,
+    "describe": describe.run,
+    "embed": embed.run,
+    "aggregate": aggregate.run,
+}
 
 
-def describe(video_id: str, describer: str = "openai",
-             model: Optional[str] = None, sinks: Sequence[str] = ("file",),
-             limit: Optional[int] = None, out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """Ask a VLM about every (chunk, sampler) the manifest names."""
-    # The key lives in .env, and a describer that cannot find it fails at
-    # construction -- four stages into a job, with no terminal to have seen it.
-    db.load_env()
-    out_dir = Path(out_root) / video_id
-    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
-    built = []
-    for name in sinks:
-        if name == "file":
-            built.append(DescriptionDocument(out_dir / "descriptions.json"))
-        else:
-            from falconvar.video.describe.output import SupabaseDescriptions
-
-            built.append(SupabaseDescriptions())
-    sink = built[0] if len(built) == 1 else MultiDescriptionSink(*built)
-
-    options: dict[str, Any] = {"model": model} if model else {}
-    result = run_describe(manifest,
-                          describer=describers_mod.build(describer, **options),
-                          sink=sink, limit=limit)
-    return {"video_id": video_id, "chunks": result.chunks_seen,
-            "described": result.described, "skipped": result.skipped,
-            "elapsed_s": round(result.elapsed_s, 2),
-            "complete": bool(result.document.get("complete"))}
-
-
-def embed(video_id: str, embedder: Optional[str] = None,
-          model: Optional[str] = None, indexes: Optional[Sequence[str]] = None,
-          out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """Embed descriptions and, when there is one, the transcript.
-
-    Both land in the same index with different `sampler` values, which is what
-    makes a single query able to match what was seen and what was said.
-    """
-    out_dir = Path(out_root) / video_id
-    units, sources = [], []
-    descriptions = out_dir / "descriptions.json"
-    if descriptions.exists():
-        found = units_mod.from_document(
-            json.loads(descriptions.read_text(encoding="utf-8")))
-        units += found
-        sources.append(f"{len(found)} descriptions")
-    transcript = out_dir / "transcript.json"
-    if transcript.exists():
-        spoken = units_mod.from_transcript(
-            json.loads(transcript.read_text(encoding="utf-8")))
-        units += spoken
-        sources.append(f"{len(spoken)} transcript chunks")
-    if not units:
+def run_component(name: str, video_id: str, **params) -> Produced:
+    """Run one component. Raises KeyError for an unknown name."""
+    if name not in COMPONENTS:
+        raise KeyError(f"unknown component {name!r}; "
+                       f"known: {', '.join(COMPONENTS)}")
+    if not paths.exists(video_id, "media"):
         raise FileNotFoundError(
-            f"nothing to embed for {video_id}: no descriptions or transcript")
-
-    db.load_env()
-    emb = embedders_mod.build(embedder or embed_defaults.embedder(),
-                              **({"model": model} if model else {}))
-    names = list(indexes or embed_defaults.index().split(","))
-    result = index_units(units, emb, index_mod.build(names),
-                         video_id=video_id)
-    return {**result.as_dict(), "video_id": video_id, "read": sources}
+            f"{video_id} has no media.json -- upload it first, or it is not a "
+            f"video this deployment has seen")
+    return COMPONENTS[name](video_id, **params)
 
 
-def search(query: str, video_id: Optional[str] = None,
-           sampler: Optional[str] = None, moments: int = 5, limit: int = 20,
-           embedder: Optional[str] = None, model: Optional[str] = None,
-           indexes: Optional[Sequence[str]] = None) -> list[dict[str, Any]]:
-    """One question, ranked moments back."""
-    db.load_env()
-    emb = embedders_mod.build(embedder or embed_defaults.embedder(),
-                              **({"model": model} if model else {}))
-    names = list(indexes or embed_defaults.index().split(","))
-    found = search_moments(query, emb, index_mod.build(names),
-                           video_id=video_id, limit=limit, moments=moments,
-                           sampler=sampler)
-    return [m.as_dict() for m in found]
+def run_workflow(options: workflow.Options,
+                 on_step: Optional[Callable] = None) -> workflow.Run:
+    return workflow.process(options, on_step=on_step)
 
 
-def videos(out_root: Path = OUT_ROOT) -> list[dict[str, Any]]:
-    """What has been processed, read off disk rather than remembered.
+# ----------------------------------------------------------------- reading
 
-    Disk is the record. A restarted server forgets which jobs ran; it does not
-    forget what they produced, and this is why.
+#: Artifact -> one line on what it holds. Published so a client can label a
+#: download without hard-coding the list.
+ARTIFACTS: dict[str, str] = {
+    "media": "what the file is: the two streams and their addressing",
+    "raw_transcript": "words, segments and speaker turns, before any grid",
+    "cuts": "boundary evidence, and the score series it was thresholded from",
+    "timeline": "THE GRID: every chunk's span, and the policy that chose it",
+    "manifest": "which frames were kept, by which sampler, and why",
+    "transcript": "what was said, cut to the grid",
+    "descriptions": "one model answer per (chunk, sampler)",
+    "embedded": "the text that went into the index, without the vectors",
+}
+
+
+def videos() -> list[dict[str, Any]]:
+    """Every video with an output directory.
+
+    Read from disk rather than remembered, so a restarted server still knows
+    everything it produced.
     """
-    root = Path(out_root)
-    if not root.is_dir():
-        return []
     out = []
-    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
-        if directory.name == "qdrant":
-            continue
-        artifacts = {name: (directory / f"{name}.json").exists()
-                     for name in ("manifest", "timeline", "descriptions",
-                                  "transcript")}
-        entry: dict[str, Any] = {"video_id": directory.name, "has": artifacts,
-                                 "frames": 0}
-        store = directory / "store"
-        if store.is_dir():
-            entry["frames"] = sum(1 for _ in store.glob("*.jpg"))
-        timeline = directory / "timeline.json"
-        if timeline.exists():
-            grid = json.loads(timeline.read_text(encoding="utf-8"))
-            entry["chunks"] = len(grid.get("chunks", []))
-            entry["policy"] = grid.get("policy")
-            entry["timeline_fingerprint"] = grid.get("fingerprint")
+    for video_id in paths.videos():
+        present = paths.present(video_id)
+        entry: dict[str, Any] = {"video_id": video_id, "artifacts": present}
+        if "media" in present:
+            described = media.load(video_id)
+            entry.update(duration_s=described.duration_s,
+                         has_video=described.has_video,
+                         has_audio=described.has_audio)
+        if "timeline" in present:
+            grid = boundaries.load(video_id)
+            entry.update(policy=grid.policy, chunks=len(grid),
+                         timeline_fingerprint=grid.fingerprint())
         out.append(entry)
     return out
 
 
-def artifact(video_id: str, name: str, out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """One of the JSON documents a video produced."""
-    path = Path(out_root) / video_id / f"{name}.json"
+def artifact(video_id: str, name: str) -> dict[str, Any]:
+    """One document, as parsed JSON."""
+    path = paths.artifact(video_id, name)
     if not path.exists():
-        raise FileNotFoundError(f"{video_id} has no {name}.json")
-    return json.loads(path.read_text(encoding="utf-8"))
+        raise FileNotFoundError(f"{video_id} has no {name}")
+    return sinks.read_json(path)
 
 
-#: Every JSON document a video can produce, and what each one answers. The
-#: order is the order the pipeline produces them, which is also the order a
-#: consumer most often wants to read them in.
-ARTIFACTS = {
-    "manifest": "which frames were kept, why, and how to fetch them again",
-    "timeline": "the chunk grid: spans, the policy, and its fingerprint",
-    "descriptions": "one VLM answer per (chunk, sampler)",
-    "transcript": "words, speakers and turns, cut to the same grid",
-}
+def exports(video_id: str) -> dict[str, Any]:
+    """What this video can hand over, read from disk.
 
-
-def exports(video_id: str, out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """Every document this video can hand to another service, with its URL.
-
-    A caller that wants "the summaries" should not have to know that summaries
-    live under `aggregates/` while descriptions live one level up. This is the
-    one place that mapping is written down, and both the bundle route and the
-    browser's download links read it.
+    Only what exists, never what could exist: an audio-only video advertises no
+    manifest rather than offering a link that 404s, because a broken link reads
+    as breakage rather than as a stage that never ran.
     """
-    directory = Path(out_root) / video_id
-    if not directory.is_dir():
-        raise FileNotFoundError(f"no such video: {video_id}")
-
-    found: list[dict[str, Any]] = []
-    for name, what in ARTIFACTS.items():
-        path = directory / f"{name}.json"
-        if path.exists():
-            found.append({"kind": "artifact", "name": name, "about": what,
-                          "url": f"/videos/{video_id}/{name}",
-                          "bytes": path.stat().st_size})
-    for path in sorted((directory / "aggregates").glob("*.json")):
-        found.append({"kind": "aggregate", "name": path.stem,
-                      "about": aggregate_mod.about(path.stem),
-                      "url": f"/videos/{video_id}/aggregates/{path.stem}",
-                      "bytes": path.stat().st_size})
-    return {"video_id": video_id, "exports": found,
-            "bundle": f"/videos/{video_id}/export"}
+    present = set(paths.present(video_id))
+    documents = [{"name": name, "about": about,
+                  "url": f"/videos/{video_id}/artifacts/{name}"}
+                 for name, about in ARTIFACTS.items() if name in present]
+    aggregates = []
+    directory = paths.artifact(video_id, "aggregates")
+    if directory.exists():
+        aggregates = [{"name": p.stem,
+                       "about": aggregate.ABOUT.get(p.stem, ""),
+                       "url": f"/videos/{video_id}/aggregates/{p.stem}"}
+                      for p in sorted(directory.glob("*.json"))]
+    return {"video_id": video_id, "documents": documents,
+            "aggregates": aggregates,
+            "frames": f"/videos/{video_id}/frames/{{index}}"
+                      if "store" in present else None}
 
 
-def bundle(video_id: str, out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """Everything a video produced, as one document.
-
-    Four requests plus one per aggregate is a lot of round trips for a consumer
-    that wants the lot; this is that, once. Absent documents are absent keys
-    rather than nulls, so the shape says what the run actually did -- an
-    audio-only video has no `manifest`, and that is information.
-    """
-    directory = Path(out_root) / video_id
-    if not directory.is_dir():
-        raise FileNotFoundError(f"no such video: {video_id}")
-    out: dict[str, Any] = {"video_id": video_id}
-    for name in ARTIFACTS:
-        path = directory / f"{name}.json"
-        if path.exists():
-            out[name] = json.loads(path.read_text(encoding="utf-8"))
-    found = aggregates(video_id, out_root)
-    if found:
-        out["aggregates"] = found
-    return out
-
-
-def frame_path(video_id: str, index: int, out_root: Path = OUT_ROOT) -> Path:
-    """The JPEG a moment cites as evidence, straight out of the frame store."""
-    path = Path(out_root) / video_id / "store" / f"{index:07d}.jpg"
+def frame_path(video_id: str, index: int) -> Path:
+    path = paths.artifact(video_id, "store") / f"{index:07d}.jpg"
     if not path.exists():
         raise FileNotFoundError(
-            f"{video_id} has no frame {index}. The store is written only when "
-            "a run asks for it, and holds only the frames a sampler kept.")
+            f"{video_id} has no frame {index} -- the manifest names the frames "
+            f"that exist")
     return path
 
 
-def available() -> dict[str, Any]:
-    """What this deployment can be asked for. Read from the registries, so a
-    new sampler or embedder appears here without anyone editing a list."""
-    from falconvar.audio import diarize as diarize_mod
-    from falconvar.audio import transcribe as transcribe_mod
+def search(query: str, video_id: str, **params) -> list[dict[str, Any]]:
+    moments, notes = retrieve.search(query, video_id, **params)
+    return [{**m.as_dict(), "notes": notes} for m in moments]
 
-    from falconvar.video.describe.vlm import prompts
+
+# ------------------------------------------------------------ capabilities
+
+def available() -> dict[str, Any]:
+    """What this deployment can be asked for, read from the registries.
+
+    So a sampler, an index or an aggregator added to `ver3` appears here
+    without anyone editing a list -- and the defaults are read off
+    `workflow.Options` rather than restated, because a form that offers a
+    registry in alphabetical order defaults to `stub` and produces a run that
+    looks complete and says nothing.
+    """
+    from ver3.audio import models as audio_models
 
     return {
+        "components": list(workflow.COMPONENTS),
         "samplers": samplers_mod.available(),
-        # Any sampler may be paired with any of these as `name:prompt`. Published
-        # so a client can offer the pairing without hard-coding the list, and so
-        # `samplers` stays a list of strategies rather than growing an entry per
-        # question the way `overview` once was.
         "prompts": prompts.questions(),
-        # Pairings worth offering as they stand. The `samplers` chips send their
-        # own text through as `samplers=`, so a pairing listed here is selectable
-        # with no client change -- which is what keeps `overview` reachable from
-        # the browser now that it is a question rather than a sampler.
-        "pairings": ["uniform:overview", "uniform:text"],
-        "chunking": list(orchestrate.POLICIES),
-        "describers": describers_mod.available(),
-        "transcribers": transcribe_mod.available(),
-        "diarizers": diarize_mod.available(),
-        "embedders": embedders_mod.available(),
-        "indexes": list(index_mod.BACKENDS),
-        "sinks": list(orchestrate.SINKS),
-        "aggregators": {name: {"tier": aggregate_mod.TIER_OF.get(name, "llm"),
-                               "about": aggregate_mod.about(name)}
-                        for name in aggregate_mod.available()},
-        "tiers": list(aggregate_mod.TIERS),
+        "pairings": ["uniform:overview", "uniform:text", "yolo:overview"],
+        "policies": sorted(boundaries.POLICIES),
+        "describers": describe.available(),
+        "embedders": embed.available(),
+        "indexes": embed.indexes.available(),
+        "sinks": list(sinks.BACKENDS),
+        "transcribers": sorted(audio_models.TRANSCRIBERS),
+        "diarizers": sorted(audio_models.DIARIZERS),
+        "aggregators": {name: {"tier": aggregate.TIER_OF[name],
+                               "about": aggregate.about(name)}
+                        for name in aggregate.available()},
+        "tiers": list(aggregate.TIERS),
         "artifacts": dict(ARTIFACTS),
-        # Read off the Options dataclass rather than restated, because a
-        # registry list is alphabetical and `stub` sorts before `whisper`: a
-        # form that offers the list in order defaults to the stub and produces
-        # a transcript of `[stub0.0]` that no stage reports as wrong.
-        "defaults": {"embedder": embed_defaults.embedder(),
-                     "index": embed_defaults.index(),
-                     "chunking": orchestrate.Options.chunking,
-                     "transcriber": orchestrate.Options.transcriber,
-                     "diarizer": orchestrate.Options.diarizer,
-                     "describer": "openai"},
+        "defaults": {
+            "policy": workflow.Options.policy,
+            "sampler": workflow.Options.sampler,
+            "describer": workflow.Options.describer,
+            "embedder": workflow.Options.embedder,
+            "index": workflow.Options.index,
+            "tier": workflow.Options.tier,
+            "sink": workflow.Options.sink,
+        },
     }
 
 
-def aggregate(video_id: str, tier: str = "free",
-              aggregators: Optional[Sequence[str]] = None,
-              sinks: Sequence[str] = ("file",), force: bool = False,
-              embedder: Optional[str] = None,
-              indexes: Optional[Sequence[str]] = None,
-              out_root: Path = OUT_ROOT, on_progress=None) -> dict[str, Any]:
-    """Build video-level structure, and embed the summary if one was made."""
-    db.load_env()
-    ctx = context_for(video_id, out_root)
-    if not ctx.chunks:
-        raise FileNotFoundError(
-            f"nothing to aggregate for {video_id}: no descriptions or transcript")
-
-    names = list(aggregators) if aggregators else aggregate_mod.by_tier(tier)
-
-    # Only novelty reads the index, so a free pass needs no key.
-    if "novelty" in names:
-        try:
-            ctx.embedder = embedders_mod.build(embedder or embed_defaults.embedder())
-            ctx.index = index_mod.build(
-                list(indexes or embed_defaults.index().split(",")))
-        except Exception:                               # noqa: BLE001
-            pass                                        # novelty reports nothing
-
-    out_dir = Path(out_root) / video_id / "aggregates"
-    documents = AggregateDocuments(out_dir)
-    built: list[Any] = []
-    for name in sinks:
-        if name == "file":
-            built.append(documents)
-        else:
-            from falconvar.aggregate.output import SupabaseAggregates
-
-            built.append(SupabaseAggregates())
-    sink = built[0] if len(built) == 1 else MultiAggregateSink(*built)
-
-    result = run_aggregate(ctx, names, sink=sink, on_progress=on_progress,
-                           existing=documents.existing(), force=force)
-    out = result.as_dict()
-
-    # The summary is the one aggregate worth a vector: it answers "which
-    # video", which no per-chunk vector can. Indexed here rather than in a
-    # separate call so a caller cannot end up with a summary nothing can find.
-    if "summary" in result.produced or force:
-        try:
-            emb = embedders_mod.build(embedder or embed_defaults.embedder())
-            out["summary_indexed"] = summaries_mod.index_summary(
-                video_id, emb, out_root=out_root, force=force)
-        except Exception as exc:                        # noqa: BLE001
-            out["summary_indexed"] = {"error": str(exc)}
-    return out
-
-
-def aggregates(video_id: str, out_root: Path = OUT_ROOT) -> dict[str, Any]:
-    """Every aggregate a video has, keyed by id."""
-    directory = Path(out_root) / video_id / "aggregates"
-    if not directory.is_dir():
-        return {}
-    out = {}
-    for path in sorted(directory.glob("*.json")):
-        out[path.stem] = json.loads(path.read_text(encoding="utf-8"))
-    return out
-
-
-def search_videos(query: str, limit: int = 10, embedder: Optional[str] = None,
-                  model: Optional[str] = None) -> list[dict[str, Any]]:
-    """Which video, rather than which moment."""
-    db.load_env()
-    emb = embedders_mod.build(embedder or embed_defaults.embedder(),
-                              **({"model": model} if model else {}))
-    return summaries_mod.search(query, emb, limit=limit)
+__all__ = ["ARTIFACTS", "COMPONENTS", "UPLOADS", "artifact", "available",
+           "exports", "frame_path", "run_component", "run_workflow", "search",
+           "videos"]

@@ -125,13 +125,22 @@ def present(video_id: str) -> list[str]:
     return [name for name in order if exists(video_id, name)]
 
 
+#: A leading underscore marks a directory under OUT_ROOT that is not a video.
+#: The embedded Qdrant store lives at `_qdrant`, beside the videos rather than
+#: inside one, and without this it was listed as a video with no artifacts --
+#: by `paths.videos()`, and so by `GET /videos`.
+RESERVED_PREFIX = "_"
+
+
 def videos() -> list[str]:
     """Every video id with an output directory."""
     if not OUT_ROOT.exists():
         return []
-    return sorted(d.name for d in OUT_ROOT.iterdir() if d.is_dir())
+    return sorted(d.name for d in OUT_ROOT.iterdir()
+                  if d.is_dir() and not d.name.startswith(RESERVED_PREFIX))
 
 
-__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "UPLOADS", "WEIGHTS",
+__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "RESERVED_PREFIX",
+           "UPLOADS", "WEIGHTS",
            "ARTIFACTS", "DIRECTORIES", "UnknownArtifact",
            "home", "artifact", "exists", "present", "videos"]
