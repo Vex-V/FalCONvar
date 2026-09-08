@@ -25,6 +25,27 @@ collection, so 768-wide vectors cannot be ranked against 1536-wide ones, and a
 query embedded by the wrong model searches a collection that does not exist
 rather than the wrong vectors.
 
+**Two things this sparse half does not do, and Postgres does.** Both are
+limitations of the client, not of Qdrant, and both were measured rather than
+assumed:
+
+  *No stemming.* `to_tsvector('english', ...)` stems, so "lived" matches
+  "live" and "living"; `indexes.tokenize` does not. On "what happened to the
+  people who lived nearby" Postgres matched 21 of 41 units and this matched 13.
+  Fixing it needs a stemmer, which is a dependency, and a corpus large enough
+  to show the fix helps -- 41 units of one video is not one.
+
+  *No length normalisation or TF saturation.* `Modifier.IDF` supplies the IDF
+  half of BM25; the client is expected to supply weighted term values, and this
+  sends raw counts. `ts_rank_cd` normalises by cover density, so the two rank
+  differently on the same matches -- visibly, the shortest unit in the corpus
+  tops this half where Postgres ranks it third. Proper BM25 weighting needs an
+  average document length, which is a corpus statistic the client does not have
+  and should not guess at from whatever subset it happens to hold.
+
+So `supabase` is the better lexical half, and this one is honest about being
+the cheaper one rather than pretending parity.
+
 **A stored sparse vector is built from tokens, so changing the tokeniser makes
 it stale.** `text_hash` is over the content, not over the terms, so nothing
 notices: `embed` reports every unit current and skips the re-upsert. Delete the
@@ -55,6 +76,18 @@ SPARSE = "sparse"
 #: RRF's constant, matching the other backends so a score means the same thing
 #: whichever index produced it.
 FUSE_K = 60
+
+
+def _depth(limit: int) -> int:
+    """How deep each half ranks before they are fused.
+
+    Wider than the final limit, and matching the Postgres RPC's
+    `greatest(p_limit * 4, 40)`. Prefetching only `limit` truncates each
+    ranking before fusion, so a row the lexical half placed 25th cannot reach
+    the result even when the dense half agrees -- measured as this backend
+    firing on 12/20 rows where Postgres, ranking 80, fired on 20/20.
+    """
+    return max(limit * 4, 40)
 
 
 class QdrantUnavailable(RuntimeError):
@@ -262,10 +295,11 @@ class QdrantIndex:
         dense = list(vector)
         sparse = sparse_of(query)
 
-        prefetch = [Prefetch(query=dense, using=DENSE, limit=limit,
+        depth = _depth(limit)
+        prefetch = [Prefetch(query=dense, using=DENSE, limit=depth,
                              filter=where)]
         if sparse is not None:
-            prefetch.append(Prefetch(query=sparse, using=SPARSE, limit=limit,
+            prefetch.append(Prefetch(query=sparse, using=SPARSE, limit=depth,
                                      filter=where))
 
         found = self._client.query_points(
@@ -273,8 +307,10 @@ class QdrantIndex:
             query=FusionQuery(fusion=Fusion.RRF),
             limit=limit, with_payload=True).points
 
-        dense_rank = self._ranks(dense, DENSE, limit, where)
-        text_rank = self._ranks(sparse, SPARSE, limit, where)
+        # At the same depth the fusion used, or a hit fused from rank 30 would
+        # come back with a blank marker and read as "this half said nothing".
+        dense_rank = self._ranks(dense, DENSE, depth, where)
+        text_rank = self._ranks(sparse, SPARSE, depth, where)
 
         hits = []
         for point in found:
