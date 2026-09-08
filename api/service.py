@@ -1,14 +1,15 @@
 """The pipeline in terms a request can supply.
 
-**Every component has the same signature**, so this is a dispatch table rather
-than one function per stage. `falconvar`'s API needed a separate route and a
-separate handler for describe, embed and aggregate because those stages took
-different arguments and returned different things; here they all take a
-`video_id` and keyword arguments and return a `Produced`, so one route serves
-all of them and adding a component adds a row.
+Every component has the same signature, so `COMPONENTS` is a dispatch table
+rather than one function per stage and a single route serves all of them.
 
-Nothing here does pipeline work. It resolves names to callables, validates what
-a request asked for against the registries, and reads what is on disk.
+Nothing here does pipeline work: it resolves names to callables, validates
+against the registries, and reads what is on disk.
+
+`available()` reads the registries and the defaults off `workflow.Options`, so
+a sampler or an index added to the package appears in `/capabilities` without
+anyone editing a list -- and a form built from it cannot default to whichever
+option sorts first.
 """
 
 from __future__ import annotations
@@ -16,13 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ver3 import aggregate, audio, boundaries, cut, describe, media, video
-from ver3 import workflow
-from ver3.describe import prompts
-from ver3.rag import embed, retrieve
-from ver3.shared import paths, sinks
-from ver3.shared.documents import Produced
-from ver3.video import samplers as samplers_mod
+from falconvar import aggregate, audio, boundaries, cut, describe, media, video
+from falconvar import workflow
+from falconvar.describe import prompts
+from falconvar.rag import embed, retrieve
+from falconvar.shared import paths, sinks
+from falconvar.shared.documents import Produced
+from falconvar.video import samplers as samplers_mod
 
 #: Where an upload is parked until a run reads it.
 UPLOADS = paths.UPLOADS
@@ -159,13 +160,13 @@ def search(query: str, video_id: str, **params) -> list[dict[str, Any]]:
 def available() -> dict[str, Any]:
     """What this deployment can be asked for, read from the registries.
 
-    So a sampler, an index or an aggregator added to `ver3` appears here
+    So a sampler, an index or an aggregator added to `falconvar` appears here
     without anyone editing a list -- and the defaults are read off
     `workflow.Options` rather than restated, because a form that offers a
     registry in alphabetical order defaults to `stub` and produces a run that
     looks complete and says nothing.
     """
-    from ver3.audio import models as audio_models
+    from falconvar.audio import models as audio_models
 
     return {
         "components": list(workflow.COMPONENTS),

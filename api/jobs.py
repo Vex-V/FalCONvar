@@ -1,20 +1,15 @@
 """Work that outlasts a request.
 
-Processing a video takes minutes -- one decode pass, a Whisper pass, a
-describer call per (chunk, sampler) -- so an HTTP handler cannot wait for it.
-A job is started, an id comes back, and the caller polls.
+Processing a video takes minutes, so a handler cannot wait for it: a job is
+started, an id comes back, the caller polls.
 
-**One worker, not a pool.** Every heavy stage here contends for the same 8 GiB
-GPU: CLIP and YOLO during ingest, Whisper and pyannote during the audio pass.
-Running two videos at once does not halve the wall clock, it doubles the
-resident weights and invites an allocator failure halfway through the more
-expensive of them. A queue of one is the honest shape of the hardware, and it
-makes "why is my job still queued" answerable rather than mysterious.
+One worker, not a pool. Every heavy stage contends for the same GPU, so a queue
+of one is the honest shape of the hardware and makes "why is my job still
+queued" answerable.
 
-**State lives in memory and dies with the process.** That is a real limitation
-and not a hidden one: `GET /jobs` says so, and the artifacts a finished job
-produced are on disk and in Postgres regardless. Restarting loses the record
-that a job ran, never the thing it made.
+State lives in memory and dies with the process. That is a real limitation and
+not a hidden one -- `GET /jobs` says so, and the artifacts a finished job
+produced are on disk and in Postgres regardless.
 """
 
 from __future__ import annotations
@@ -130,13 +125,21 @@ class Runner:
 def progress(job: Job) -> Callable[[str, Any], None]:
     """An `on_step` for `workflow.process`, as a job's latest state.
 
-    ver3 components emit `(component, Produced)` rather than `(stage, dict)`,
-    and `Produced` already says what was written and what was skipped -- so a
-    poller gets the same record the CLI prints, without this having to invent
-    a second vocabulary for it.
+    Components emit `(component, Produced)`, and `Produced` already says what
+    was written and what was skipped -- so a poller gets the same record the
+    CLI prints, without a second vocabulary for it.
+
+    `stage` is what is **running**; `history` is what has **finished**. The
+    workflow announces a component twice, with no `Produced` the first time,
+    and the difference is the whole point: describing costs minutes, so a
+    `stage` set only on completion leaves a poller reading the name of the
+    previous component throughout the longest stage of the run.
     """
-    def report(component: str, produced: Any) -> None:
+    def report(component: str, produced: Any = None) -> None:
         job.stage = component
+        if produced is None:
+            job.detail = {"running": component}
+            return
         detail = produced.as_dict() if hasattr(produced, "as_dict") else {}
         job.detail = detail
         job.history.append({"component": component,

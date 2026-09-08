@@ -1,32 +1,27 @@
--- ver3 · everything to run on Supabase, in one file, in this order.
+-- FalCONvar · everything to run on Supabase, in one file, in this order.
 --
--- Paste the whole thing into the Supabase SQL editor and run it. It is
--- idempotent: running it twice is a no-op except where a re-run is the point
--- (see `fts` below), so this is also how to apply a change to any one part --
--- there is no separate patch file to keep in step with it.
+-- Paste the whole thing into the SQL editor and run it. It is idempotent:
+-- running it twice is a no-op except where a re-run is the point (see `fts`),
+-- so this is also how to apply a change to any one part -- there is no
+-- separate patch file to keep in step with it.
 --
 -- AFTERWARDS, one thing the SQL cannot do:
---   Dashboard > Settings > API > Exposed schemas: add `ver3`
--- PostgREST only serves schemas on that list, and until `ver3` is there every
+--   Dashboard > Settings > API > Exposed schemas: add `falconvar`
+-- PostgREST only serves schemas on that list, and until it is there every
 -- request returns a "relation does not exist" that looks like a missing table
 -- rather than a missing setting.
 --
--- Writes use the secret key (sb_secret_...), which bypasses RLS. Reads use the
--- publishable key (sb_publishable_...), which maps to `anon`.
+-- Writes use the secret key, which bypasses RLS. Reads use the publishable
+-- key, which maps to `anon`.
 --
 -- RLS ENABLED WITH NO POLICY DENIES READS SILENTLY -- zero rows, no error. So
 -- verify by row count under the publishable key, never by absence of an
 -- exception.
 --
--- EVERYTHING LIVES IN THE `ver3` SCHEMA, not `public`. falconvar's tables are
--- still deployed alongside and `video_embeddings` collides outright, so in a
--- shared schema `create table if not exists` would be a silent no-op and every
--- write would go to the wrong shape.
---
 -- CASCADE FOLLOWS COST. Whether a table cascades from the grid is decided by
 -- one question: if this were deleted, what would it cost to rebuild?
 --   rebuildable in seconds        -> foreign key, on delete cascade
---   cost inference or a paid call -> NO foreign key, staleness is a
+--   cost inference or a paid call -> NO foreign key; staleness is a
 --                                    fingerprint a reader compares
 -- Re-ingesting costs seconds where describing costs money, so a cascade from
 -- the grid into `descriptions` would mean retuning a scene threshold silently
@@ -35,16 +30,16 @@
 -- ===========================================================================
 -- 0 · schema and extension
 -- ===========================================================================
-create schema if not exists ver3;
+create schema if not exists falconvar;
 
-grant usage on schema ver3 to anon, authenticated, service_role;
+grant usage on schema falconvar to anon, authenticated, service_role;
 
 create extension if not exists vector;
 
 -- ===========================================================================
 -- 1 · the file
 -- ===========================================================================
-create table if not exists ver3.videos (
+create table if not exists falconvar.videos (
   video_id      text primary key,
   path          text not null,
   container     text not null,
@@ -59,8 +54,8 @@ create table if not exists ver3.videos (
 -- ===========================================================================
 -- 2 · THE GRID. One per video; everything below joins it on (video_id, chunk_id).
 -- ===========================================================================
-create table if not exists ver3.timelines (
-  video_id      text primary key references ver3.videos on delete cascade,
+create table if not exists falconvar.timelines (
+  video_id      text primary key references falconvar.videos on delete cascade,
   policy        text not null,            -- uniform | scene | vad | speaker
   derived_from  text not null,            -- video | audio | grid
   params        jsonb not null default '{}'::jsonb,
@@ -70,8 +65,8 @@ create table if not exists ver3.timelines (
   built_at      timestamptz not null default now()
 );
 
-create table if not exists ver3.chunks (
-  video_id  text not null references ver3.timelines on delete cascade,
+create table if not exists falconvar.chunks (
+  video_id  text not null references falconvar.timelines on delete cascade,
   chunk_id  int  not null,
   start_ts  numeric not null,
   end_ts    numeric not null,
@@ -79,14 +74,14 @@ create table if not exists ver3.chunks (
   check (end_ts > start_ts)
 );
 
-create index if not exists chunks_start on ver3.chunks (video_id, start_ts);
+create index if not exists chunks_start on falconvar.chunks (video_id, start_ts);
 
 -- ===========================================================================
 -- 3 · boundary evidence. The score series is what makes re-thresholding
 --     arithmetic rather than another pass over the video.
 -- ===========================================================================
-create table if not exists ver3.cuts (
-  video_id    text primary key references ver3.videos on delete cascade,
+create table if not exists falconvar.cuts (
+  video_id    text primary key references falconvar.videos on delete cascade,
   source      text not null,              -- video | audio
   detector    text not null,              -- content | vad | speaker
   params      jsonb not null default '{}'::jsonb,
@@ -99,8 +94,8 @@ create table if not exists ver3.cuts (
 -- 4 · the soundtrack. The raw transcript is stored before it is cut, so a
 --     grid change never re-runs Whisper.
 -- ===========================================================================
-create table if not exists ver3.transcripts (
-  video_id     text primary key references ver3.videos on delete cascade,
+create table if not exists falconvar.transcripts (
+  video_id     text primary key references falconvar.videos on delete cascade,
   timeline_fingerprint text,
   model        jsonb not null default '{}'::jsonb,
   track        jsonb not null default '{}'::jsonb,
@@ -111,7 +106,7 @@ create table if not exists ver3.transcripts (
   heard_at     timestamptz not null default now()
 );
 
-create table if not exists ver3.transcript_chunks (
+create table if not exists falconvar.transcript_chunks (
   video_id    text not null,
   chunk_id    int  not null,
   text        text not null default '',
@@ -121,14 +116,14 @@ create table if not exists ver3.transcript_chunks (
   structured  jsonb not null default '{}'::jsonb,
   turns       jsonb not null default '[]'::jsonb,
   primary key (video_id, chunk_id),
-  foreign key (video_id, chunk_id) references ver3.chunks on delete cascade
+  foreign key (video_id, chunk_id) references falconvar.chunks on delete cascade
 );
 
 -- ===========================================================================
 -- 5 · the picture. Cheap to rebuild, so it cascades.
 -- ===========================================================================
-create table if not exists ver3.manifests (
-  video_id     text primary key references ver3.videos on delete cascade,
+create table if not exists falconvar.manifests (
+  video_id     text primary key references falconvar.videos on delete cascade,
   timeline_fingerprint text not null,
   manifest_fingerprint text not null,
   source       jsonb not null,
@@ -139,7 +134,7 @@ create table if not exists ver3.manifests (
 
 -- One row per (chunk, sampler) rather than a jsonb blob on the chunk. That is
 -- what makes "which chunks did yolo pick frames in" a query rather than a scan.
-create table if not exists ver3.chunk_samplers (
+create table if not exists falconvar.chunk_samplers (
   video_id    text not null,
   chunk_id    int  not null,
   sampler_id  text not null,              -- "yolo" | "yolo:overview"
@@ -148,16 +143,16 @@ create table if not exists ver3.chunk_samplers (
   frame_count int  not null,
   frames      jsonb not null,
   primary key (video_id, chunk_id, sampler_id),
-  foreign key (video_id, chunk_id) references ver3.chunks on delete cascade
+  foreign key (video_id, chunk_id) references falconvar.chunks on delete cascade
 );
 
 create index if not exists chunk_samplers_sampler
-  on ver3.chunk_samplers (video_id, sampler);
+  on falconvar.chunk_samplers (video_id, sampler);
 
 -- ===========================================================================
 -- 6 · descriptions. NO FOREIGN KEY, deliberately. See the header.
 -- ===========================================================================
-create table if not exists ver3.descriptions (
+create table if not exists falconvar.descriptions (
   video_id      text not null,
   chunk_id      int  not null,
   sampler_id    text not null,
@@ -175,7 +170,7 @@ create table if not exists ver3.descriptions (
 );
 
 create index if not exists descriptions_chunk
-  on ver3.descriptions (video_id, chunk_id);
+  on falconvar.descriptions (video_id, chunk_id);
 
 -- ===========================================================================
 -- 7 · embeddings. Also no foreign key, for the same reason: paid calls.
@@ -184,7 +179,7 @@ create index if not exists descriptions_chunk
 -- primary key, which is what stops 768-wide vectors being ranked against
 -- 1536-wide ones. The sampler is payload, and querying one is a filter.
 -- ===========================================================================
-create table if not exists ver3.embeddings (
+create table if not exists falconvar.embeddings (
   video_id    text not null,
   chunk_id    int  not null,
   sampler_id  text not null,              -- + "transcript" for the audio side
@@ -204,24 +199,24 @@ create table if not exists ver3.embeddings (
 -- were folded in -- survives a re-run untouched, and the lexical half quietly
 -- stops indexing the terms it is best at. Nothing reports it. The column is
 -- generated, so dropping it loses nothing.
-alter table ver3.embeddings drop column if exists fts;
-alter table ver3.embeddings add column fts tsvector
+alter table falconvar.embeddings drop column if exists fts;
+alter table falconvar.embeddings add column fts tsvector
   generated always as (
     to_tsvector('english', content || ' ' || jsonb_path_query_array(
       structured, 'strict $.**?(@.type() == "string")')::text)
   ) stored;
 
-create index if not exists embeddings_fts on ver3.embeddings using gin (fts);
+create index if not exists embeddings_fts on falconvar.embeddings using gin (fts);
 create index if not exists embeddings_structured
-  on ver3.embeddings using gin (structured jsonb_path_ops);
-create index if not exists embeddings_vector on ver3.embeddings
+  on falconvar.embeddings using gin (structured jsonb_path_ops);
+create index if not exists embeddings_vector on falconvar.embeddings
   using hnsw (embedding vector_cosine_ops);
 
 -- ===========================================================================
 -- 8 · aggregates. Video-level, so not keyed by chunk at all.
 -- ===========================================================================
-create table if not exists ver3.aggregates (
-  video_id     text not null references ver3.videos on delete cascade,
+create table if not exists falconvar.aggregates (
+  video_id     text not null references falconvar.videos on delete cascade,
   aggregate_id text not null,
   tier         text not null,             -- free | local | llm
   payload      jsonb not null,
@@ -234,8 +229,8 @@ create table if not exists ver3.aggregates (
 -- *which twenty seconds*; a summary answers *which video*, and a video is not
 -- a moment you can play. Putting summaries in the chunk table would need a
 -- sentinel chunk_id and would return a whole-video "moment" beside real ones.
-create table if not exists ver3.video_embeddings (
-  video_id   text not null references ver3.videos on delete cascade,
+create table if not exists falconvar.video_embeddings (
+  video_id   text not null references falconvar.videos on delete cascade,
   kind       text not null,               -- "summary"
   embedder   text not null,
   text_hash  text not null,
@@ -256,7 +251,7 @@ create table if not exists ver3.video_embeddings (
 -- Ranked here rather than in Python because the alternative moves a video's
 -- whole index over the wire per query.
 -- ===========================================================================
-create or replace function ver3.search_embeddings(
+create or replace function falconvar.search_embeddings(
   p_embedder     text,
   p_query_vector vector,
   p_query_text   text default null,
@@ -272,7 +267,7 @@ returns table (
 )
 language sql stable as $$
   with candidates as (
-    select e.* from ver3.embeddings e
+    select e.* from falconvar.embeddings e
     where e.embedder = p_embedder
       and (p_video_id is null or e.video_id = p_video_id)
       -- A filter over one shared space, not a space of its own: every row with
@@ -340,7 +335,7 @@ language sql stable as $$
     on  c.video_id   = f.video_id
     and c.chunk_id   = f.chunk_id
     and c.sampler_id = f.sampler_id
-  left join ver3.chunks k
+  left join falconvar.chunks k
     on k.video_id = f.video_id and k.chunk_id = f.chunk_id
   order by f.score desc
   limit p_limit;
@@ -353,18 +348,18 @@ $$;
 -- this LAST: enabling RLS before the policies exist denies reads in the gap,
 -- and denies them silently.
 -- ===========================================================================
-alter table ver3.videos             enable row level security;
-alter table ver3.timelines          enable row level security;
-alter table ver3.chunks             enable row level security;
-alter table ver3.cuts               enable row level security;
-alter table ver3.transcripts        enable row level security;
-alter table ver3.transcript_chunks  enable row level security;
-alter table ver3.manifests          enable row level security;
-alter table ver3.chunk_samplers     enable row level security;
-alter table ver3.descriptions       enable row level security;
-alter table ver3.embeddings         enable row level security;
-alter table ver3.aggregates         enable row level security;
-alter table ver3.video_embeddings   enable row level security;
+alter table falconvar.videos             enable row level security;
+alter table falconvar.timelines          enable row level security;
+alter table falconvar.chunks             enable row level security;
+alter table falconvar.cuts               enable row level security;
+alter table falconvar.transcripts        enable row level security;
+alter table falconvar.transcript_chunks  enable row level security;
+alter table falconvar.manifests          enable row level security;
+alter table falconvar.chunk_samplers     enable row level security;
+alter table falconvar.descriptions       enable row level security;
+alter table falconvar.embeddings         enable row level security;
+alter table falconvar.aggregates         enable row level security;
+alter table falconvar.video_embeddings   enable row level security;
 
 do $$
 declare t text;
@@ -374,31 +369,31 @@ begin
     'manifests','chunk_samplers','descriptions','embeddings','aggregates',
     'video_embeddings'
   ] loop
-    execute format('drop policy if exists "public read" on ver3.%I', t);
+    execute format('drop policy if exists "public read" on falconvar.%I', t);
     execute format(
-      'create policy "public read" on ver3.%I for select to anon using (true)', t);
+      'create policy "public read" on falconvar.%I for select to anon using (true)', t);
   end loop;
 end $$;
 
-grant select on all tables in schema ver3 to anon, authenticated;
-grant all    on all tables in schema ver3 to service_role;
-grant execute on function ver3.search_embeddings(
+grant select on all tables in schema falconvar to anon, authenticated;
+grant all    on all tables in schema falconvar to service_role;
+grant execute on function falconvar.search_embeddings(
   text, vector, text, text, text, int, int) to anon, authenticated, service_role;
 
 -- Anything created later gets the same treatment without re-running the grants.
-alter default privileges in schema ver3
+alter default privileges in schema falconvar
   grant select on tables to anon, authenticated;
-alter default privileges in schema ver3
+alter default privileges in schema falconvar
   grant all on tables to service_role;
 
 -- ===========================================================================
 -- Verify. Under the PUBLISHABLE key, not this editor -- the editor runs as a
 -- superuser and will show rows whether or not `anon` can.
 --
---   select count(*) from ver3.videos;          -- 0 is fine; an error is not
---   select * from ver3.search_embeddings(
+--   select count(*) from falconvar.videos;          -- 0 is fine; an error is not
+--   select * from falconvar.search_embeddings(
 --     'openai:text-embedding-3-small:1536',
 --     array_fill(0::real, array[1536])::vector, 'test');
 --
--- And in the client: `python -m ver3.rag.retrieve "..." <id> --index supabase`
+-- And in the client: `python -m falconvar.rag.retrieve "..." <id> --index supabase`
 -- ===========================================================================

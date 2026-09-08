@@ -1,13 +1,7 @@
-# Packaging exists here for one reason: to stop `python -m falconvar.…` depending on
-# the working directory. Before it, every documented command worked only from
-# the checkout root, and the stage drivers each carried a `sys.path.insert` so
-# they could still be run as scripts. `pip install -e .` makes the four
-# packages importable from anywhere and those workarounds unnecessary.
-#
-# It is deliberately not a distribution: no version bumping, no wheel, no
-# console_scripts. `python -m` is the documented interface and it stays that
-# way -- a second spelling of every command would be a second thing to keep
-# correct in the docs.
+# Declares the packages so `python -m falconvar.…` works from any directory.
+# Not a distribution: no wheel, no console_scripts -- `python -m` is the
+# documented interface, and a second spelling would be a second thing to keep
+# correct.
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -15,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "falconvar"
-version = "2.0.0"
+version = "3.0.0"
 description = "Video and audio in, searchable moments out."
 requires-python = ">=3.12"
 # Pins live in requirements.txt, which is what is actually installed. Repeating
@@ -24,23 +18,32 @@ requires-python = ">=3.12"
 dependencies = []
 
 [tool.setuptools]
-# Explicit rather than discovered: `docs`, `web`, `db` and `data` are not
-# Python, and auto-discovery would either pick them up or refuse to guess.
+# Explicit rather than discovered: `docs`, `db` and `data` are not Python, and
+# auto-discovery would either pick them up or refuse to guess.
 packages = [
-    "falconvar",
-    "falconvar.aggregate", "falconvar.aggregate.output",
-    "falconvar.audio", "falconvar.audio.diarize", "falconvar.audio.output",
-    "falconvar.audio.segment", "falconvar.audio.transcribe",
-    "falconvar.embed", "falconvar.embed.embedders", "falconvar.embed.index",
-    "falconvar.recovery", "falconvar.retrieve",
-    "falconvar.video", "falconvar.video.describe", "falconvar.video.describe.describers",
-    "falconvar.video.describe.input", "falconvar.video.describe.output",
-    "falconvar.video.describe.vlm",
-    "falconvar.video.ingest", "falconvar.video.ingest.chunker",
-    "falconvar.video.ingest.output", "falconvar.video.ingest.samplers",
-    "falconvar.video.ingest.samplers.components", "falconvar.video.ingest.source",
     "api",
+    "falconvar",
+    "falconvar.aggregate",
+    "falconvar.aggregate.llm",
+    "falconvar.aggregate.model",
+    "falconvar.aggregate.statistics",
+    "falconvar.audio",
+    "falconvar.audio.backends",
+    "falconvar.boundaries",
+    "falconvar.cut",
+    "falconvar.describe",
+    "falconvar.describe.backends",
+    "falconvar.media",
+    "falconvar.rag",
+    "falconvar.rag.embed",
+    "falconvar.rag.embed.indexes",
+    "falconvar.rag.retrieve",
+    "falconvar.shared",
+    "falconvar.video",
+    "falconvar.video.samplers",
+    "falconvar.video.samplers.perception",
 ]
-# `eval/` is deliberately absent: it is a measurement harness run from the
-# checkout (`python -m eval.retrieval`), not something to install alongside the
-# pipeline. It has no `__init__.py` for the same reason.
+# `recovery/` is deliberately absent, and has no `__init__.py`. It is the
+# standalone kit -- hand someone those files, a manifest and the video and they
+# rebuild the store with only `av`, `opencv-python` and `numpy`. Installing it
+# beside the pipeline is the first step towards it importing from one.

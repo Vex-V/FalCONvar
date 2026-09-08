@@ -1,32 +1,16 @@
-"""The HTTP surface over ver3.
+"""The HTTP surface: 13 routes over the pipeline.
 
-Three shapes of route, and the middle one is what ver3's architecture buys:
+Three shapes of route:
 
-  **immediate**   reading what exists, and searching. Milliseconds.
-  **queued**      anything that decodes, transcribes or pays a model. Minutes,
-                  so a 202 with a job id and the caller polls.
-  **uniform**     `POST /videos/{id}/run/{component}` runs ANY component,
-                  because every one of them is `run(video_id, ...) -> Produced`.
-                  `falconvar` needed a separate route and handler for describe,
-                  embed and aggregate; here adding a component adds a row to a
-                  dispatch table and the route already serves it.
+    immediate  reading what exists, and searching
+    queued     anything that decodes, transcribes or pays a model: a 202 with
+               a job id, and the caller polls
+    uniform    `POST /videos/{id}/run/{component}` runs any component, because
+               every one of them is `run(video_id, ...) -> Produced`
 
-**Slow work is queued, one job at a time.** Every heavy stage contends for the
-same 8 GiB GPU -- CLIP and YOLO in the video pass, Whisper and pyannote in the
-audio one. Two videos at once does not halve the wall clock, it doubles the
-resident weights and invites an allocator failure halfway through the more
-expensive one.
-
-**Validation is synchronous even though the work is not.** `workflow.validate`
-returns problems as a list, so a bad policy is a 422 the caller sees at once
-rather than a job that fails a minute later. What cannot be known without
-opening the file -- whether a track carries speech, whether the container
-reports a duration -- still fails inside the job, because that is a property of
-the media rather than of the request.
-
-**The id comes from the filename, not the client.** It is the key every table,
-every output directory and every Qdrant payload uses, so it is derived and
-sanitised here rather than accepted.
+`workflow.validate` answers synchronously, so a contradictory request is a 422
+rather than a job that fails a minute later. `docs/ROUTES.md` records the rest
+of the reasoning; `/docs` is the authority on shapes.
 """
 
 from __future__ import annotations
@@ -43,8 +27,8 @@ from pydantic import BaseModel, Field
 
 from api import service
 from api.jobs import Runner, progress
-from ver3 import workflow
-from ver3.shared import env, paths
+from falconvar import workflow
+from falconvar.shared import env, paths
 
 runner = Runner()
 
@@ -62,7 +46,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="FalCONvar ver3",
+    title="FalCONvar",
     version="3.0",
     description="A video goes in; a searchable index of moments comes out.",
     lifespan=lifespan,
@@ -228,7 +212,7 @@ def one_aggregate(video_id: str, name: str) -> dict[str, Any]:
     path = paths.artifact(video_id, "aggregates") / f"{name}.json"
     if not path.exists():
         raise HTTPException(404, {"error": f"{video_id} has no {name} aggregate"})
-    from ver3.shared import sinks
+    from falconvar.shared import sinks
     return sinks.read_json(path)
 
 

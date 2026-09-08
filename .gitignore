@@ -35,12 +35,6 @@
 # `FALCONVAR_DATA` moves the lot; `FALCONVAR_DATA=.` restores the old layout.
 # ---------------------------------------------------------------------------
 /data/
-*_manifest.json
-framestore/
-
-# Eval results: reproducible by `python -m eval.<name>`, and they change on
-# every run against a re-described corpus. The scripts are the source.
-/eval/results/
 
 # ---------------------------------------------------------------------------
 # Python

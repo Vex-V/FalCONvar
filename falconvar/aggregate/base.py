@@ -1,191 +1,163 @@
-"""What an aggregator is, and what it gets to work with.
+"""The Aggregator protocol, and what one is given.
 
-Every other stage here answers a question about a *chunk*. This one answers
-questions about a *video*: how busy was it, who spoke most, what happens in it,
-which twenty seconds are unlike the rest. Retrieval is bad at all of those --
-embeddings cannot count, and "the busiest moment" is an exact question that
-similarity answers approximately.
+`Context` joins every finished document by `chunk_id` -- what the picture said
+about a window and what was said during it are two halves of one record.
 
-**An aggregator reads documents, never modules.** `descriptions.json`,
-`transcript.json` and `timeline.json` arrive as parsed JSON, exactly as the
-manifest does for `describe`. That is what keeps this stage from depending on
-how the video or audio passes work rather than on what they produced, and it
-is why re-running the whole set costs nothing but the aggregators' own work.
+A tier is a cost ceiling: `free` is arithmetic, `local` adds GPU models, `llm`
+adds paid calls. They run cheapest first, so a run that dies partway has
+produced the free results rather than none.
 
-``depends_on`` names either a **source** -- a sampler id, or `transcript` --
-or another aggregator. The first decides whether it can run at all, the second
-decides order. An aggregator whose sources are absent is dropped rather than
-run against nothing, because a summary of no input is not a summary.
+`depends_on` drops rather than fails. A dependency naming a source
+(`transcript`) is a requirement on the video; one naming another aggregator
+orders it first. A question that does not apply is reported as skipped with the
+reason.
 
-``tier`` is what it costs, and it is metadata rather than structure:
-
-    free    arithmetic over what is already written. No model, no network.
-    local   a model on this machine's GPU.
-    llm     a paid API call.
-
-A caller can ask for a tier and get everything at or below it, which is how a
-free pass over a hundred videos stays free.
+`inputs_fingerprint` hashes the chunk text actually read: a summary of
+descriptions since rewritten reads perfectly, which is why staleness cannot be
+left to a reader to notice.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence
 
+from ..shared.documents import (Descriptions, Manifest, Timeline, Transcript,
+                                fingerprint_of)
+
+#: Cheapest first. A tier is a ceiling, not a selection.
 TIERS = ("free", "local", "llm")
 
 
 @dataclass
 class Context:
-    """One video's finished output, joined into the shape aggregators want.
+    """Every finished document, joined by `chunk_id`.
 
-    Built once per run and shared by every aggregator in it, so the documents
-    are parsed once however many read them.
+    The join is the point: a chunk is one thing, and what the picture said
+    about it and what was said during it are two halves of the same record.
     """
 
     video_id: str
-    descriptions: Optional[dict[str, Any]] = None
-    transcript: Optional[dict[str, Any]] = None
-    timeline: Optional[dict[str, Any]] = None
-    manifest: Optional[dict[str, Any]] = None
-    out_dir: Optional[Path] = None
-    #: Set by the reader when an index is available. Only `novelty` reads it.
-    index: Any = None
-    embedder: Any = None
-
-    @classmethod
-    def from_dir(cls, video_id: str, out_dir: Path) -> "Context":
-        """Read whatever a video has produced. Missing documents are None."""
-        def load(name: str) -> Optional[dict]:
-            path = Path(out_dir) / f"{name}.json"
-            if not path.exists():
-                return None
-            return json.loads(path.read_text(encoding="utf-8"))
-
-        return cls(video_id=video_id, out_dir=Path(out_dir),
-                   descriptions=load("descriptions"), transcript=load("transcript"),
-                   timeline=load("timeline"), manifest=load("manifest"))
-
-    # ---------------------------------------------------------------- sources
-    @property
-    def samplers(self) -> list[str]:
-        """Which questions were asked of this video's pictures."""
-        seen: list[str] = []
-        for chunk in (self.descriptions or {}).get("chunks", []):
-            for sampler in chunk.get("samplers", {}):
-                if sampler not in seen:
-                    seen.append(sampler)
-        return seen
+    timeline: Timeline
+    manifest: Optional[Manifest] = None
+    descriptions: Optional[Descriptions] = None
+    transcript: Optional[Transcript] = None
 
     @property
-    def sources(self) -> list[str]:
-        """Every input an aggregator could name in `depends_on`."""
-        out = list(self.samplers)
-        if self.has_speech:
-            out.append("transcript")
+    def sources(self) -> set[str]:
+        """What this video actually has -- sampler ids, plus `transcript`.
+
+        `depends_on` is checked against this, so a dependency is a question
+        about the video rather than about the request.
+        """
+        found: set[str] = set()
+        if self.descriptions is not None:
+            for chunk in self.descriptions.chunks:
+                found |= set(chunk.get("samplers", {}))
+        if self.transcript is not None and any(
+                c.get("word_count") for c in self.transcript.chunks):
+            found.add("transcript")
+        return found
+
+    def chunk_ids(self) -> list[int]:
+        return list(range(len(self.timeline)))
+
+    def span_of(self, chunk_id: int) -> tuple[float, float]:
+        return self.timeline.bounds_of(chunk_id)
+
+    def text_of(self, chunk_id: int) -> dict[str, str]:
+        """Everything said about one chunk, by sampler id."""
+        out: dict[str, str] = {}
+        if self.descriptions is not None:
+            for chunk in self.descriptions.chunks:
+                if chunk["chunk_id"] == chunk_id:
+                    for sid, block in chunk.get("samplers", {}).items():
+                        out[sid] = block.get("description", "")
+        if self.transcript is not None:
+            text = self.transcript.text_of(chunk_id)
+            if text:
+                out["transcript"] = text
         return out
 
-    @property
-    def has_speech(self) -> bool:
-        return any((c.get("text") or "").strip()
-                   for c in (self.transcript or {}).get("chunks", []))
+    def inputs_fingerprint(self) -> str:
+        """A hash of the chunk text actually read.
 
-    def has(self, source: str) -> bool:
-        return source in self.sources
-
-    # ----------------------------------------------------------------- chunks
-    @property
-    def chunks(self) -> list[dict[str, Any]]:
-        """One row per chunk of the shared grid, both modalities attached.
-
-        The join every aggregator would otherwise write for itself. `chunk_id`
-        means the same thing in both documents by construction -- that is what
-        the shared timeline is for -- so this is a lookup rather than a match.
+        A summary of descriptions that have since been rewritten reads
+        perfectly, which is precisely why staleness cannot be left to a reader
+        to notice.
         """
-        if self._joined is not None:
-            return self._joined
-
-        spoken = {c["chunk_id"]: c
-                  for c in (self.transcript or {}).get("chunks", [])}
-        described = {c["chunk_id"]: c
-                     for c in (self.descriptions or {}).get("chunks", [])}
-        grid = {c["chunk_id"]: c for c in (self.timeline or {}).get("chunks", [])}
-
-        rows = []
-        for chunk_id in sorted(set(spoken) | set(described) | set(grid)):
-            bounds = (grid.get(chunk_id) or described.get(chunk_id)
-                      or spoken.get(chunk_id) or {})
-            said = spoken.get(chunk_id) or {}
-            rows.append({
-                "chunk_id": chunk_id,
-                "start_ts": float(bounds.get("start_ts", 0.0)),
-                "end_ts": float(bounds.get("end_ts", 0.0)),
-                "descriptions": (described.get(chunk_id) or {}).get("samplers", {}),
-                "transcript": said.get("text") or "",
-                "turns": (said.get("structured") or {}).get("turns", []),
-                "speakers": (said.get("structured") or {}).get("speakers", []),
-                "word_count": said.get("word_count", 0),
-            })
-        self._joined = rows
-        return rows
-
-    _joined: Optional[list] = field(default=None, repr=False, compare=False)
-
-    @property
-    def duration(self) -> float:
-        rows = self.chunks
-        return rows[-1]["end_ts"] if rows else 0.0
-
-    def text_of(self, chunk: dict, sources: Optional[list[str]] = None) -> str:
-        """One chunk's text from the named sources, best-effort and in order."""
-        parts = []
-        for source in sources or (self.samplers + ["transcript"]):
-            if source == "transcript":
-                if chunk["transcript"]:
-                    parts.append(chunk["transcript"])
-            else:
-                block = chunk["descriptions"].get(source) or {}
-                if block.get("description"):
-                    parts.append(block["description"])
-        return " ".join(parts).strip()
-
-    # ------------------------------------------------------------- staleness
-    def fingerprint(self, sources: Optional[list[str]] = None) -> str:
-        """A hash of the text an aggregator will actually read.
-
-        Recorded on every result, because an aggregate derived from
-        descriptions that have since been rewritten is not wrong in any visible
-        way -- a stale summary reads perfectly. This makes it a comparison,
-        the way `manifest_fingerprint` does for descriptions and `text_hash`
-        for vectors, rather than something a reader has to assume.
-        """
-        payload = json.dumps(
-            [[c["chunk_id"], round(c["start_ts"], 3), round(c["end_ts"], 3),
-              self.text_of(c, sources)] for c in self.chunks],
-            sort_keys=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        return fingerprint_of({
+            "timeline": self.timeline.fingerprint(),
+            "text": {str(i): self.text_of(i) for i in self.chunk_ids()},
+        })
 
 
-@runtime_checkable
 class Aggregator(Protocol):
-    """One video-level pass over what the chunk stages wrote."""
-
-    id: str
+    name: str
     tier: str
-    depends_on: tuple[str, ...]
+    about: str
+    depends_on: Sequence[str]
 
-    def aggregate(self, ctx: Context) -> Optional[dict[str, Any]]:
-        """The video-level result, or None when the inputs cannot support one.
+    def run(self, context: Context) -> dict[str, Any]: ...
 
-        None is the honest answer for "this video has no speech, so there are
-        no speaker statistics" -- distinct from an empty result, which would
-        claim the question was asked and answered.
-        """
-        ...
 
-    def config(self) -> dict[str, Any]:
-        """Recorded beside the result, so it says what produced it."""
-        ...
+def missing(aggregator: Any, context: Context,
+            done: Sequence[str] = ()) -> Optional[str]:
+    """Why this aggregator cannot run here, or None.
+
+    A message rather than a boolean: "speakers did not run" is only useful
+    beside why it did not.
+    """
+    for need in getattr(aggregator, "depends_on", ()):
+        if need in done:
+            continue
+        if need in context.sources:
+            continue
+        if need in AGGREGATOR_NAMES:
+            return f"needs {need}, which did not run"
+        return f"needs {need}, which this video has no output for"
+    return None
+
+
+#: Which aggregators exist, for telling "depends on another aggregator" from
+#: "depends on something the video has". Kept as data so `missing` can say
+#: which kind a failed dependency was without importing anything.
+AGGREGATOR_NAMES = frozenset({
+    "stats", "speakers", "coverage", "novelty", "ner", "sentiment",
+    "summary", "chapters", "events",
+})
+
+
+def resolve_order(names: Sequence[str], tier_of: dict[str, str]) -> list[str]:
+    """Cheapest tier first, then dependencies before dependents.
+
+    Takes a tier map rather than the classes, so ordering a `--tier free` run
+    never imports the llm modules it is excluding.
+    """
+    ordered: list[str] = []
+    for tier in TIERS:
+        tier_names = [n for n in names if tier_of[n] == tier]
+        remaining = list(tier_names)
+        while remaining:
+            progressed = False
+            for name in list(remaining):
+                deps = [d for d in _DEPENDS.get(name, ()) if d in names]
+                if all(d in ordered or d not in remaining for d in deps):
+                    ordered.append(name)
+                    remaining.remove(name)
+                    progressed = True
+            if not progressed:                    # a cycle; run them anyway
+                ordered.extend(remaining)
+                break
+    return ordered
+
+
+#: Declared here rather than read off the classes, for the same reason as
+#: `tier_of`: ordering must not import what it is ordering.
+_DEPENDS: dict[str, tuple[str, ...]] = {
+    "speakers": ("transcript",),
+    "chapters": ("summary",),
+}
+
+__all__ = ["AGGREGATOR_NAMES", "TIERS", "Aggregator", "Context", "missing",
+           "resolve_order"]

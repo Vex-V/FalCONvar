@@ -1,6 +1,6 @@
 # Routes
 
-The HTTP surface is `api/`, over `ver3`. Run it with:
+The HTTP surface is `api/`, over `falconvar`. Run it with:
 
     python -m uvicorn api.main:app --port 8000
 
@@ -17,9 +17,9 @@ stage contends for the same 8 GiB GPU, so two videos at once does not halve the
 wall clock, it doubles the resident weights.
 
 **Uniform** -- `POST /videos/{id}/run/{component}` runs *any* component,
-because every one of them is `run(video_id, ...) -> Produced`. `falconvar`
-needed a route and a handler per stage; here adding a component adds a row to
-`service.COMPONENTS` and this route already serves it.
+because every one of them is `run(video_id, ...) -> Produced`. A route and a
+handler per stage is what the uniform signature removes: adding a component
+adds a row to `service.COMPONENTS` and this route already serves it.
 
 ## The endpoints
 

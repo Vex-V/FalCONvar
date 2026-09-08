@@ -1,166 +1,125 @@
 # FalCONvar
 
-Media goes in; a searchable index of moments comes out — plus the video-level
-answers that searching cannot give you.
+Video RAG ingestion. A video goes in; a searchable index of moments comes out.
 
+Both the picture and the soundtrack are read onto **one chunk grid**, so a
+search returns a span you can play rather than two answers that disagree about
+where it starts.
+
+```bash
+pip install -e .                                # then python -m from anywhere
+python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
+python -m falconvar.rag.retrieve "the moment the reactor exploded" video
+python -m uvicorn api.main:app --port 8000      # /docs for the schema
 ```
-                         ┌──────────────────────────────────────┐
-   video ─── ingest ───► │ manifest + frames │ ──── describe ───┤
-                         └──────────────────────────────────────┤
-                                                                ├─ embed ─► vectors ─► retrieve ─► moments
-   audio ─── listen ───► │ transcript                           │
-                         └──────────────────────────────────────┘
-                                          └──── aggregate ─────► summary, chapters, events, stats…
-```
 
-Both streams land on **one chunk grid**, so `chunk_id 7` means the same twenty
-seconds whether you ask what was seen or what was said. A search can then be
-answered by two independent accounts of the same moment.
+## How it works
 
----
+Nine components, each reading files and writing files. Nothing imports another.
 
-## What each stage does
-
-| stage | in | out | what it decides |
+| # | component | reads | writes |
 |---|---|---|---|
-| **ingest** | a video | `manifest.json`, `store/` | which frames are worth describing, **and why** |
-| **describe** | manifest + frames | `descriptions.json` | one VLM answer per (chunk, sampler) — a different question per sampler |
-| **listen** | a soundtrack | `transcript.json` | words with timestamps, who spoke, cut to the grid |
-| **embed** | descriptions + transcript | vectors | what text to embed, and what has actually changed |
-| **retrieve** | a question | ranked moments | dense + lexical, fused twice |
-| **aggregate** | everything above | `aggregates/*.json` | the whole-video questions retrieval is bad at |
+| 1 | `media` | the media file | `media.json` |
+| 2 | `audio` | `media.json` | `transcript.raw.json` |
+| 3 | `boundaries.evidence` | `media.json` *or* `transcript.raw.json` | `cuts.json` |
+| 4 | `boundaries` | `media.json` + `cuts.json` | **`timeline.json`** |
+| 5 | `video` | `media.json` + `timeline.json` | `manifest.json`, `store/` |
+| 6 | `cut` | `transcript.raw.json` + `timeline.json` | `transcript.json` |
+| 7 | `describe` | `manifest.json` + `store/` | `descriptions.json` |
+| 8 | `embed` | `descriptions.json` + `transcript.json` | vectors, `embedded.json` |
+| 9 | `aggregate` | everything above | `aggregates/*.json` |
 
-Nothing looks at the video except `ingest`. Every later stage reads only what
-the one before it wrote, which is why any of them can be re-run alone.
+**The grid is a component, not a side effect.** Which modality decides it is a
+policy, and the run order falls out of what that policy depends on rather than
+from a rule:
 
-## Capabilities
+| policy | boundaries come from | so what runs first |
+|---|---|---|
+| `uniform` | arithmetic over the duration | **nothing** |
+| `scene` | frame-to-frame content change | a scene pass over the picture |
+| `vad` | silences between speech | the audio pass |
+| `speaker` | where the voice changes | the audio pass |
 
-**Samplers** — why a frame was kept, which decides which question gets asked
-about it:
+Everything downstream is keyed by `(video_id, chunk_id)`, and the grid is
+stored exactly once.
 
-`clip` has the scene changed · `yolo` have the people changed · `objects` have
-things moved or appeared (open-vocabulary, you supply the class list) · `text`
-has the writing changed · `uniform` every Nth decimated frame.
+## Which frames, and what to ask
 
-**Questions** are separate from samplers, and any pair is allowed as
-`name:prompt`: `uniform:text` reads the screen on a stride without running OCR
-at ingest at all, `yolo:overview` keeps frames where the people changed and
-asks for prose rather than the structured people call. Unpaired, a sampler is
-asked its own question. A stride counts the frames the sampler
-was offered, so the cadence in seconds is `--every-frames` over
-`--per-second`; a cadence in seconds regardless is `--min-interval`.
+**Samplers** decide which frames are worth describing — `clip` when the scene
+changes · `yolo` when the people change · `objects` for an open vocabulary ·
+`text` when the writing changes · `uniform` on a stride.
 
-**Chunk grids** — one per run, and either modality may decide it:
-
-`uniform` arithmetic, nothing propagates · `scene` the video pass, from frame
-content · `vad` the audio pass, in the gaps between speech · `speaker` the
-audio pass, where the voice changes.
-
-**Audio** — Whisper transcription and pyannote diarization as separate passes,
-joined by word midpoints. Scanned whole, then cut: word-level timestamps make
-re-segmenting free, which is what lets either modality own the boundaries.
-
-**Retrieval** — dense vectors and BM25, fused by RRF inside Postgres, then
-descriptions folded into moments by `best + ½·second`. Neither half knows which
-kind of question it was handed, which is the argument for fusing rather than
-choosing. Qdrant is available and dense-only; it says so when you pick it.
-
-**Aggregates** — `stats`, `speakers`, `novelty` (free: arithmetic, no model),
-`ner`, `sentiment` (local GPU), `summary`, `chapters`, `events` (paid LLM
-calls). Everything at or below the chosen tier runs, cheapest first; anything
-whose inputs have not changed is left alone. A long video's summary is reduced
-hierarchically, and **every layer is kept** with the span it covers — a leaf
-summary is the only account of the video between one chunk and the whole file.
-
-**Audio-only or video-only.** Either stream can be switched off. Audio alone
-writes a transcript and no manifest, skips describe entirely — a transcript is
-already the text that stage would produce — and still embeds, searches and
-aggregates.
-
-## Quick start
+**Questions** are independent of them, and any pair is legal as `name:prompt`:
 
 ```bash
-pip install -r requirements.txt
-python -m falconvar.imports                 # after ANY install: what actually loaded
-cp .env.example .env                   # keys for OpenAI and Supabase
-
-python -m uvicorn api.main:app --port 8000
+--sampler uniform:text      # read the screen on a stride, no OCR at ingest
+--sampler yolo:overview     # frames where people changed, asked for prose
 ```
 
-Then <http://localhost:8000/app> for the browser client (deprecated; see
-below), or
-<http://localhost:8000/docs> for the API schema.
+Unpaired, a sampler is asked the question named after it. Which keys each
+answer may fill is narrowed by the other *questions* on the same chunk, so
+exactly one call answers each key.
 
-From the command line, one file end to end:
+## Retrieval
 
-```bash
-python -m falconvar.driver media/x.mp4 --sampler clip --chunking uniform
-python -m falconvar.driver media/x.mp4 --no-video --chunking vad    # sound alone
-python -m falconvar.video.describe.driver out/x/manifest.json --describer openai
-python -m falconvar.embed.driver out/x/descriptions.json
-python -m falconvar.aggregate.driver x --tier llm
-python -m falconvar.retrieve.driver "people at the checkout" --moments 3
-```
+Both modalities land in one index: a description and a transcript chunk are
+both text with a span, so `--sampler transcript` narrows a search to what was
+said exactly as `--sampler yolo` narrows it to who was seen.
 
-Everything one file produces lives under `data/out/<video-id>/`. Grouped by video
-rather than by artifact type, so one video's whole output is one thing to
-inspect, copy or delete.
+Ranking is RRF twice — a dense and a lexical ranking fused per unit, then the
+units of a chunk fused into a moment. Two backends, both hybrid: **`qdrant`**
+(embedded or served) and **`supabase`** (pgvector + `ts_rank_cd`).
+
+## Aggregates
+
+What retrieval cannot answer, because embeddings cannot count. Three tiers, run
+cheapest first: `free` is arithmetic (`stats`, `speakers`, `coverage`), `local`
+adds GPU models (`ner`, `sentiment`), `llm` adds paid calls (`summary`,
+`chapters`, `events`).
 
 ## Layout
 
 ```
-web/            the browser client: one page, no build step (deprecated)
-api/            HTTP in front of it all; slow stages queued, search immediate
 falconvar/
-  driver.py     the CLI for both streams
-  orchestrate.py both streams, one grid — what the CLI and the API both call
-  timeline.py   the shared chunk grid: spans + the policy that produced them
-  video/
-    ingest/     source, chunker, samplers, output, pipeline, calibrate
-    describe/   input, describers, vlm/prompts.py, output, reader
-  audio/        source, transcribe, diarize, align, segment, output, reader
-  embed/        SHARED: descriptions and transcripts both land here
-  retrieve/     SHARED: query -> ranked descriptions -> ranked moments
-  aggregate/    video-level structure over what the chunk stages wrote
-  recovery/     STANDALONE: rebuild a store from a manifest + the video
-eval/           the measurements behind the choices, reproducible
-db/schema.sql   runnable DDL: every table, function and RLS policy
-docs/           SCHEMAS.md · ROUTES.md · RUN.md
+  workflow.py      the whole run, as a list of component calls
+  shared/          paths · documents · sinks · env · llm · db · rows · schemas
+  media/           1  split
+  audio/           2  source · reader · models · backends/
+  boundaries/      3+4 scenes · speech · grid
+  video/           5  reader · decimate · store · pipeline · samplers/
+  cut/             6
+  describe/        7  prompts · frames · backends/
+  rag/embed/       8  units · embedders · indexes/ · readable
+  rag/retrieve/   10
+  aggregate/       9  statistics/ · model/ · llm/
+api/               HTTP: routes, dispatch, one background worker
+recovery/          STANDALONE: rebuild a store from a manifest + the video
+db/
+  supabase/        install.sql · reset.sql
+  json/            document schemas, generated from the dataclasses
+data/              everything a run writes; gitignored
+docs/ROUTES.md     the HTTP surface
 ```
 
-`recovery/` imports nothing from `falconvar`, and `imports.py` enforces it by
-parsing the files. Hand someone those three files, a video id and the video,
-and they rebuild the frame store byte for byte with `av`, `opencv` and `numpy`.
+100 files, ~10k lines.
 
-## Where to read next
+## Setup
 
-- **[docs/RUN.md](docs/RUN.md)** — every CLI, the API, the web app, and the
-  order to run them in.
-- **[docs/ROUTES.md](docs/ROUTES.md)** — the HTTP surface and the reasoning
-  behind each route.
-- **[docs/SCHEMAS.md](docs/SCHEMAS.md)** — what every field means, in the local
-  JSON and in Postgres alike.
-- **[CLAUDE.md](CLAUDE.md)** — the invariants, and the measurements that
-  produced them. Every design decision here has a number behind it; this is
-  where the numbers are.
+```bash
+pip install -r requirements.txt
+pip install -e .
+cp .env.example .env        # OpenAI key; Supabase and HF tokens if used
+```
 
-## Storage
+Run `db/supabase/install.sql` in the SQL editor and add `falconvar` to
+**Settings → API → Exposed schemas** if you want the Postgres backend.
 
-Local JSON is always written and is the primary sink. Postgres (Supabase) is
-optional and additive — `--sink file,supabase` writes both, file first. Vectors
-go to pgvector by default because it is the half with a lexical index; Qdrant
-runs embedded with no server and is dense-only.
+## State
 
-Run `db/schema.sql` once against a fresh database. It is idempotent and repairs
-its own generated columns.
+The pipeline runs end to end on real models — Whisper, pyannote, CLIP, YOLO,
+GPT, GLiNER — writing to files and Postgres, with vectors in Qdrant and
+pgvector. `recovery.recreate` byte-compares a rebuilt frame store against the
+original and is the end-to-end oracle.
 
-## Not built
-
-- A local embedder has been written and guarded but never run; every
-  measurement here is OpenAI.
-- Structured fields reach both indexes and both can filter on them, but the
-  values are free text, so a filter for `cashier` matches everything. They need
-  an `enum` first.
-- Live sources. `Frame.gap_before` and `Frame.discontinuity` are the seams.
-- Tests. Verification is `imports.py`, recreate's byte-comparison, and the
-  measurements in `eval/`.
+Not built: a test suite, an import checker, an eval harness, and sampler
+threshold calibration. See `CLAUDE.md` for what is measured and what is not.

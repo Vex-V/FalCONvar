@@ -1,17 +1,19 @@
-"""Video: pixels in, descriptions out.
+"""5 · ingest -- which frames are worth describing, and why.
 
-Two stages that only ever speak through what they wrote down. `ingest` decides
-which frames are worth describing and records *why* each was kept; `describe`
-reads those frames back out of the store and asks a VLM one question per
-sampler, because the reason a frame was kept is the most useful thing the
-manifest knows.
+One decode pass, feeding every sampler from it. The grid arrives as data and is
+never edited: this asks `timeline.nearest(ts)` and nothing else.
 
-They are grouped here because they share a subject -- the video stream -- not
-because they share code. `describe` imports exactly one name from `ingest`
-(`FrameStore`) and `imports.py` enforces that by AST-parsing every file below
-this line.
-
-`embed` and `retrieve` are deliberately NOT here. They consume text with a
-time span, and a transcript segment is that as much as a description is, so
-they are shared with `audio/` rather than owned by either.
+**Pixels are converted only for frames that survive decimation** -- 4% of them
+at 1/s from 25 fps -- which is the difference between 3 minutes and 37 on a
+three-hour file. See `reader.py`.
 """
+
+from __future__ import annotations
+
+from .driver import build_samplers, load, main, run
+from .pipeline import ingest
+from .reader import Frame, UnreadableSource
+from .store import FrameStore
+
+__all__ = ["Frame", "FrameStore", "UnreadableSource", "build_samplers",
+           "ingest", "load", "main", "run"]

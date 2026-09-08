@@ -1,23 +1,21 @@
 """STANDALONE: rebuild a frame store from a manifest and the video.
 
 Hand someone this file, a `manifest.json` and the source video, and they get the
-store back byte for byte with only `av`, `opencv-python` and `numpy`. **Nothing
-here imports the pipeline**, and that is enforced rather than intended: if
-recovery imported the pipeline it could lean on a default living in code rather
-than in the manifest, and the manifest's claim to be authoritative would go
-untested.
+store back byte for byte with only `av`, `opencv-python` and `numpy`. Nothing
+here imports the pipeline: if it did, it could lean on a default living in code
+rather than in the manifest, and the manifest's claim to be authoritative would
+go untested.
 
 That is also what makes this the end-to-end oracle. Any change to encoding,
 addressing or the manifest is verified by rebuilding a store and byte-comparing
-it against the original. If a change makes recreate non-identical, the change
-is wrong.
+it. If a change makes recreate non-identical, the change is wrong.
 
-    python -m recovery.recreate data/ver3/<id>/manifest.json --out rebuilt/
-    python -m recovery.recreate <manifest> --video other.mp4 --verify data/ver3/<id>/store
+    python -m recovery.recreate data/out/<id>/manifest.json --out rebuilt/
+    python -m recovery.recreate <manifest> --verify data/out/<id>/store
 
-The manifest names frames by `index` -- the reader's count over *every* frame,
-not over the kept ones -- and carries `pts` for each, which is the exact
-address. Seconds are a lossy rendering of `pts` and are not used here.
+The manifest names frames by `index`, the reader's count over every frame, and
+carries `pts` for each -- the exact address. Seconds are a lossy rendering of
+`pts` and are not used here.
 """
 
 from __future__ import annotations

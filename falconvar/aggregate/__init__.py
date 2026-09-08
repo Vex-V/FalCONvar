@@ -1,150 +1,72 @@
-"""Video-level structure over what the chunk stages wrote.
+"""9 · aggregate -- video-level structure over what the chunks said.
 
-`retrieve` finds the moment that best matches a question. That is the wrong
-shape for a whole class of questions -- how many, who most, what overall, which
-part is unlike the rest -- and this stage answers those instead. Nothing here
-looks at a video; everything reads documents the other stages produced.
+Reads the finished documents, never the video and never another component's
+modules. Answers the questions embeddings cannot: counts, coverage, who
+dominated, how much of this is speech.
 
-Registered by name, like the samplers and the describers, and resolved into a
-run order that puts dependencies first and **drops** anything whose sources are
-missing. That last part is the important one: a speaker aggregate on silent
-CCTV is not an error to report, it is a question that does not apply, and
-running it anyway would produce an empty result claiming otherwise.
+Three tiers, cheapest first. `free` is arithmetic, `local` adds GPU models,
+`llm` adds paid calls. Both dear tiers are registered lazily, so importing this
+pulls in neither torch nor an API client and needs no key.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence, Type
+import importlib
+from typing import Any
 
-from .base import TIERS, Aggregator, Context
-from .speakers import SpeakerStatsAggregator
-from .stats import StatsAggregator
+from .base import TIERS, Context, missing, resolve_order
+from .statistics import (CoverageAggregator, SpeakersAggregator,
+                         StatsAggregator)
 
-#: name -> "module:ClassName", resolved on first use, so importing this package
-#: pulls in neither a model runtime nor an API client.
-_LAZY: dict[str, str] = {
-    "novelty": "novelty:NoveltyAggregator",
-    "summary": "summary:SummaryAggregator",
-    "chapters": "chapters:ChaptersAggregator",
-    "events": "events:EventsAggregator",
-    "ner": "ner:NERAggregator",
-    "sentiment": "sentiment:SentimentAggregator",
+REGISTRY: dict[str, Any] = {
+    cls.name: cls for cls in
+    (StatsAggregator, SpeakersAggregator, CoverageAggregator)
 }
-_REGISTRY: dict[str, Type] = {}
+
+#: name -> ("module:Class", tier, about). Resolved on first use, so a `--tier
+#: free` run never imports the LLM client and never needs a key.
+_LAZY: dict[str, tuple[str, str, str]] = {
+    "ner": ("model.ner:NERAggregator", "local",
+            "named entities, and which chunks each appears in"),
+    "sentiment": ("model.sentiment:SentimentAggregator", "local",
+                  "tone per chunk, and where it turns"),
+    "summary": ("llm.summary:SummaryAggregator", "llm",
+                "what the whole video is about, in one pass over every chunk"),
+    "chapters": ("llm.chapters:ChaptersAggregator", "llm",
+                 "a table of contents: contiguous chapters over the video"),
+    "events": ("llm.events:EventsAggregator", "llm",
+               "discrete things that happened, each pinned to a chunk"),
+}
 
 #: What each lazy entry costs, without importing it. Needed because `--tier
 #: free` must be answerable without loading the modules it is excluding.
-TIER_OF: dict[str, str] = {
-    "stats": "free", "speakers": "free", "novelty": "free",
-    "ner": "local", "sentiment": "local",
-    "summary": "llm", "chapters": "llm", "events": "llm",
-}
+TIER_OF: dict[str, str] = {**{n: c.tier for n, c in REGISTRY.items()},
+                           **{n: t for n, (_, t, _) in _LAZY.items()}}
+ABOUT: dict[str, str] = {**{n: c.about for n, c in REGISTRY.items()},
+                         **{n: a for n, (_, _, a) in _LAZY.items()}}
 
 
-#: One line per aggregator, for a caller listing what it could ask for. Kept
-#: beside `TIER_OF` for the same reason: answerable without importing the
-#: module, so a browser can render the menu without a GPU being touched.
-ABOUT: dict[str, str] = {
-    "stats": "counts and coverage: chunks, samplers, words, frames",
-    "speakers": "who talked, for how long, over how many turns",
-    "novelty": "which chunk is least like the rest, by its own vectors",
-    "ner": "the names, places and organisations mentioned",
-    "sentiment": "the tone of each chunk, and the arc across the video",
-    "summary": "what the whole video is about, in one pass over every chunk",
-    "chapters": "where the subject changes, and what each part covers",
-    "events": "what happened, as a list with timestamps",
-}
-
-
-def about(name: str) -> str:
-    """One line on what an aggregate answers. Unknown names get a placeholder
-    rather than an error: this is labelling, not dispatch."""
-    return ABOUT.get(name, "a video-level result")
-
-
-def register(cls: Type) -> Type:
-    _REGISTRY[cls.id] = cls
-    return cls
-
-
-register(StatsAggregator)
-register(SpeakerStatsAggregator)
-
-
-def _resolve(name: str) -> Type:
-    if name in _REGISTRY:
-        return _REGISTRY[name]
+def resolve(name: str) -> Any:
+    if name in REGISTRY:
+        return REGISTRY[name]
     if name not in _LAZY:
-        raise KeyError(f"unknown aggregator {name!r}; known: {', '.join(available())}")
-    import importlib
-
-    module_name, class_name = _LAZY[name].split(":")
+        raise KeyError(f"unknown aggregator {name!r}; "
+                       f"known: {', '.join(available())}")
+    module_name, class_name = _LAZY[name][0].split(":")
     module = importlib.import_module(f".{module_name}", __package__)
-    return register(getattr(module, class_name))
-
-
-def build(name: str, **kwargs) -> Aggregator:
-    return _resolve(name)(**kwargs)
+    REGISTRY[name] = getattr(module, class_name)
+    return REGISTRY[name]
 
 
 def available() -> list[str]:
-    return sorted(set(_REGISTRY) | set(_LAZY))
+    return sorted(set(REGISTRY) | set(_LAZY))
 
 
-def by_tier(tier: str) -> list[str]:
-    """Every aggregator at or below ``tier``, cheapest first.
-
-    Ordered so that asking for `llm` still runs the free ones, and a run that
-    dies partway has produced the cheap results rather than none.
-    """
-    if tier not in TIERS:
-        raise KeyError(f"unknown tier {tier!r}; known: {', '.join(TIERS)}")
-    ceiling = TIERS.index(tier)
-    return [name for name in available()
-            if TIERS.index(TIER_OF.get(name, "llm")) <= ceiling]
+def about(name: str) -> str:
+    return ABOUT[name]
 
 
-def resolve_order(names: Sequence[str], sources: Iterable[str]) -> tuple[list[str], dict[str, str]]:
-    """Order the requested aggregators, dropping what cannot run.
+from .driver import context_for, load, main, run  # noqa: E402
 
-    A dependency naming a source (`yolo`, `transcript`) is a requirement on the
-    video; one naming another aggregator pulls it in and orders it first.
-    Returns the runnable order and, for everything dropped, why -- because
-    "speakers did not run" is only useful alongside "this video has no speech".
-    """
-    have = set(sources)
-    ordered: list[str] = []
-    skipped: dict[str, str] = {}
-    visiting: set[str] = set()
-
-    def visit(name: str, chain: tuple[str, ...] = ()) -> bool:
-        if name in ordered:
-            return True
-        if name in skipped:
-            return False
-        if name in visiting:
-            raise ValueError("circular aggregator dependency: "
-                             + " -> ".join(chain + (name,)))
-        aggregator = _resolve(name)
-        visiting.add(name)
-        try:
-            for dependency in aggregator.depends_on:
-                if dependency in _REGISTRY or dependency in _LAZY:
-                    if not visit(dependency, chain + (name,)):
-                        skipped[name] = f"needs {dependency}, which cannot run"
-                        return False
-                elif dependency not in have:
-                    skipped[name] = f"needs {dependency}, which this video has no output for"
-                    return False
-        finally:
-            visiting.discard(name)
-        ordered.append(name)
-        return True
-
-    for name in names:
-        visit(name)
-    return ordered, skipped
-
-
-__all__ = ["ABOUT", "Aggregator", "Context", "TIERS", "TIER_OF", "about",
-           "available", "build", "by_tier", "register", "resolve_order"]
+__all__ = ["REGISTRY", "TIERS", "Context", "about", "available", "context_for",
+           "load", "main", "missing", "resolve_order", "run"]
