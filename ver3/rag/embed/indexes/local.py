@@ -29,23 +29,16 @@ that part is identical.
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 from ....shared import paths, sinks
 from ..units import Unit
+from . import tokenize
 
 #: RRF's constant for fusing the two rankings of one description.
 FUSE_K = 60
-
-_WORD = re.compile(r"[a-z0-9£$€%.:'-]+")
-
-
-def tokenize(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
-
 
 def index_path(video_id: str, embedder_key: str) -> Path:
     safe = embedder_key.replace(":", "_").replace("/", "_")
@@ -150,4 +143,4 @@ def _lexical(terms: Sequence[str], content: str) -> float:
     return sum(counts[t] for t in terms) / total
 
 
-__all__ = ["FUSE_K", "LocalIndex", "index_path", "tokenize"]
+__all__ = ["FUSE_K", "LocalIndex", "index_path"]
