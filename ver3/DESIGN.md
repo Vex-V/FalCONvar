@@ -80,7 +80,7 @@ FalCONvar/
   data/                      everything a run writes
   db/
     json/                    generated document schemas
-    supabase/                DDL
+    supabase/                install.sql -- the whole thing to run
   recovery/                  STANDALONE. imports nothing from ver3
   ver3/
     workflow.py              resolves the dependency chain, calls each driver

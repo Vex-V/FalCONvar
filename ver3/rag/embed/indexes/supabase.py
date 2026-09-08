@@ -8,9 +8,9 @@ RRF, better on 4 of 7 queries and never worse.
 
 **Ranking happens in the database, via an RPC.** Fetching every row to rank in
 Python would move a video's whole index over the wire per query, and the two
-halves have to be fused where both are cheap to produce. `db/supabase/rpc.sql`
-holds `search_embeddings`; without it this falls back to a dense-only query and
-says so rather than pretending.
+halves have to be fused where both are cheap to produce.
+`db/supabase/install.sql` holds `search_embeddings`; without it this falls back
+to a dense-only query and says so rather than pretending.
 
 Written through `shared/db.py` so the key names live in one place.
 """
