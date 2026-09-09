@@ -10,7 +10,8 @@ where it starts.
 pip install -e .                                # then python -m from anywhere
 python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
 python -m falconvar.rag.retrieve "the moment the reactor exploded" video
-python -m uvicorn api.main:app --port 8000      # /docs for the schema
+python -m falconvar.rag.retrieve "..." video --question text   # across samplers
+python -m uvicorn api.main:app --port 8000      # 17 routes; /docs for the schema
 ```
 
 ## How it works
@@ -100,6 +101,28 @@ cheapest first: `free` is arithmetic (`stats`, `speakers`, `coverage`), `local`
 adds GPU models (`ner`, `sentiment`), `llm` adds paid calls (`summary`,
 `chapters`, `events`).
 
+## The API
+
+17 routes. Two ways to run a video, and the choice is about how much you want
+to tune:
+
+```bash
+# the whole pipeline, on workflow defaults                            202
+curl -X POST localhost:8000/videos -F file=@video.mp4      -F policy=vad -F sampler=clip,uniform:text -F tier=llm
+
+# or register it and drive the stages yourself, with per-stage settings
+curl -X POST localhost:8000/videos -F file=@video.mp4 -F run=false      # 201
+curl -X POST localhost:8000/videos/video/run/boundaries      -H 'Content-Type: application/json'      -d '{"params": {"policy": "scene", "min_s": 30, "max_s": 60}}'
+curl -X POST localhost:8000/videos/video/run/video      -d '{"params": {"sampler": "uniform:overview,clip:[mood,motion]",
+                     "per_second": 1, "every_n": 5}}'
+```
+
+`GET /capabilities` publishes every registry, the defaults, **and each
+component's parameters with their types and defaults** — so a UI is generated
+from it rather than kept in step with it. `POST /search` narrows by pairing
+(`clip:text`) or by question (`text`, across every sampler that asked it).
+`docs/ROUTES.md` has the reasoning; `/docs` is the authority on shapes.
+
 ## Layout
 
 ```
@@ -124,7 +147,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-101 files, ~10.4k lines.
+101 files, ~10.7k lines.
 
 ## Setup
 
@@ -135,14 +158,23 @@ cp .env.example .env        # OpenAI key; Supabase and HF tokens if used
 ```
 
 Run `db/supabase/install.sql` in the SQL editor and add `falconvar` to
-**Settings → API → Exposed schemas** if you want the Postgres backend.
+**Settings → API → Exposed schemas** if you want the Postgres backend. The file
+is idempotent and is also how a schema change is applied — re-run the whole
+thing. `db/supabase/reset.sql` drops everything first, and is the only
+destructive one.
 
 ## State
 
-The pipeline runs end to end on real models — Whisper, pyannote, CLIP, YOLO,
-GPT, GLiNER — writing to files and Postgres, with vectors in Qdrant and
-pgvector. `recovery.recreate` byte-compares a rebuilt frame store against the
-original and is the end-to-end oracle.
+Runs end to end on real models — Whisper, pyannote, CLIP, YOLO, GPT, GLiNER —
+writing documents to files and Postgres and vectors to Qdrant and pgvector.
 
-Not built: a test suite, an import checker, an eval harness, and sampler
-threshold calibration. See `CLAUDE.md` for what is measured and what is not.
+Last verified through the API from wiped local, Qdrant and Postgres state,
+driving every stage with its own settings: a `scene` grid with a 30 s floor
+gave 4 chunks of 39.8–55.6 s; `uniform:overview` at a 5 s stride and
+`clip:[mood,motion]` (two custom prompts added over HTTP) gave 12 descriptions
+and 16 searchable units; every Postgres table exact under both keys;
+`recovery.recreate` 76/76 byte-identical.
+
+Not built: a test suite, an import checker, an eval harness, video-level
+embedding, and sampler threshold calibration. See `CLAUDE.md` for what is
+measured and what is not.

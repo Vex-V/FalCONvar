@@ -49,7 +49,7 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-101 files, ~10.4k lines.
+101 files, ~10.7k lines.
 
 ## Commands
 
@@ -147,6 +147,14 @@ carries a fingerprint instead. Re-ingesting costs seconds where describing
 costs money, so a cascade from the grid into `descriptions` would mean retuning
 a scene threshold silently destroying everything a VLM was paid to produce.
 
+**The frames are written before the row that claims them.** There is no
+transaction across two REST writes, so ordering is the only guard. `_manifest`
+wrote `manifests` and then `chunk_samplers`; when the second was refused the
+first had landed, leaving a manifest claiming a run with no sampled frames —
+indistinguishable from a run whose samplers kept nothing, which happens. Written
+the other way round, the same failure leaves rows nobody points at and no
+manifest claiming them, so a reader is told the truth: not ingested here yet.
+
 **Recompute and write are different questions.** The fingerprint governs
 whether to recompute; every requested backend is written regardless. Conflating
 them means a run that adds a backend has nothing to recompute, writes nothing,
@@ -162,8 +170,17 @@ automatically any more — the old AST check went with `imports.py`.
 
 **Recreate is the end-to-end oracle.** Any change to encoding, addressing or
 the manifest is verified by rebuilding a store and byte-comparing. Verified at
-13/13, 60/60, 83/83. If a change makes recreate non-identical, the change is
-wrong.
+13/13, 60/60, 83/83, 206/206, 76/76. If a change makes recreate non-identical,
+the change is wrong.
+
+**`--verify` compares the frames the manifest names, not the output
+directory.** An output directory accumulates across runs for exactly the reason
+a frame store does — which the orphan rule already tolerates in the other
+direction. `rebuilt/` holding 206 frames from an earlier manifest made a
+correct 76-frame run report **FAIL, 130 absent from the store**, when every
+named frame was present and byte-identical. A false FAIL is the worst answer
+the oracle can give, because a real one means the change is wrong and is
+supposed to stop everything.
 
 **Paths are anchored to the checkout, found by marker.** `shared/paths.py`
 searches upward for `pyproject.toml` rather than counting parents — a parent
@@ -615,6 +632,15 @@ Chernobyl, `speaker` on single-narrator audio found no speaker changes and
 `enforce` divided the file into 7 even chunks of 29.3 s, which is the honest
 outcome rather than an invented one.
 
+**A floor above the ceiling is refused, not resolved.** `enforce` merges up to
+`min_s` and *then* splits at `max_s`, so the split runs last and wins — and
+`--max-chunk` defaults to `--chunk-duration`, which defaults to 20. So
+`--min-chunk 30` on its own asked for "at least 30, at most 20" and produced a
+grid whose shortest span was **18.07 s**, reported as success, because a scene
+grid of 18-second chunks is an entirely ordinary thing to see. There is no
+reading of that request to honour. With a coherent pair the same video gives 4
+chunks of 39.8-55.6 s.
+
 **`max_s` splits evenly, not into fixed bites.** Taking 30 s bites off a 62.5 s
 span leaves a 2.5 s remainder, so the guard against short chunks would create
 one. It becomes three of 20.8 s.
@@ -706,7 +732,25 @@ cannot be left to a reader to notice.
 **Every component has the same signature, so one route runs any of them.**
 `POST /videos/{id}/run/{component}` — `service.COMPONENTS` is a dispatch table,
 and adding a component adds a row. A route and a handler per stage is what the
-uniform signature removes.
+uniform signature removes. `params` is passed through as keyword arguments, so
+**every component setting is reachable over HTTP** without the route knowing
+any of them.
+
+**`POST /videos` runs the whole pipeline; `run=false` registers and stops.**
+The workflow deliberately carries no per-stage tuning — a scene grid with a
+30 s floor, a uniform stride of 5, an `objects` vocabulary — so a caller
+wanting those drives the components itself. Without `run=false` it had to run
+the pipeline once on defaults first, paying for a describe it was about to
+redo. `run=false` runs `media` and nothing else, answered rather than queued
+because it is a container probe, and returns **201** with the id. `media` is
+the one component the run route cannot reach: until it has run there is no id
+to address.
+
+**`/capabilities` publishes each component's parameters**, read off the
+signature — name, type, default, required. Introspected for the reason
+`defaults` is read off `workflow.Options`: a restated list drifts, and a
+drifted one offers a parameter the component does not take or hides one it
+does. That is the contract a configuration UI builds against.
 
 **The API calls components, never drivers.** A driver is argparse; importing
 one to reach the work behind it would make a server depend on a CLI.
@@ -759,6 +803,58 @@ link reads as breakage, not as a stage that never ran.
 words, and wrote a transcript of `[stub0.0][stub0.1]`. Nothing was wrong enough
 to report. `/capabilities` publishes `defaults` read off `workflow.Options`, so
 the default lives in the dataclass the pipeline actually uses.
+
+---
+
+## Building a client
+
+Nothing about the pipeline needs to be hardcoded in a UI. `GET /capabilities`
+publishes every registry, the defaults, and each component's parameters, so a
+form is generated from it rather than kept in step with it.
+
+**Two ways to run a video, and the choice is about tuning.**
+
+    POST /videos                          upload + the whole pipeline.  202
+      policy sampler use_video use_audio describer embedder tier sink index
+      -> workflow defaults for everything per-stage
+
+    POST /videos  run=false               upload, probe, stop.          201
+      -> then POST /videos/{id}/run/{component} with `params`, in order:
+         audio · boundaries.evidence · boundaries · video · cut ·
+         describe · embed · aggregate
+
+The second is the one a configuration UI wants: `min_s`, `every_n`,
+`threshold`, `vocabulary`, `per_second` and the rest live on the component that
+owns them, and `/capabilities.parameters` names them with their types and
+defaults. `boundaries.evidence` returns a `Produced` with `skipped: [evidence]`
+when the policy needs none, rather than nothing.
+
+**Order is the caller's responsibility on that path.** `workflow.py` is the
+reference for it; the dependencies are real — `boundaries` under `vad` or
+`speaker` needs `audio` to have run, under `scene` needs
+`boundaries.evidence`, and `cut`/`video` need the grid.
+
+**Progress.** `stage` is what is running, `history` what has finished, and a
+job's `detail` is the last `Produced`. Records die with the process; artifacts
+do not, so a restarted server still lists every video from disk.
+
+**Displaying results.** A search moment carries `descriptions` and `questions`
+keyed by answer id, so grouping by sampler or by question needs no id parsing.
+`GET /videos/{id}` lists only the artifacts that exist. Frames are
+`GET /videos/{id}/frames/{index}` by the read index a manifest names.
+
+**A score is a rank fusion, not a similarity.** `1/(k+best) + 0.5/(k+second)`
+at k=10, so 0.1326 is the ceiling for a chunk contributing two units and means
+"best ranked first, second ranked second" — never "this matched well". Measured:
+a nonsense query scores identically to the best real one, because dense always
+returns nearest neighbours and there is no relevance floor. If a UI shows a
+number, show the ranks beside it — the CLI prints `clip(v7,t1)
+uniform:text(v9,tNone)`, and `tNone` is how a reader sees the lexical half was
+silent. The API does not expose those ranks yet.
+
+**Prompts are editable at runtime.** `GET/POST/DELETE /prompts`; a custom
+question picks a shape rather than defining one, built-ins refuse edits with
+409, and adding a question invalidates nothing already described.
 
 ---
 
@@ -894,35 +990,29 @@ The pipeline runs end to end on real models — Whisper `small`, pyannote 3.1,
 CLIP, YOLO, `gpt-5.4-mini`, `text-embedding-3-small`, GLiNER, DistilBERT —
 writing documents to files and Postgres and vectors to Qdrant and pgvector.
 
-Verified through the API on Chernobyl from a wiped local, Qdrant and Postgres
-state, with a **custom prompt** added over HTTP first (205 s, `vad`,
-`clip,uniform:reactor`, `--tier llm`, `--sink file,supabase`, `--index
-qdrant,supabase`): all nine components and all eight aggregators in 370.4 s,
-none skipped. 428 words placed with none outside the grid, 14 chunks, 28
-descriptions, 41 embedded units to both indexes, 125.1 wpm, 13 chapters tiling
-0-205.28 contiguously with the explosion at 94.4 s. `recovery.recreate` rebuilt
-the store 206/206 byte-identical. `chunk_samplers` split `uniform:reactor` into
-sampler `uniform` and question `reactor`, and both indexes returned the custom
-question's chunk first for a query about the figures only it had read.
+Verified end to end **through the API**, from wiped local, Qdrant and Postgres
+state, driving every stage with its own settings rather than the workflow's
+defaults: `run=false` to register (201, no job), then `audio`,
+`boundaries.evidence`, `boundaries` (scene, `min_s=30`, `max_s=60`), `video`
+(`uniform:overview` at `every_n=5`, `clip:[mood,motion]` — two custom prompts
+added over HTTP), `cut`, `describe`, `embed`, `aggregate --tier llm`.
 
-An earlier identical re-run took **32.1 s**: describe skipped 28, embed found
-41 unchanged, aggregate found 8 current -- all three resume fingerprints
-holding at once.
+Produced 4 chunks of 39.8-55.6 s on real scene cuts; `uniform` kept 11 frames
+of a 54 s chunk, which is exactly every 5 s at 1/sec decimation; `clip` kept 51
+on content change. 12 descriptions, 16 units under `clip:mood`, `clip:motion`,
+`transcript` and `uniform:overview`, 8 aggregates. Every Postgres table exact
+under both the secret and the publishable key — 4 chunks, 8 `chunk_samplers`
+(one row per run, `questions` an array), 12 descriptions, 16 embeddings, 8
+aggregates. `recovery.recreate` rebuilt the store **76/76 byte-identical**.
 
-Both backends verified against a schema installed from scratch. A run with
-`--sink file,supabase --index qdrant,supabase` filled every table to exactly
-the expected count -- 14 chunks, 28 chunk_samplers, 28 descriptions, 41
-embeddings, 8 aggregates -- and identical counts under the publishable key, so
-RLS reads what it should rather than silently denying. A second run left every
-count unchanged: upsert, not append. 28 descriptions re-rendered from the
-Postgres copy produced text byte-identical to the file although 14 came back
-with different `jsonb` key order, so the sort-at-every-level fix holds where it
-was designed to. Both indexes returned the same top moment on three queries and
-agreed on `0.1326` for one of them; they diverge at rank 3, which is the
-lexical-half difference recorded above.
+Both search filters verified against the RPC: `p_question` alone, `p_sampler`
+alone, both intersecting, and a contradictory pair returning 0 rows. Lexical
+firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
+narration 20/20, nonsense **0/20**.
 
 `shared.schemas --check` proves the dataclasses, the generated JSON Schema and
-the SQL still agree. The API serves 13 routes.
+the SQL still agree. The API serves **17 routes**; `docs/ROUTES.md` is the
+reasoning and `/docs` the authority on shapes.
 
 ## Not built
 
