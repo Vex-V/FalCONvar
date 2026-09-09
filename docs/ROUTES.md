@@ -5,11 +5,16 @@ The HTTP surface is `api/`, over `falconvar`. Run it with:
     python -m uvicorn api.main:app --port 8000
 
 `/docs` is the generated schema and is the authority on request and response
-shapes; this file records the reasoning the schema cannot carry.
+shapes; this file records the reasoning the schema cannot carry. `/` redirects
+there: the surface is the API, and there is no client served beside it.
 
 ## Three shapes of route
 
 **Immediate** -- reading what exists, and searching. Milliseconds.
+
+*Reading the rows is a fourth thing, added later and kept in `browse.py`:
+`/videos/{id}/artifacts/{name}` hands over a whole document, which is the right
+shape for a download and the wrong one for a question.*
 
 **Queued** -- anything that decodes, transcribes or pays a model. A 202 with a
 job id, and the caller polls. Slow work runs **one job at a time**: every heavy
@@ -42,6 +47,31 @@ adds a row to `service.COMPONENTS` and this route already serves it.
 | POST | `/prompts` | add a custom question. **201** |
 | DELETE | `/prompts/{name}` | remove a custom one. **204** |
 | POST | `/search` | ranked moments |
+| GET | `/db/status` | can this deployment read Postgres, and what is in it |
+| GET | `/db/tables` | every table, what it holds, its deployed columns |
+| POST | `/db/query` | one page of one table: filters, order, offset, count |
+
+## Reading the rows
+
+**The read key, never the write key.** Nothing in `browse.py` writes, so
+nothing in it holds a key that could.
+
+**Columns are probed, not restated.** One `select * limit 1` per table per
+process gives the deployed shape. A hard-coded list would be a second copy of
+`install.sql` -- and that file is re-run against live databases precisely
+because they drift. What is stated is which columns are too wide to send by
+default (`embeddings.embedding` and `fts`, `transcripts.words/segments/turns`,
+`cuts.scores`), which is a judgement about size rather than a claim about the
+schema, so it cannot go stale the way a column list can.
+
+**Every page carries the size of the whole result.** "20 rows" and "20 of 4,812
+rows" are different answers, and a client showing the first as the second is
+lying about coverage.
+
+**`/db/status` answers rather than leaves it to be discovered.** RLS enabled
+with no policy denies reads *silently* -- zero rows, no error -- so a client
+that could not tell "not configured" from "nothing ingested" would show an
+empty table for both.
 
 ## Why some things are the way they are
 

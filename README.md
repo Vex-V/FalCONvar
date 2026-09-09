@@ -11,8 +11,13 @@ pip install -e .                                # then python -m from anywhere
 python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
 python -m falconvar.rag.retrieve "the moment the reactor exploded" video
 python -m falconvar.rag.retrieve "..." video --question text   # across samplers
-python -m uvicorn api.main:app --port 8000      # 17 routes; /docs for the schema
+python -m uvicorn api.main:app --port 8000      # /docs for the schema
 ```
+
+The HTTP surface drives the same thing: upload and run the whole pipeline, or
+drive one component at a time with its own settings, then read back the grid,
+the transcript, the frames each sampler kept, every description, the
+aggregates, the raw rows, and hybrid search. See `docs/ROUTES.md`.
 
 ## How it works
 
@@ -103,7 +108,7 @@ adds GPU models (`ner`, `sentiment`), `llm` adds paid calls (`summary`,
 
 ## The API
 
-17 routes. Two ways to run a video, and the choice is about how much you want
+20 routes. Two ways to run a video, and the choice is about how much you want
 to tune:
 
 ```bash
@@ -123,6 +128,10 @@ from it rather than kept in step with it. `POST /search` narrows by pairing
 (`clip:text`) or by question (`text`, across every sampler that asked it).
 `docs/ROUTES.md` has the reasoning; `/docs` is the authority on shapes.
 
+`GET /db/tables` and `POST /db/query` read the rows a run wrote -- filtered,
+ordered and paged, with the size of the whole result beside the page -- under
+the publishable key, so they see what a reader with the read grants sees.
+
 ## Layout
 
 ```
@@ -138,7 +147,7 @@ falconvar/
   rag/embed/       8  units · embedders · indexes/ · readable
   rag/retrieve/   10
   aggregate/       9  statistics/ · model/ · llm/
-api/               HTTP: routes, dispatch, one background worker
+api/               HTTP: routes, dispatch, one background worker, db reads
 recovery/          STANDALONE: rebuild a store from a manifest + the video
 db/
   supabase/        install.sql · reset.sql
@@ -147,7 +156,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-101 files, ~10.7k lines.
+102 Python files, ~11.0k lines.
 
 ## Setup
 

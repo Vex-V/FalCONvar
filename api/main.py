@@ -1,4 +1,4 @@
-"""The HTTP surface: 13 routes over the pipeline.
+"""The HTTP surface over the pipeline.
 
 Three shapes of route:
 
@@ -7,6 +7,9 @@ Three shapes of route:
                a job id, and the caller polls
     uniform    `POST /videos/{id}/run/{component}` runs any component, because
                every one of them is `run(video_id, ...) -> Produced`
+
+`browse.router` adds a fourth thing to read: the rows themselves, filtered and
+paged, which is the question shape a whole-document download cannot answer.
 
 `workflow.validate` answers synchronously, so a contradictory request is a 422
 rather than a job that fails a minute later. `docs/ROUTES.md` records the rest
@@ -22,10 +25,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from api import service
+from api import browse, service
 from api.jobs import Runner, progress
 from falconvar import workflow
 from falconvar.describe import library
@@ -361,3 +364,21 @@ def search(request: SearchRequest) -> dict[str, Any]:
         raise HTTPException(422, {"error": str(exc)}) from None
     return {"query": request.query, "video_id": request.video_id,
             "moments": found}
+
+
+# ------------------------------------------------------------- reading rows
+
+# The rows a run wrote, filtered and paged. Its own module because nothing in
+# it touches the pipeline: it reads Postgres under the publishable key.
+app.include_router(browse.router)
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """The schema, because that is the whole surface there is.
+
+    This used to redirect to a static client at `/app`; that client is gone, so
+    a bare root has one honest destination left. A 404 here would be correct
+    and useless -- `/docs` is what someone opening the host in a browser wants.
+    """
+    return RedirectResponse("/docs")

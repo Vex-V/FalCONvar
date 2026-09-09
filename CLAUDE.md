@@ -35,6 +35,7 @@ falconvar/
     model/         ner · sentiment                  local: GPU models
     llm/           summary · chapters · events      llm: paid calls
 api/               main (routes) · service (dispatch) · jobs (one worker)
+                   browse (read-only queries over the rows a run wrote)
 recovery/          STANDALONE: recreate.py, imports nothing from the pipeline
 db/
   supabase/        install.sql · reset.sql
@@ -49,7 +50,7 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-101 files, ~10.7k lines.
+102 Python files, ~11.0k lines.
 
 ## Commands
 
@@ -82,7 +83,7 @@ python -m falconvar.aggregate <id> --tier llm
 python -m falconvar.shared.schemas --check     # CI: are the schemas stale
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 #      ^ from the checkout root: recovery/ is not an installed package, on purpose
-python -m uvicorn api.main:app --port 8000     # /docs for the schema
+python -m uvicorn api.main:app --port 8000     # /docs for the schema, and / redirects there
 ```
 
 **Everything a run writes lives under `data/out/<video-id>/`.** Grouped by
@@ -1011,7 +1012,7 @@ firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
 `shared.schemas --check` proves the dataclasses, the generated JSON Schema and
-the SQL still agree. The API serves **17 routes**; `docs/ROUTES.md` is the
+the SQL still agree. The API serves **20 routes**; `docs/ROUTES.md` is the
 reasoning and `/docs` the authority on shapes.
 
 ## Not built
