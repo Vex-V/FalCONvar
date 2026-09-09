@@ -24,7 +24,8 @@ falconvar/
       perception/  detectors · descriptors · embedders. Every model weight
                    lives below this line and none above it.
   cut/           6 the transcript, onto the grid
-  describe/      7 prompts · frames · reader
+  describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
+    prompts.json   BUILT-IN questions and shapes; shipped, read-only
     backends/      stub · openai_client
   rag/embed/     8 units · embedders · readable
     indexes/       qdrant · supabase
@@ -43,11 +44,12 @@ data/              everything a run writes; gitignored
                    transcript, descriptions, embedded, aggregates/
   out/_qdrant/     the embedded vector store, beside the videos not inside one
   uploads/         what the API parked until a run read it
+  prompts.json     custom questions, added through the API
 weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-100 files, ~10k lines.
+101 files, ~10.4k lines.
 
 ## Commands
 
@@ -69,6 +71,7 @@ python -m falconvar.video <id> --sampler objects --vocabulary "crate,pallet"
 python -m falconvar.video <id> --prune-store           # irreversible, opt-in
 python -m falconvar.cut <id>
 python -m falconvar.describe <id> --describer openai --limit 5   # costs money
+python -m falconvar.video <id> --sampler uniform:safety   # a custom question
 python -m falconvar.rag.embed <id> --index qdrant,supabase
 python -m falconvar.rag.retrieve "..." <id> --sampler transcript
 python -m falconvar.aggregate <id> --tier llm
@@ -229,6 +232,34 @@ opaque string and `base.py` never reads it. Only the drivers import `prompts`,
 function-locally: they are composition roots, and validating a typo is the one
 thing they want the vocabulary for.
 
+**A question is an instruction and a shape, and the shape carries the schema.**
+`prompts.json` holds both; `prompts.py` is logic over it. The built-ins are
+expressed in the same terms a custom question uses -- `yolo` is not a special
+case in the code, it is the `people` shape -- so there is one mechanism rather
+than a shipped set and an extension point beside it. A shape either *is* the
+fallback (its fields are offered only where no sibling owns them) or is exact
+(its fields, always, and it owns those keys). `prose` is the degenerate exact
+shape: no fields at all, which is what `overview` answers in.
+
+**Ownership is derived from a shape's fields, never declared beside them.** A
+declared `owns` list is a second list to keep in step with the first, and the
+failure is silent: a key declared but absent is given up by the fallback and
+then answered by nobody.
+
+**A custom question picks a shape; it may not define one.** Adding a question
+is writing prose, and ownership of a key like `people` stays a property of the
+shipped shapes rather than something an HTTP request can rearrange. Verified
+against the previous hard-coded module over **448 (question, siblings)
+combinations** -- every schema, every instruction, the owner map and `merge`
+identical.
+
+**Built-ins ship in the package; custom questions live in `data/prompts.json`.**
+A custom entry may not shadow a built-in, refused at write time as a 409 and
+dropped at load time as well, because the file is hand-editable and a shadowed
+built-in is the one failure that would change a shipped question's meaning
+silently. The alternative is a deployment whose `yolo` means something other
+than every other deployment's, with nothing in the repo saying so.
+
 **A single shared schema was tried and is wrong.** Every field being present
 means the model may fill any of them, and it does — asked about people it
 returned a paragraph about the room, paid for twice, leaving two `setting`
@@ -263,9 +294,22 @@ the strategy runs. Default 1: every decimated frame.
 **Resume is keyed on the manifest, the describer *and* the prompts.** Without
 the model check, describing with the stub and then switching to a real one
 skips every pair and reports success having done nothing — the most expensive
-kind of silent no-op, since the output looks complete. The `model` block
-carries a hash of every instruction and schema in `prompts.py`: editing a
-prompt changes the output but not the model id.
+kind of silent no-op, since the output looks complete. Editing a prompt changes
+the output but not the model id, so the `model` block carries prompt hashes
+too.
+
+**Those hashes are per question, not one over the vocabulary.** A single hash
+meant that *adding* a question — which cannot change what any existing answer
+should say — invalidated every description of every video, and the next run
+silently paid to rebuild them all. `model.prompts` is `{question: hash}`, and a
+stored pair is current when its own question still hashes the same. Measured on
+Chernobyl with `clip,uniform:safety`: editing only `safety` gave **14
+described, 14 skipped**, and adding an unrelated third question gave **0
+described, 28 skipped in 0.0 s**. Under the single hash both would have been 28.
+
+A stored `prompts` that is a bare string is the pre-map format; it cannot be
+reduced to a per-question map, so every pair is re-described once rather than
+kept on a provenance nothing can check.
 
 **Describing reads the frame store and nothing else.** No seek-the-video
 fallback: the store exists so this stage has its frames in hand, and a fallback
@@ -634,6 +678,17 @@ itself as `boundaries.audio` or `boundaries.scenes` once it has run.
 take one — they are one step, and a step emitting its own progress would be
 reporting to itself. The runner records the returned `Produced` instead, so a
 one-component job ends with the same shape a workflow job builds up.
+
+**Adding a prompt runs nothing, so it is not queued.** `POST /prompts` writes
+one file and returns 201; the queue exists for work that contends for the GPU.
+Deleting a question does not touch the descriptions it produced — a description
+cost a paid call and records the question it was asked, so removing the question
+does not make the answer untrue, it only stops new runs asking it.
+
+**A placeholder is checked at write time, not at call time.** `{frames}` in an
+instruction would raise inside `str.format` — after the frames are read, with
+the request about to be paid for. `check()` parses the instruction against
+`{n}`, `{span}`, `{vocabulary}` when it is submitted.
 
 **The export surface lists what exists, not what could exist.** An audio-only
 video advertises no manifest rather than offering a link that 404s — a broken

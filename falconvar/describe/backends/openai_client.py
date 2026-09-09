@@ -193,8 +193,9 @@ class OpenAIDescriber:
                 "max_output_tokens": self.max_output_tokens,
                 # Per sampler, so a description says which shape produced it.
                 "response": "json_schema/description_<sampler>",
-                # Editing a prompt changes the output, so it has to change the
-                # resume key too, or a re-run silently keeps the old answers.
-                "prompts": prompts.version(),
+                # The prompt hashes are NOT here. They are per question, and
+                # which questions a run asks is a property of the manifest
+                # rather than of the describer -- `reader` owns that half of
+                # the resume key.
             },
         }

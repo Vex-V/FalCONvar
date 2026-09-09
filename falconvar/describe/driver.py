@@ -33,11 +33,11 @@ def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
             "Re-run ingest against the current timeline.")
 
     unknown = sorted({q for s in manifest.config.get("samplers", [])
-                      if (q := s.get("prompt")) and q not in prompts.QUESTIONS})
+                      if (q := s.get("prompt")) and q not in prompts.questions()})
     if unknown:
         raise ValueError(
             f"manifest names unknown question(s) {', '.join(unknown)}; "
-            f"known: {', '.join(prompts.QUESTIONS)}")
+            f"known: {', '.join(prompts.questions())}")
 
     existing = None
     if resume and paths.exists(video_id, "descriptions"):

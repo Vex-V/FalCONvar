@@ -60,6 +60,23 @@ Unpaired, a sampler is asked the question named after it. Which keys each
 answer may fill is narrowed by the other *questions* on the same chunk, so
 exactly one call answers each key.
 
+**Questions are data, and you can add your own.** A question is an instruction
+plus a *shape*, and the shape carries the response schema — the built-ins are
+written in the same terms, so `yolo` is just the `people` shape. Built-ins ship
+in `falconvar/describe/prompts.json`; anything you add lands in
+`data/prompts.json` and cannot shadow one.
+
+```bash
+curl -X POST localhost:8000/prompts -H 'Content-Type: application/json' -d '{
+  "name": "safety", "shape": "scene",
+  "instruction": "These {n} frames span {span}. List every safety hazard visible."}'
+
+python -m falconvar.workflow site.mp4 --sampler clip,uniform:safety
+```
+
+Editing one question re-describes only the pairs that used it; adding one costs
+nothing.
+
 ## Retrieval
 
 Both modalities land in one index: a description and a transcript chunk are
@@ -88,7 +105,7 @@ falconvar/
   boundaries/      3+4 scenes · speech · grid
   video/           5  reader · decimate · store · pipeline · samplers/
   cut/             6
-  describe/        7  prompts · frames · backends/
+  describe/        7  prompts · library · prompts.json · frames · backends/
   rag/embed/       8  units · embedders · indexes/ · readable
   rag/retrieve/   10
   aggregate/       9  statistics/ · model/ · llm/
@@ -101,7 +118,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-100 files, ~10k lines.
+101 files, ~10.4k lines.
 
 ## Setup
 

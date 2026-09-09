@@ -34,4 +34,4 @@ class StubDescriber:
         )
 
     def config(self) -> dict[str, Any]:
-        return {"describer": self.name, "prompts": prompts.version()}
+        return {"describer": self.name}

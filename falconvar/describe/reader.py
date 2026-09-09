@@ -3,7 +3,7 @@
 **Ownership is resolved over questions, never sampler ids.** Which keys a
 call's schema may fill is narrowed by the other questions asked about the same
 chunk, so exactly one call answers each key and merging is a plain union.
-`prompts.OWNER` is keyed by question, and the two are only equal while no
+The owner map is keyed by question, and the two are only equal while no
 sampler is paired with someone else's question -- with `yolo:overview` present,
 passing ids would have `clip` give up `people` to a call whose schema owns
 nothing, and the field would leave the document with everything still
@@ -29,8 +29,54 @@ from .base import Describer, Description
 from .frames import FrameSource
 
 
-def _model_block(describer: Describer) -> dict[str, Any]:
-    return {**describer.config(), "prompts": prompts.version()}
+def _model_block(describer: Describer, questions: Sequence[str]) -> dict[str, Any]:
+    """What a stored answer must match to count as done.
+
+    `prompts` is a map, `{question: hash}`, not one hash over the vocabulary.
+    A single hash meant that adding a question -- which cannot change what any
+    existing answer should say -- invalidated every description of every video,
+    and the next run silently paid to rebuild them all.
+    """
+    return {**describer.config(), "prompts": prompts.versions(questions)}
+
+
+def _resumable(existing: Optional[Descriptions], manifest: Manifest,
+               model: dict[str, Any]) -> set[tuple[int, str]]:
+    """The (chunk, sampler) pairs whose stored answer is still current.
+
+    Three conditions, checked separately because they fail for different
+    reasons: the manifest must be the one that chose these frames, the
+    describer must be the same model, and **each pair's own question** must
+    hash the same as it does now. The third is per pair, which is the whole
+    point -- editing the `text` instruction re-describes `uniform:text` and
+    leaves `clip` alone.
+
+    A stored `prompts` that is a bare string is the pre-map format. Its hash
+    covered the whole vocabulary and cannot be reduced to a per-question one,
+    so every pair is re-described once. Keeping them instead would mean
+    claiming a provenance this cannot check.
+    """
+    if existing is None:
+        return set()
+    if existing.manifest_fingerprint != manifest.fingerprint():
+        return set()
+
+    def describer_half(block: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in (block or {}).items() if k != "prompts"}
+
+    if describer_half(existing.model) != describer_half(model):
+        return set()
+
+    stored = (existing.model or {}).get("prompts")
+    if not isinstance(stored, dict):
+        return set()
+    current = model.get("prompts") or {}
+
+    return {(chunk["chunk_id"], sampler_id)
+            for chunk in existing.chunks
+            for sampler_id, block in (chunk.get("samplers") or {}).items()
+            if (q := block.get("question")) is not None
+            and stored.get(q) is not None and stored.get(q) == current.get(q)}
 
 
 def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
@@ -41,18 +87,16 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
              on_described: Optional[Callable[[int, str, Description], None]] = None
              ) -> Descriptions:
     """Describe every (chunk, sampler) the manifest names."""
-    model = _model_block(describer)
+    # Every question this manifest asks, resolved before the first call so the
+    # model block is complete whether or not a chunk is reached.
+    asked = sorted({q for chunk in manifest.chunks
+                    for q in prompts.questions_on(manifest, chunk)})
+    model = _model_block(describer, asked)
     started = time.perf_counter()
 
-    # A stored answer counts only if the manifest AND the model block match.
-    done: set[tuple[int, str]] = set()
-    kept: dict[int, dict[str, Any]] = {}
-    if existing is not None:
-        same_manifest = existing.manifest_fingerprint == manifest.fingerprint()
-        same_model = existing.model == model
-        if same_manifest and same_model:
-            done = existing.done()
-            kept = {c["chunk_id"]: c for c in existing.chunks}
+    done = _resumable(existing, manifest, model)
+    kept: dict[int, dict[str, Any]] = (
+        {c["chunk_id"]: c for c in existing.chunks} if existing is not None else {})
 
     chunks: list[dict[str, Any]] = []
     described = skipped = 0

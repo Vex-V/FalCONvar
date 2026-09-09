@@ -37,6 +37,10 @@ adds a row to `service.COMPONENTS` and this route already serves it.
 | GET | `/videos/{id}/aggregates` | which aggregates exist |
 | GET | `/videos/{id}/aggregates/{name}` | one aggregate |
 | GET | `/videos/{id}/frames/{index}` | one stored frame as JPEG |
+| GET | `/prompts` | every question, and the shapes one may answer in |
+| GET | `/prompts/{name}` | one question, with the schema a call would get |
+| POST | `/prompts` | add a custom question. **201** |
+| DELETE | `/prompts/{name}` | remove a custom one. **204** |
 | POST | `/search` | ranked moments |
 
 ## Why some things are the way they are
@@ -62,6 +66,24 @@ link reads as breakage rather than as a stage that never ran.
 
 **`?download=1` only adds a `Content-Disposition`.** Content negotiation would
 be tidier, but a browser cannot set an `Accept` header on a plain link.
+
+**A custom prompt picks a shape; it does not define one.** The shape carries
+the response schema and decides which keys the answer owns, so adding a
+question is writing prose rather than JSON Schema -- and ownership of a key
+like `people` stays a property of the shipped shapes rather than something an
+HTTP request can rearrange. `/prompts` publishes the shapes, and the built-ins
+use exactly those: `yolo` is not a special case, it is the `people` shape.
+
+**Built-ins cannot be edited or deleted, and that is a 409 rather than a 404.**
+They ship in the package so that every deployment's `yolo` means the same
+thing; a request that could shadow one would make a run unreproducible from the
+repo. 409 because the name exists and the request is well-formed -- there is
+nothing to correct except which name it asks for. Custom questions live in
+`data/prompts.json`, which the API writes and git ignores.
+
+**Deleting a question does not touch the descriptions it produced.** A
+description cost a paid call and records the question it was asked, so removing
+the question does not make the answer untrue; it only stops new runs asking it.
 
 **`/search` names its embedder.** It must be the one that built the index: a
 mismatch across widths fails loudly, but two models of the same width return a

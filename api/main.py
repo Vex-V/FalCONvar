@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from api import service
 from api.jobs import Runner, progress
 from falconvar import workflow
+from falconvar.describe import library
 from falconvar.shared import env, paths
 
 runner = Runner()
@@ -142,6 +143,73 @@ def run_component(video_id: str, component: str,
                         lambda j: service.run_component(component, video_id,
                                                         **request.params))
     return {"job": job.as_dict()}
+
+
+# ------------------------------------------------------------------ prompts
+
+class PromptRequest(BaseModel):
+    """A custom question: what to ask, and which shape to answer in.
+
+    No schema field. A question picks an existing shape rather than defining
+    one, so adding a question is writing prose -- and so ownership of a key
+    like `people` stays a property of the shipped shapes rather than something
+    an HTTP request can rearrange.
+    """
+
+    name: str = Field(..., description="lowercase, no colon: `sampler:question` splits on one")
+    instruction: str = Field(..., description="may use {n}, {span}, {vocabulary}")
+    shape: str = Field("scene", description="a name from /prompts.shapes")
+    about: str = Field("", description="a note for whoever reads the list later")
+
+
+@app.get("/prompts", tags=["prompts"])
+def list_prompts() -> dict[str, Any]:
+    """Every question a sampler may be paired with, and the shapes available."""
+    return service.prompt_list()
+
+
+@app.get("/prompts/{name}", tags=["prompts"])
+def get_prompt(name: str) -> dict[str, Any]:
+    """One question, with the response schema a call would actually be given."""
+    try:
+        return service.prompt_get(name)
+    except library.PromptError as exc:
+        raise HTTPException(404, {"error": str(exc)}) from None
+
+
+@app.post("/prompts", status_code=201, tags=["prompts"])
+def add_prompt(request: PromptRequest) -> dict[str, Any]:
+    """Add a custom question. Immediate -- it writes a file, it runs nothing.
+
+    Built-ins cannot be replaced: they ship in the package so that every
+    deployment's `yolo` means the same thing, and a request that could shadow
+    one would make a run unreproducible from the repo.
+    """
+    try:
+        return service.prompt_add(request.name, request.instruction,
+                                  shape=request.shape, about=request.about)
+    except library.Protected as exc:
+        # 409, not 422: the request is well-formed and the name exists. There
+        # is nothing to correct except which name it asks for.
+        raise HTTPException(409, {"error": str(exc)}) from None
+    except library.PromptError as exc:
+        raise HTTPException(422, {"problems": str(exc).split("; ")}) from None
+
+
+@app.delete("/prompts/{name}", status_code=204, tags=["prompts"])
+def delete_prompt(name: str) -> None:
+    """Remove a custom question. Descriptions already written are untouched.
+
+    Nothing cascades: a description cost a paid call, and it records the
+    question it was asked, so deleting the question does not make the answer
+    untrue. It only stops new runs asking it.
+    """
+    try:
+        service.prompt_remove(name)
+    except library.Protected as exc:
+        raise HTTPException(409, {"error": str(exc)}) from None
+    except library.PromptError as exc:
+        raise HTTPException(404, {"error": str(exc)}) from None
 
 
 # --------------------------------------------------------------------- jobs

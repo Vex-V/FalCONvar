@@ -17,6 +17,13 @@ requires-python = ">=3.12"
 # not the environment.
 dependencies = []
 
+[tool.setuptools.package-data]
+# The built-in prompts are data inside the package, not a resource beside it:
+# `python -m falconvar.workflow` from any directory has to find them, and an
+# editable install that resolves them by `__file__` would stop working the day
+# it becomes a real one.
+"falconvar.describe" = ["prompts.json"]
+
 [tool.setuptools]
 # Explicit rather than discovered: `docs`, `db` and `data` are not Python, and
 # auto-discovery would either pick them up or refuse to guess.

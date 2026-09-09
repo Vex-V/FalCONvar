@@ -105,7 +105,7 @@ def validate(options: Options) -> list[str]:
     if options.use_video:
         from .describe import prompts
         from .video import samplers as _samplers
-        known_samplers, known_questions = _samplers.available(), prompts.QUESTIONS
+        known_samplers, known_questions = _samplers.available(), prompts.questions()
         for spec in (s.strip() for s in options.sampler.split(",")):
             if not spec:
                 continue

@@ -19,7 +19,7 @@ from typing import Any, Callable, Optional
 
 from falconvar import aggregate, audio, boundaries, cut, describe, media, video
 from falconvar import workflow
-from falconvar.describe import prompts
+from falconvar.describe import library, prompts
 from falconvar.rag import embed, retrieve
 from falconvar.shared import paths, sinks
 from falconvar.shared.documents import Produced
@@ -172,6 +172,7 @@ def available() -> dict[str, Any]:
         "components": list(workflow.COMPONENTS),
         "samplers": samplers_mod.available(),
         "prompts": prompts.questions(),
+        "shapes": sorted(library.shapes()),
         "pairings": ["uniform:overview", "uniform:text", "yolo:overview"],
         "policies": sorted(boundaries.POLICIES),
         "describers": describe.available(),
@@ -197,6 +198,66 @@ def available() -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------- prompts
+
+def prompt_list() -> dict[str, Any]:
+    """Every question, marked built-in or custom, with the shape it answers in.
+
+    The shape is resolved rather than just named, so a caller sees which keys
+    an answer will carry without having to fetch the shape separately.
+    """
+    entries = []
+    for name in library.questions():
+        entry = library.question(name)
+        entries.append({
+            "name": name,
+            "builtin": bool(entry.get("builtin")),
+            "shape": entry.get("shape"),
+            "owns": library.owns(name),
+            "about": entry.get("about", ""),
+            "instruction": entry.get("instruction", ""),
+        })
+    return {
+        "prompts": entries,
+        "shapes": {name: {"fallback": bool(shape.get("fallback")),
+                          "fields": sorted(shape.get("fields") or {}),
+                          "summary": shape.get("summary")}
+                   for name, shape in sorted(library.shapes().items())},
+        "custom_file": str(paths.PROMPTS),
+    }
+
+
+def prompt_get(name: str) -> dict[str, Any]:
+    """One question, with the exact response schema a call would be given.
+
+    The schema is shown unnarrowed -- what this question asks for on its own.
+    On a real chunk the general question gives up any key a sibling owns.
+    """
+    entry = library.question(name)
+    return {
+        "name": name,
+        "builtin": bool(entry.get("builtin")),
+        "shape": entry.get("shape"),
+        "owns": library.owns(name),
+        "about": entry.get("about", ""),
+        "instruction": entry.get("instruction", ""),
+        "schema": prompts.schema_for(name),
+        "version": prompts.version_of(name),
+    }
+
+
+def prompt_add(name: str, instruction: str, shape: str = "scene",
+               about: str = "") -> dict[str, Any]:
+    """Add or replace a custom question. Built-ins are refused."""
+    library.add(name, instruction, shape=shape, about=about)
+    return prompt_get(name)
+
+
+def prompt_remove(name: str) -> None:
+    library.remove(name)
+
+
 __all__ = ["ARTIFACTS", "COMPONENTS", "UPLOADS", "artifact", "available",
-           "exports", "frame_path", "run_component", "run_workflow", "search",
+           "exports", "frame_path", "prompt_add", "prompt_get", "prompt_list",
+           "prompt_remove", "run_component", "run_workflow", "search",
            "videos"]

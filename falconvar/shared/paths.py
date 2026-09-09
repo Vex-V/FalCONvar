@@ -53,6 +53,11 @@ DATA_ROOT = _from_env("FALCONVAR_DATA", REPO_ROOT / "data")
 
 OUT_ROOT = DATA_ROOT / "out"
 UPLOADS = DATA_ROOT / "uploads"
+
+#: Custom describe prompts, added through the API. Under the data root rather
+#: than in the package because a request writes it; the built-ins stay in
+#: `falconvar/describe/prompts.json`, version-controlled and read-only.
+PROMPTS = DATA_ROOT / "prompts.json"
 WEIGHTS = _from_env("FALCONVAR_WEIGHTS", REPO_ROOT / "weights")
 
 #: artifact name -> filename under `data/out/<video-id>/`.
@@ -130,7 +135,7 @@ def videos() -> list[str]:
                   if d.is_dir() and not d.name.startswith(RESERVED_PREFIX))
 
 
-__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "RESERVED_PREFIX",
+__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "PROMPTS", "RESERVED_PREFIX",
            "UPLOADS", "WEIGHTS",
            "ARTIFACTS", "DIRECTORIES", "UnknownArtifact",
            "home", "artifact", "exists", "present", "videos"]
