@@ -88,6 +88,34 @@ def validate(options: Options) -> list[str]:
         problems.append("nothing to do: read the picture, the soundtrack, or both")
     if not Path(options.source).exists():
         problems.append(f"{options.source} does not exist")
+
+    # Both halves of every `name:question` pair, against the two registries.
+    #
+    # Imported here rather than at module scope: this function is a composition
+    # root, and the one thing it wants the vocabularies for is catching a typo.
+    # `video` still does not import `describe` -- a sampler records its question
+    # as an opaque string.
+    #
+    # Checked here because the alternative is where it used to be caught: in
+    # `describe`, after ingest has decoded the whole video. `yolo:overvew` was
+    # a 202 that ran media, audio, boundaries and a full video pass before
+    # failing on the typo -- which is the late failure this function exists to
+    # prevent. `question_for` falls back to the scene question, so a spelling
+    # nobody checks is a run that completes and answers something nobody asked.
+    if options.use_video:
+        from .describe import prompts
+        from .video import samplers as _samplers
+        known_samplers, known_questions = _samplers.available(), prompts.QUESTIONS
+        for spec in (s.strip() for s in options.sampler.split(",")):
+            if not spec:
+                continue
+            name, _, question = spec.partition(":")
+            if name not in known_samplers:
+                problems.append(f"unknown sampler {name!r} in {spec!r}; "
+                                f"known: {', '.join(known_samplers)}")
+            if question and question not in known_questions:
+                problems.append(f"unknown question {question!r} in {spec!r}; "
+                                f"known: {', '.join(known_questions)}")
     return problems
 
 

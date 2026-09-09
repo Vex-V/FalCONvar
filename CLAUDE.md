@@ -214,7 +214,15 @@ plain union of all seven keys.
 **An unknown question is rejected, not fallen through.** `question_for` falls
 back to the scene question by design, which makes `yolo:overvew` a run that
 completes, costs money and answers something nobody asked. `prompts.QUESTIONS`
-is the vocabulary and is checked before a run.
+is the vocabulary, and `workflow.validate` checks **both halves** of every
+`name:question` pair against it and the sampler registry.
+
+It has to be there rather than only in `describe`, which is where it used to
+be: that check reads the finished manifest, so `yolo:overvew` was a 202 that
+ran media, audio, boundaries and a whole video decode before failing on a
+typo -- the late failure `validate` exists to prevent. `validate` imports both
+vocabularies function-locally, as a composition root; `video` still never
+imports `describe`.
 
 **Ingest does not depend on describe.** A sampler records the question as an
 opaque string and `base.py` never reads it. Only the drivers import `prompts`,
