@@ -10,12 +10,17 @@ nothing, and the field would leave the document with everything still
 well-formed.
 
 **Resume is keyed on the manifest, the describer, and the prompts.** A stored
-description counts as done only if all three match. Without the model check,
-describing with the stub and then switching to a real one skips every pair and
-reports success having done nothing -- the most expensive kind of silent no-op,
-since the output looks complete. The `model` block therefore carries a hash of
-every instruction and schema in `prompts.py`: editing a prompt changes the
-output but not the model id.
+description counts as done only if all three match. Without the describer
+check, running with the stub and then switching to a real one skips every pair
+and reports success having done nothing -- the most expensive kind of silent
+no-op, since the output looks complete. The prompts need their own key for the
+same reason: editing an instruction changes the answer but not the model id.
+
+**The prompt key is a hash per question, not one over the vocabulary.** A
+single hash also invalidated answers that could not have changed, so adding a
+question re-described every chunk of every video and the next run silently paid
+for it. `model.prompts` is `{question: hash}` and `_resumable` compares each
+pair against its own question.
 """
 
 from __future__ import annotations

@@ -260,6 +260,23 @@ built-in is the one failure that would change a shipped question's meaning
 silently. The alternative is a deployment whose `yolo` means something other
 than every other deployment's, with nothing in the repo saying so.
 
+**Two questions on the fallback shape both answer every key, and the chunk
+rollup keeps only one.** `merge` skips a key already present unless the writer
+owns it, so with `clip,uniform:reactor` -- both `scene` shape, neither owning
+anything -- the alphabetically-first sampler wins every differing key.
+Measured: `reactor` read `RADIATION`, `8 TONS`, `EVACUATIONS`, `115,000` off
+the screen and `clip` found only the station watermark, and the rollup kept
+`clip`'s one entry.
+
+Nothing downstream reads that rollup -- `units.from_descriptions`, both index
+writers, `rows.py` and every aggregator work from the per-sampler blocks, so
+both answers are embedded, indexed and stored. The loss is confined to
+`descriptions.chunks[].structured`, a convenience field. It predates custom
+prompts (`clip,uniform` had it too) but they make it the common case, because a
+custom question defaults to the fallback shape. The honest fix is for the
+rollup to keep every answer per question rather than pick one; it is not worth
+doing until something reads it.
+
 **A single shared schema was tried and is wrong.** Every field being present
 means the model may fill any of them, and it does — asked about people it
 returned a paragraph about the room, paid for twice, leaving two `setting`
@@ -821,14 +838,20 @@ The pipeline runs end to end on real models — Whisper `small`, pyannote 3.1,
 CLIP, YOLO, `gpt-5.4-mini`, `text-embedding-3-small`, GLiNER, DistilBERT —
 writing documents to files and Postgres and vectors to Qdrant and pgvector.
 
-Verified through the API on Chernobyl (205 s, `vad`, `clip,uniform:text`,
-`--tier llm`): all nine components and all eight aggregators in 287.6 s, none
-skipped. 34 segments, 428 words placed with none outside the grid, 14 chunks,
-28 descriptions, 41 embedded units, 125.1 wpm, the explosion at 94.439 s and
-chapters tiling 0-205.28 contiguously. `recovery.recreate` rebuilt the store
-206/206 byte-identical. A second identical run took **32.1 s**: describe
-skipped 28, embed found 41 unchanged, aggregate found 8 current -- all three
-resume fingerprints holding at once.
+Verified through the API on Chernobyl from a wiped local, Qdrant and Postgres
+state, with a **custom prompt** added over HTTP first (205 s, `vad`,
+`clip,uniform:reactor`, `--tier llm`, `--sink file,supabase`, `--index
+qdrant,supabase`): all nine components and all eight aggregators in 370.4 s,
+none skipped. 428 words placed with none outside the grid, 14 chunks, 28
+descriptions, 41 embedded units to both indexes, 125.1 wpm, 13 chapters tiling
+0-205.28 contiguously with the explosion at 94.4 s. `recovery.recreate` rebuilt
+the store 206/206 byte-identical. `chunk_samplers` split `uniform:reactor` into
+sampler `uniform` and question `reactor`, and both indexes returned the custom
+question's chunk first for a query about the figures only it had read.
+
+An earlier identical re-run took **32.1 s**: describe skipped 28, embed found
+41 unchanged, aggregate found 8 current -- all three resume fingerprints
+holding at once.
 
 Both backends verified against a schema installed from scratch. A run with
 `--sink file,supabase --index qdrant,supabase` filled every table to exactly
