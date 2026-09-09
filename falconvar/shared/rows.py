@@ -103,15 +103,18 @@ def _transcript(video_id: str, document: dict[str, Any], api: Any) -> None:
 
 
 def _manifest(video_id: str, document: dict[str, Any], api: Any) -> None:
-    db.upsert("manifests", [{
-        "video_id": video_id,
-        "timeline_fingerprint": document["timeline_fingerprint"],
-        "manifest_fingerprint": document["manifest_fingerprint"],
-        "source": document.get("source", {}),
-        "config": document.get("config", {}),
-        "stats": document.get("stats", {}),
-    }], api)
+    """The frames first, the row that claims them second.
 
+    There is no transaction across two REST writes, so an ordering is the only
+    guard there is. Observed: the `manifests` row landed and `chunk_samplers`
+    was refused, leaving a manifest that claimed a run with no sampled frames --
+    a partial state that reads exactly like a valid one, since a video whose
+    samplers kept nothing is a thing that can happen.
+
+    Written the other way round, the same failure leaves rows nobody points at
+    and no manifest claiming them, so `paths`/`db.fetch_manifest` report the
+    truth: this video has not been ingested here yet.
+    """
     # One row per (chunk, sampler RUN) rather than a jsonb blob on the chunk,
     # so "which chunks did yolo pick frames in" is a query. `questions` is an
     # array because one run answers a list of them -- the frames were chosen
@@ -132,6 +135,15 @@ def _manifest(video_id: str, document: dict[str, Any], api: Any) -> None:
                 "frames": block.get("frames", []),
             })
     db.upsert("chunk_samplers", rows, api)
+
+    db.upsert("manifests", [{
+        "video_id": video_id,
+        "timeline_fingerprint": document["timeline_fingerprint"],
+        "manifest_fingerprint": document["manifest_fingerprint"],
+        "source": document.get("source", {}),
+        "config": document.get("config", {}),
+        "stats": document.get("stats", {}),
+    }], api)
 
 
 def _descriptions(video_id: str, document: dict[str, Any], api: Any) -> None:

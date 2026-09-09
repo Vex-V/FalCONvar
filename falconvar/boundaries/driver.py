@@ -126,6 +126,20 @@ def run(video_id: str, policy: str = "uniform",
     if policy not in POLICIES:
         raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
 
+    # `enforce` merges up to `min_s` and *then* splits at `max_s`, so the split
+    # runs last and wins. Asking for a floor above the ceiling therefore
+    # produced chunks below the floor and reported success -- measured, `--min-
+    # chunk 30` against a `max_s` defaulting to `--chunk-duration` 20 gave a
+    # grid whose shortest span was 18.07s. Refused rather than resolved,
+    # because there is no reading of "at least 30, at most 20" to honour.
+    ceiling = chunk_s if max_s is None else max_s
+    if ceiling and min_s > ceiling:
+        raise ValueError(
+            f"--min-chunk {min_s:g} is larger than the ceiling {ceiling:g} "
+            f"({'--max-chunk' if max_s is not None else '--chunk-duration, '
+               'which --max-chunk defaults to'}). Raise the ceiling or lower "
+            "the floor.")
+
     media = load_media(video_id)
     if media.duration_s is None:
         raise ValueError(f"{video_id}: the container reports no duration, so no "
