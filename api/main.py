@@ -305,9 +305,12 @@ class SearchRequest(BaseModel):
     video_id: str
     moments: int = 5
     sampler: Optional[str] = Field(
-        None, description="narrow to one question's answers. Gives up the "
-                          "agreement signal: a chunk can then contribute at "
-                          "most one term, so scores roughly halve")
+        None, description="narrow to one pairing, e.g. `clip:text`")
+    question: Optional[str] = Field(
+        None, description="narrow to one question across every sampler that "
+                          "asked it, e.g. `text`. Either filter gives up the "
+                          "agreement signal: a chunk contributes fewer terms, "
+                          "so scores fall")
     embedder: str = workflow.Options.embedder
     index: str = workflow.Options.index
     model: Optional[str] = None
@@ -325,6 +328,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
         found = service.search(request.query, request.video_id,
                                embedder=request.embedder, model=request.model,
                                moments=request.moments, sampler=request.sampler,
+                               question=request.question,
                                index_name=request.index)
     except FileNotFoundError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None

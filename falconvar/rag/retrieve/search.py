@@ -50,6 +50,11 @@ class Moment:
                 "end_ts": round(self.end_ts, 3),
                 "score": round(self.score, 6),
                 "samplers": self.samplers,
+                # Keyed by the pairing, with the two halves beside it, so a
+                # caller can group by sampler or by question without parsing
+                # an id whose separator is optional.
+                "questions": {h["sampler_id"]: h.get("question", "")
+                              for h in self.hits},
                 "descriptions": {h["sampler_id"]: h["content"] for h in self.hits}}
 
 

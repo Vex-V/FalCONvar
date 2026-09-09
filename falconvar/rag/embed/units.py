@@ -66,6 +66,12 @@ class Unit:
     content: str
     structured: dict[str, Any] = field(default_factory=dict)
     vector: Optional[list[float]] = None
+    #: The two halves of `sampler_id`, carried rather than parsed. Filtering by
+    #: question is the query a person actually makes -- "the text on screen",
+    #: not "what the CLIP sampler said" -- and it is not expressible as a
+    #: suffix match, because a bare id like `clip` means question == strategy.
+    sampler: str = ""
+    question: str = ""
 
     @property
     def text_hash(self) -> str:
@@ -81,12 +87,14 @@ class Unit:
         return {"video_id": self.video_id, "chunk_id": self.chunk_id,
                 "sampler_id": self.sampler_id, "content": self.content,
                 "structured": self.structured, "text_hash": self.text_hash,
+                "sampler": self.sampler, "question": self.question,
                 "vector": self.vector}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Unit":
         return cls(d["video_id"], d["chunk_id"], d["sampler_id"], d["content"],
-                   d.get("structured", {}), d.get("vector"))
+                   d.get("structured", {}), d.get("vector"),
+                   d.get("sampler", ""), d.get("question", ""))
 
 
 def from_descriptions(document: Descriptions) -> list[Unit]:
@@ -99,7 +107,10 @@ def from_descriptions(document: Descriptions) -> list[Unit]:
             if not content:
                 continue
             units.append(Unit(document.video_id, chunk["chunk_id"], sampler_id,
-                              content, structured))
+                              content, structured,
+                              sampler=block.get("sampler")
+                              or sampler_id.split(":")[0],
+                              question=block.get("question") or sampler_id))
     return units
 
 
@@ -120,7 +131,8 @@ def from_transcript(document: Transcript) -> list[Unit]:
         # with timestamps read as numbers.
         structured = {"speakers": (chunk.get("structured") or {}).get("speakers", [])}
         units.append(Unit(document.video_id, chunk["chunk_id"], "transcript",
-                          render(text, structured), structured))
+                          render(text, structured), structured,
+                          sampler="transcript", question="transcript"))
     return units
 
 

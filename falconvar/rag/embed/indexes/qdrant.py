@@ -197,6 +197,9 @@ class QdrantIndex:
                                       vector=payload_vectors, payload={
                 "key": unit.key, "video_id": unit.video_id,
                 "chunk_id": unit.chunk_id, "sampler_id": unit.sampler_id,
+                # Both halves, so a filter can narrow to one pairing, to one
+                # question across samplers, or to one sampler's whole output.
+                "sampler": unit.sampler, "question": unit.question,
                 "text_hash": unit.text_hash, "content": unit.content,
                 "structured": unit.structured,
             }))
@@ -222,7 +225,17 @@ class QdrantIndex:
         return f"qdrant://{self.collection}"
 
     # -- reading ---------------------------------------------------------
-    def _filter(self, sampler: Optional[str]) -> Any:
+    def _filter(self, sampler: Optional[str],
+                question: Optional[str] = None) -> Any:
+        """Narrow by pairing, by question, or by both.
+
+        `sampler` matches `sampler_id` -- the pairing, `clip:text` -- because
+        that is the id every recorded measurement and every stored result uses.
+        `question` matches across samplers, which is the query a person makes:
+        "the text on screen", not "what the CLIP sampler said". It cannot be
+        done as a suffix match on the id, since a bare `clip` means the
+        question *is* the strategy name.
+        """
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         must = [FieldCondition(key="video_id",
@@ -230,6 +243,9 @@ class QdrantIndex:
         if sampler is not None:
             must.append(FieldCondition(key="sampler_id",
                                        match=MatchValue(value=sampler)))
+        if question is not None:
+            must.append(FieldCondition(key="question",
+                                       match=MatchValue(value=question)))
         return Filter(must=must)
 
     def _ranks(self, query: Any, using: str, limit: int,
@@ -249,13 +265,14 @@ class QdrantIndex:
         return {str(p.id): rank for rank, p in enumerate(found, start=1)}
 
     def search(self, vector: Sequence[float], query: str, limit: int = 20,
-               sampler: Optional[str] = None) -> list[dict[str, Any]]:
+               sampler: Optional[str] = None,
+               question: Optional[str] = None) -> list[dict[str, Any]]:
         """Dense and sparse, fused by the server with RRF."""
         from qdrant_client.models import Fusion, FusionQuery, Prefetch
 
         if not self._client.collection_exists(self.collection):
             return []
-        where = self._filter(sampler)
+        where = self._filter(sampler, question)
         dense = list(vector)
         sparse = sparse_of(query)
 
@@ -283,6 +300,8 @@ class QdrantIndex:
             hits.append({
                 "chunk_id": payload.get("chunk_id"),
                 "sampler_id": payload.get("sampler_id"),
+                "sampler": payload.get("sampler", ""),
+                "question": payload.get("question", ""),
                 "content": payload.get("content", ""),
                 "structured": payload.get("structured", {}),
                 "score": float(point.score),

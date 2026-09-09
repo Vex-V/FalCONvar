@@ -31,6 +31,7 @@ def build(video_id: str, units: Sequence[Unit],
                 "text_hash": u.text_hash,
                 "characters": len(u.content),
                 "content": u.content,
+                "sampler": u.sampler, "question": u.question,
                 "structured": u.structured} for u in ordered],
     )
 

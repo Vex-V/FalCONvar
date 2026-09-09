@@ -194,7 +194,13 @@ create index if not exists descriptions_chunk
 create table if not exists falconvar.embeddings (
   video_id    text not null,
   chunk_id    int  not null,
-  sampler_id  text not null,              -- + "transcript" for the audio side
+  sampler_id  text not null,              -- the pairing: "clip:text"
+  -- The two halves as their own columns. Filtering by question is the query a
+  -- person makes -- "the text on screen", not "what the CLIP sampler said" --
+  -- and it is not a suffix match on `sampler_id`, because a bare id like
+  -- `clip` means the question *is* the strategy name.
+  sampler     text not null default '',
+  question    text not null default '',
   embedder    text not null,              -- name:model:dims
   text_hash   text not null,              -- embed only what changed
   content     text not null,
@@ -218,6 +224,18 @@ alter table falconvar.embeddings add column fts tsvector
       structured, 'strict $.**?(@.type() == "string")')::text)
   ) stored;
 
+-- Backfill for rows written before the two columns existed. Derivable, so no
+-- vector is touched and nothing is re-embedded: `clip:text` splits, and a bare
+-- id means the question is the strategy name.
+update falconvar.embeddings
+   set sampler  = split_part(sampler_id, ':', 1),
+       question = case when position(':' in sampler_id) > 0
+                       then split_part(sampler_id, ':', 2)
+                       else sampler_id end
+ where sampler = '' or question = '';
+
+create index if not exists embeddings_question
+  on falconvar.embeddings (video_id, embedder, question);
 create index if not exists embeddings_fts on falconvar.embeddings using gin (fts);
 create index if not exists embeddings_structured
   on falconvar.embeddings using gin (structured jsonb_path_ops);
@@ -266,17 +284,25 @@ create table if not exists falconvar.video_embeddings (
 -- Ranked here rather than in Python because the alternative moves a video's
 -- whole index over the wire per query.
 -- ===========================================================================
+-- The old signature is dropped explicitly: `create or replace` cannot change a
+-- parameter list, so adding `p_question` creates a second overload and leaves
+-- the previous one callable -- which would answer without the new filter and
+-- look like the filter silently doing nothing.
+drop function if exists falconvar.search_embeddings(
+  text, vector, text, text, text, int, int);
+
 create or replace function falconvar.search_embeddings(
   p_embedder     text,
   p_query_vector vector,
   p_query_text   text default null,
   p_video_id     text default null,
   p_sampler      text default null,
+  p_question     text default null,
   p_limit        int  default 20,
   p_rrf_k        int  default 60
 )
 returns table (
-  video_id text, chunk_id int, sampler_id text,
+  video_id text, chunk_id int, sampler_id text, sampler text, question text,
   content text, structured jsonb, start_ts numeric, end_ts numeric,
   vector_rank int, text_rank int, score double precision
 )
@@ -290,6 +316,10 @@ language sql stable as $$
       -- asks one question's answers rather than all of them -- and gives up the
       -- agreement signal, since a chunk can then contribute at most one term.
       and (p_sampler is null or e.sampler_id = p_sampler)
+      -- The question, across whichever samplers asked it. Independent of
+      -- `p_sampler`: both given narrows to one pairing, which is the same as
+      -- naming the pairing outright.
+      and (p_question is null or e.question = p_question)
   ),
   by_vector as (
     select c.video_id, c.chunk_id, c.sampler_id,
@@ -340,7 +370,7 @@ language sql stable as $$
       and v.chunk_id   = t.chunk_id
       and v.sampler_id = t.sampler_id
   )
-  select f.video_id, f.chunk_id, f.sampler_id,
+  select f.video_id, f.chunk_id, f.sampler_id, c.sampler, c.question,
          c.content, c.structured,
          -- The span comes from the grid, which is the one place it is stored.
          k.start_ts, k.end_ts,
@@ -393,7 +423,7 @@ end $$;
 grant select on all tables in schema falconvar to anon, authenticated;
 grant all    on all tables in schema falconvar to service_role;
 grant execute on function falconvar.search_embeddings(
-  text, vector, text, text, text, int, int) to anon, authenticated, service_role;
+  text, vector, text, text, text, text, int, int) to anon, authenticated, service_role;
 
 -- Anything created later gets the same treatment without re-running the grants.
 alter default privileges in schema falconvar

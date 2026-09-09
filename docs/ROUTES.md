@@ -91,6 +91,12 @@ nothing to correct except which name it asks for. Custom questions live in
 description cost a paid call and records the question it was asked, so removing
 the question does not make the answer untrue; it only stops new runs asking it.
 
+**`/search` narrows two ways.** `sampler` is a pairing (`clip:text`);
+`question` is one question across every sampler that asked it (`text`). They
+are independent, and both given is the same as naming the pairing. A unit
+carries both halves as fields, so neither is a prefix match on an id whose
+separator is optional.
+
 **`/search` names its embedder.** It must be the one that built the index: a
 mismatch across widths fails loudly, but two models of the same width return a
 well-formed ranking that means nothing. The embedder key is in the collection

@@ -22,7 +22,8 @@ from .search import Moment, to_moments
 def search(query: str, video_id: str, embedder: str = DEFAULT_EMBEDDER,
            model: Optional[str] = None, moments: int = 5,
            sampler: Optional[str] = None, index_name: str = DEFAULT_INDEX,
-           candidates: int = 20) -> tuple[list[Moment], list[str]]:
+           candidates: int = 20,
+           question: Optional[str] = None) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and anything the caller should be told about the ranking.
 
     The notes are not decoration. A dense-only backend returns hits that look
@@ -39,7 +40,7 @@ def search(query: str, video_id: str, embedder: str = DEFAULT_EMBEDDER,
                      "reference corpus")
 
     vector = built.embed([query])[0]
-    hits = index.search(vector, query, candidates, sampler)
+    hits = index.search(vector, query, candidates, sampler, question)
     if getattr(index, "degraded", None):
         notes.append(index.degraded)
     if not hits:
@@ -47,10 +48,10 @@ def search(query: str, video_id: str, embedder: str = DEFAULT_EMBEDDER,
             f"{video_id}: nothing indexed for {built.key} in {index_name!r}. "
             f"Run embed with this embedder and index first -- a different "
             f"embedder writes a different collection.")
-    if sampler is not None:
-        notes.append("filtering to one sampler gives up the agreement signal: "
-                     "a chunk can then contribute at most one term, so scores "
-                     "roughly halve")
+    if sampler is not None or question is not None:
+        notes.append("filtering gives up the agreement signal: a chunk "
+                     "contributes fewer terms, so scores fall -- to a single "
+                     "1/(k+rank) when only one unit per chunk survives")
     timeline = load_timeline(video_id)
     return to_moments(hits, video_id, timeline.spans, moments), notes
 
@@ -67,7 +68,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--model", default=None)
     ap.add_argument("--moments", type=int, default=5)
     ap.add_argument("--sampler", default=None,
-                    help="narrow to one question's answers")
+                    help="narrow to one pairing, e.g. `clip:text`")
+    ap.add_argument("--question", default=None,
+                    help="narrow to one question across every sampler that "
+                         "asked it, e.g. `text`")
     ap.add_argument("--index", default=DEFAULT_INDEX, dest="index_name",
                     choices=backends.available())
     ap.add_argument("--json", action="store_true")
@@ -76,7 +80,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         found, notes = search(args.query, args.video_id, args.embedder,
                               args.model, args.moments, args.sampler,
-                              args.index_name)
+                              args.index_name, question=args.question)
     except (KeyError, ValueError, FileNotFoundError,
             embedders_mod.EmbedderUnavailable) as exc:
         print(f"error: {exc}")

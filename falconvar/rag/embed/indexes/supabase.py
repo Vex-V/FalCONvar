@@ -47,6 +47,9 @@ class SupabaseIndex:
         rows = [{
             "video_id": u.video_id, "chunk_id": u.chunk_id,
             "sampler_id": u.sampler_id, "embedder": self.embedder_key,
+            # Both halves as columns, so narrowing to one question across
+            # samplers is an equality rather than a suffix match on the id.
+            "sampler": u.sampler, "question": u.question,
             "text_hash": u.text_hash, "content": u.content,
             "structured": u.structured, "embedding": list(u.vector or []),
         } for u in units if u.vector]
@@ -74,7 +77,8 @@ class SupabaseIndex:
 
     # -- reading ---------------------------------------------------------
     def search(self, vector: Sequence[float], query: str, limit: int = 20,
-               sampler: Optional[str] = None) -> list[dict[str, Any]]:
+               sampler: Optional[str] = None,
+               question: Optional[str] = None) -> list[dict[str, Any]]:
         try:
             response = self._api.rpc("search_embeddings", {
                 "p_query_vector": list(vector),
@@ -82,6 +86,7 @@ class SupabaseIndex:
                 "p_video_id": self.video_id,
                 "p_embedder": self.embedder_key,
                 "p_sampler": sampler,
+                "p_question": question,
                 "p_limit": limit,
             }).execute()
         except Exception as exc:                         # noqa: BLE001
@@ -89,10 +94,11 @@ class SupabaseIndex:
             # and a fused one are indistinguishable on sight.
             self.degraded = (f"search_embeddings RPC unavailable ({exc}); "
                              "ranking has no lexical half")
-            return self._dense_only(vector, limit, sampler)
+            return self._dense_only(vector, limit, sampler, question)
 
         return [{
             "chunk_id": r["chunk_id"], "sampler_id": r["sampler_id"],
+            "sampler": r.get("sampler", ""), "question": r.get("question", ""),
             "content": r.get("content", ""),
             "structured": r.get("structured", {}),
             "score": float(r.get("score", 0.0)),
@@ -101,7 +107,8 @@ class SupabaseIndex:
         } for r in (response.data or [])]
 
     def _dense_only(self, vector: Sequence[float], limit: int,
-                    sampler: Optional[str]) -> list[dict[str, Any]]:
+                    sampler: Optional[str],
+                    question: Optional[str] = None) -> list[dict[str, Any]]:
         """Every row for this video, ranked in Python. The fallback.
 
         Correct but not scalable -- it moves the whole index over the wire. It
@@ -111,11 +118,14 @@ class SupabaseIndex:
         import math
 
         query = (self._api.table(TABLE)
-                 .select("chunk_id,sampler_id,content,structured,embedding")
+                 .select("chunk_id,sampler_id,sampler,question,content,"
+                         "structured,embedding")
                  .eq("video_id", self.video_id)
                  .eq("embedder", self.embedder_key))
         if sampler is not None:
             query = query.eq("sampler_id", sampler)
+        if question is not None:
+            query = query.eq("question", question)
         rows = query.execute().data or []
 
         def cosine(a: Sequence[float], b: Sequence[float]) -> float:

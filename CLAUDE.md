@@ -75,7 +75,8 @@ python -m falconvar.cut <id>
 python -m falconvar.describe <id> --describer openai --limit 5   # costs money
 python -m falconvar.video <id> --sampler uniform:safety   # a custom question
 python -m falconvar.rag.embed <id> --index qdrant,supabase
-python -m falconvar.rag.retrieve "..." <id> --sampler transcript
+python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
+python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
 python -m falconvar.aggregate <id> --tier llm
 
 python -m falconvar.shared.schemas --check     # CI: are the schemas stale
@@ -480,8 +481,27 @@ moment an index holds more than one video.
 
 **One vector space per embedder, never per sampler.** A space is defined by the
 model, not by which prompt produced the text. The sampler is payload and
-querying one is a *filter* — which gives up the agreement signal: a chunk can
-then contribute at most one term, so scores roughly halve.
+querying one is a *filter* — which gives up the agreement signal: a chunk
+contributes fewer terms, so scores fall.
+
+**A unit carries both halves of its id as fields, not just the id.** `sampler`
+and `question` are separate columns in `embeddings` and separate keys in the
+Qdrant payload, so three filters are each one equality: this **pairing**
+(`sampler_id = clip:text`), this **question** wherever asked
+(`question = text`), and this sampler's whole output (`sampler = clip`).
+
+Filtering by question is the query a person actually makes — "the text on
+screen", not "what the CLIP sampler said" — and it is **not** a suffix match on
+the id, because a bare id like `clip` means the question *is* the strategy
+name. Measured with `clip:[text,scene],uniform:text`: `question=text` returns a
+chunk carrying `clip:text` **and** `uniform:text` at 0.1222 where
+`sampler=clip:text` returns one unit at 0.0909, and unfiltered returns all four
+units at 0.1294. The three answers are different, which is the point.
+
+Neither column costs a re-embedding: `text_hash` is over the content, so
+`install.sql` backfills them from `sampler_id` with an `update`. Qdrant is the
+exception -- payload is written only on upsert, so points predating the fields
+need a forced re-index rather than a backfill.
 
 **What gets embedded must not depend on which copy it was read from.** `jsonb`
 preserves array order but not object key order, so a description read back from

@@ -144,6 +144,10 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
                 answer = describer.describe(images, context)
                 described += 1
                 out["samplers"][sampler_id] = {
+                    # Both halves, written out rather than left to be parsed
+                    # back off the id: `clip` means question == strategy, so a
+                    # split on ":" is not a reliable way to recover either.
+                    "sampler": name,
                     "question": question,
                     "frame_count": len(images),
                     "frame_indexes": [f.index for f in images],
