@@ -36,6 +36,10 @@
 # ---------------------------------------------------------------------------
 /data/
 
+# `recovery.recreate --out` defaults here. Rebuilt frames, byte-identical to
+# the store they verify against, and regenerated on demand.
+/rebuilt/
+
 # ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------

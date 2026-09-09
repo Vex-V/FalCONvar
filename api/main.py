@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -94,13 +94,38 @@ async def upload(
     sink: str = Form(workflow.Options.sink, description="where documents go"),
     index: str = Form(workflow.Options.index, description="where vectors go"),
     video_id: Optional[str] = Form(None),
+    run: bool = Form(True, description="false: register the file and stop, so "
+                                       "the caller can drive the components "
+                                       "itself with per-stage settings"),
+    response: Response = None,          # noqa: B008 -- set the code per branch
 ) -> dict[str, Any]:
-    """Accept a file and queue the whole pipeline. 202 with a job id."""
+    """Accept a file. Queue the whole pipeline (202), or just register it (201).
+
+    `run=false` exists because the workflow deliberately carries no per-stage
+    tuning -- a scene grid with a 30-second floor, or a uniform stride of 5,
+    is set on the component that owns it. Without this a caller wanting those
+    had to run the pipeline once on defaults first, paying for a describe it
+    was about to redo. It runs `media` and nothing else, because that is what
+    makes the video addressable by `POST /videos/{id}/run/{component}` -- and
+    it is a container probe, so it is answered rather than queued.
+    """
     vid = safe_id(video_id or file.filename or "video")
     service.UPLOADS.mkdir(parents=True, exist_ok=True)
     target = service.UPLOADS / f"{vid}{Path(file.filename or '').suffix or '.mp4'}"
     with target.open("wb") as out:
         shutil.copyfileobj(file.file, out)
+
+    if not run:
+        try:
+            produced = service.register(target, vid, sink)
+        except Exception as exc:                          # noqa: BLE001
+            target.unlink(missing_ok=True)
+            raise HTTPException(422, {"error": str(exc)}) from None
+        if response is not None:
+            response.status_code = 201
+        return {"video_id": produced.video_id, "media": produced.as_dict(),
+                "next": f"/videos/{produced.video_id}/run/{{component}}",
+                "components": [c for c in service.COMPONENTS]}
 
     options = workflow.Options(
         source=target, video_id=vid, policy=policy, sampler=sampler,

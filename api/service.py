@@ -14,8 +14,9 @@ option sorts first.
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from falconvar import aggregate, audio, boundaries, cut, describe, media, video
 from falconvar import workflow
@@ -29,7 +30,15 @@ from falconvar.video import samplers as samplers_mod
 UPLOADS = paths.UPLOADS
 
 
+@functools.wraps(boundaries.evidence)
 def _boundaries_evidence(video_id: str, **kwargs) -> Produced:
+    """`evidence` returns None when a policy needs none; a route needs a
+    `Produced` either way, so the skip is reported rather than absent.
+
+    `functools.wraps` carries the wrapped signature through, so `parameters()`
+    publishes what `evidence` actually takes instead of the `**kwargs` this
+    wrapper is written with.
+    """
     produced = boundaries.evidence(video_id, **kwargs)
     if produced is None:
         return Produced(video_id=video_id, component="boundaries.evidence",
@@ -51,6 +60,48 @@ COMPONENTS: dict[str, Callable[..., Produced]] = {
     "embed": embed.run,
     "aggregate": aggregate.run,
 }
+
+
+def register(source: Path, video_id: str,
+             sink: str | Sequence[str] = "file") -> Produced:
+    """Read what streams the file carries, and nothing else.
+
+    The one component a caller cannot reach through `run/{component}`, because
+    until it has run there is no video id to address. Everything after it is
+    the caller's to sequence.
+    """
+    return media.run(source, video_id, sink)
+
+
+def parameters() -> dict[str, Any]:
+    """Every component's tunable parameters, read off its signature.
+
+    Introspected rather than listed, for the reason `defaults` is read off
+    `workflow.Options`: a restated list is a second copy to keep in step, and
+    when it drifts a form offers a parameter the component does not take or
+    hides one it does.
+
+    `video_id` is omitted -- it is the address, not a setting. Types are the
+    annotation as written, which is what a form needs to pick a widget.
+    """
+    import inspect
+
+    out: dict[str, Any] = {}
+    for name, fn in COMPONENTS.items():
+        fields = []
+        for arg, param in inspect.signature(fn).parameters.items():
+            if arg in ("video_id", "self") or arg.startswith("*"):
+                continue
+            fields.append({
+                "name": arg,
+                "type": (param.annotation if isinstance(param.annotation, str)
+                         else getattr(param.annotation, "__name__", "any")),
+                "default": (None if param.default is inspect.Parameter.empty
+                            else param.default),
+                "required": param.default is inspect.Parameter.empty,
+            })
+        out[name] = fields
+    return out
 
 
 def run_component(name: str, video_id: str, **params) -> Produced:
@@ -187,6 +238,9 @@ def available() -> dict[str, Any]:
                         for name in aggregate.available()},
         "tiers": list(aggregate.TIERS),
         "artifacts": dict(ARTIFACTS),
+        # What each component may be tuned with, for a form that configures a
+        # run stage by stage rather than accepting the workflow's defaults.
+        "parameters": parameters(),
         "defaults": {
             "policy": workflow.Options.policy,
             "sampler": workflow.Options.sampler,
@@ -258,6 +312,7 @@ def prompt_remove(name: str) -> None:
 
 
 __all__ = ["ARTIFACTS", "COMPONENTS", "UPLOADS", "artifact", "available",
+           "parameters", "register",
            "exports", "frame_path", "prompt_add", "prompt_get", "prompt_list",
            "prompt_remove", "run_component", "run_workflow", "search",
            "videos"]

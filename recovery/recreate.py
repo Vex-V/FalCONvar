@@ -134,9 +134,23 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify(rebuilt: Path, original: Path) -> dict[str, Any]:
-    """Byte-compare a rebuilt store against the original. The oracle."""
+def verify(rebuilt: Path, original: Path,
+           names: Optional[set[str]] = None) -> dict[str, Any]:
+    """Byte-compare a rebuilt store against the original. The oracle.
+
+    ``names`` is what this manifest actually names. Without it the comparison
+    is over whatever the output directory happens to contain -- and an output
+    directory accumulates across runs for exactly the reason a frame store
+    does, which the orphan rule below already tolerates in the other direction.
+    Measured: `rebuilt/` held 206 frames from an earlier manifest, a later run
+    wrote 76 into it, and the oracle reported FAIL with 130 "absent from the
+    store" when every named frame was present and identical. A false FAIL is
+    the worst answer this can give, because the whole point of it is that a
+    real one means the change is wrong.
+    """
     mine = {p.name: p for p in rebuilt.glob("*.jpg")}
+    if names is not None:
+        mine = {n: path for n, path in mine.items() if n in names}
     theirs = {p.name: p for p in original.glob("*.jpg")}
     shared = sorted(set(mine) & set(theirs))
     identical = [n for n in shared if digest(mine[n]) == digest(theirs[n])]
@@ -188,7 +202,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  out          {result['out']}")
 
     if args.verify is not None:
-        check = verify(args.out, args.verify)
+        named = {f"{index:07d}.jpg"
+                 for index in wanted_frames(json.loads(
+                     args.manifest.read_text(encoding="utf-8")))}
+        check = verify(args.out, args.verify, named)
         print()
         if check["differing"] or check["missing_from_original"]:
             print(f"  FAIL: {len(check['identical'])}/{check['compared']} "
