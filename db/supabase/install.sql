@@ -211,6 +211,17 @@ create table if not exists falconvar.embeddings (
   primary key (video_id, chunk_id, sampler_id, embedder)
 );
 
+-- ADDED EXPLICITLY, because `create table if not exists` above is a no-op on a
+-- database that already has the table -- so a column declared only inside it is
+-- never added, and the first statement to reference it fails. Same trap as
+-- `fts` below and `chunk_samplers.questions` above; this file is re-run against
+-- live databases, so every column added after the first deployment needs its
+-- own `alter`.
+alter table falconvar.embeddings
+  add column if not exists sampler  text not null default '';
+alter table falconvar.embeddings
+  add column if not exists question text not null default '';
+
 -- Rebuilt unconditionally rather than added if absent. `add column if not
 -- exists` is a no-op when the column exists, so an `fts` built by an earlier
 -- version of this file -- over `content` alone, before the structured values

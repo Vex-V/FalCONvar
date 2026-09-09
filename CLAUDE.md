@@ -827,12 +827,25 @@ annotation is `.speaker_diarization`; `.exclusive_speaker_diarization` has
 overlaps resolved, which is what this uses — a word cannot belong to two
 speakers.
 
-**`add column if not exists fts` cannot repair a stale generated column.** It
-is a no-op when the column exists, so an `fts` built by an earlier version of
-the file survived a re-run untouched and the lexical half quietly stopped
-indexing the terms it is best at. Nothing reported it. The statement is `drop
-column if exists` followed by an unconditional add; the column is generated, so
-nothing is lost.
+**`create table if not exists` never adds a column.** `install.sql` is re-run
+against live databases, so a column declared only inside the `create` is absent
+on every deployment that already had the table -- and the first statement to
+reference it fails, or worse, a writer sends a column PostgREST does not know.
+Every column added after first deployment needs its own `alter table ... add
+column if not exists`. This has bitten three times: `structured`, then
+`chunk_samplers.questions`, then `embeddings.sampler`/`question`, where the
+backfill `update` was the statement that failed.
+
+An audit is cheap and worth running after editing the file: parse the `create
+table` bodies, diff them against PostgREST's deployed column list, and check
+that anything missing is covered by an explicit `alter`.
+
+**`add column if not exists fts` cannot repair a stale generated column.** The
+converse trap. It is a no-op when the column *exists*, so an `fts` built by an
+earlier version of the file survived a re-run untouched and the lexical half
+quietly stopped indexing the terms it is best at. Nothing reported it. The
+statement is `drop column if exists` followed by an unconditional add; the
+column is generated, so nothing is lost.
 
 **PostgREST's cached schema is the fastest way to see what is really
 deployed.** `GET /rest/v1/` with `Accept: application/openapi+json` lists every
