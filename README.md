@@ -2,26 +2,34 @@
 
 Video RAG ingestion. A video goes in; a searchable index of moments comes out.
 
-Both the picture and the soundtrack are read onto **one chunk grid**, so a
-search returns a span you can play rather than two answers that disagree about
-where it starts.
+Both the picture and the soundtrack are read onto **one chunk grid**. Everything
+downstream is keyed by `(video_id, chunk_id)`.
+
+## Install
 
 ```bash
-pip install -e .                                # then python -m from anywhere
-python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
-python -m falconvar.rag.retrieve "the moment the reactor exploded" video
-python -m falconvar.rag.retrieve "..." video --question text   # across samplers
-python -m uvicorn api.main:app --port 8000      # /docs for the schema
+pip install -r requirements.txt
+pip install -e .              # then `python -m falconvar.…` from any directory
+cp .env.example .env          # OpenAI key; Supabase and HF tokens if used
 ```
 
-The HTTP surface drives the same thing: upload and run the whole pipeline, or
-drive one component at a time with its own settings, then read back the grid,
-the transcript, the frames each sampler kept, every description, the
-aggregates, the raw rows, and hybrid search. See `docs/ROUTES.md`.
+For the Postgres backend, run `db/supabase/install.sql` in the SQL editor and
+add `falconvar` to **Settings → API → Exposed schemas**. The file is idempotent
+and is also how a schema change is applied — re-run the whole thing.
+`db/supabase/reset.sql` drops everything first, and is the only destructive one.
 
-## How it works
+## Quickstart
 
-Nine components, each reading files and writing files. Nothing imports another.
+```bash
+python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
+python -m falconvar.rag.retrieve "the moment the reactor exploded" video
+python -m uvicorn api.main:app --port 8000     # /docs for the schema; / redirects there
+```
+
+## The pipeline
+
+Nine components. Each reads files and writes files, and none imports another.
+Every one has the signature `run(video_id, ...) -> Produced`.
 
 | # | component | reads | writes |
 |---|---|---|---|
@@ -35,48 +43,101 @@ Nine components, each reading files and writing files. Nothing imports another.
 | 8 | `embed` | `descriptions.json` + `transcript.json` | vectors, `embedded.json` |
 | 9 | `aggregate` | everything above | `aggregates/*.json` |
 
-**The grid is a component, not a side effect.** Which modality decides it is a
-policy, and the run order falls out of what that policy depends on rather than
-from a rule:
+Everything a run writes lands in `data/out/<video-id>/`:
 
-| policy | boundaries come from | so what runs first |
+```
+media.json           the two streams and their addressing
+transcript.raw.json  words, segments and speaker turns — no chunk ids
+cuts.json            boundary evidence, and the score series behind it
+timeline.json        THE GRID: every chunk's span
+manifest.json        which frames each sampler kept
+store/               those frames as JPEG, named by read index
+transcript.json      what was said, cut to the grid
+descriptions.json    one model answer per (chunk, sampler:question)
+embedded.json        the text that went into the index, without the vectors
+aggregates/*.json    one file per aggregator
+```
+
+Vectors go to `data/out/_qdrant/` or to Postgres, not into the video's
+directory.
+
+### The grid
+
+`--policy` decides where boundaries come from, which decides what has to run
+first:
+
+| policy | boundaries come from | runs first |
 |---|---|---|
 | `uniform` | arithmetic over the duration | **nothing** |
 | `scene` | frame-to-frame content change | a scene pass over the picture |
 | `vad` | silences between speech | the audio pass |
 | `speaker` | where the voice changes | the audio pass |
 
-Everything downstream is keyed by `(video_id, chunk_id)`, and the grid is
-stored exactly once.
+Three guards apply under every policy: `--min-chunk` merges spans below the
+floor, `--max-chunk` splits those above the ceiling (defaulting to
+`--chunk-duration`), and a final chunk shorter than a quarter of the chunk
+length is merged into the one before it. A floor above the ceiling is refused.
 
-## Which frames, and what to ask
+### One component at a time
 
-**Samplers** decide which frames are worth describing — `clip` when the scene
-changes · `yolo` when the people change · `objects` for an open vocabulary ·
-`text` when the writing changes · `uniform` on a stride.
-
-**Questions** are independent of them, and any pair is legal as `name:prompt`:
+Per-stage tuning lives on these, not on `workflow`.
 
 ```bash
---sampler uniform:text        # read the screen on a stride, no OCR at ingest
---sampler yolo:overview       # frames where people changed, asked for prose
---sampler "clip:[text,scene]" # ONE pass over the video, two questions about it
---sampler clip:text+scene     # the same, for shells that glob brackets
+python -m falconvar.media media/x.mp4
+python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
+python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.boundaries <id> --calibrate            # what each threshold costs
+python -m falconvar.boundaries <id> --retune 45            # re-threshold, runs no model
+python -m falconvar.boundaries <id> --policy scene --min-chunk 30 --max-chunk 60
+python -m falconvar.video <id> --sampler "clip:[text,scene]" --per-second 1
+python -m falconvar.video <id> --sampler uniform:text --every-frames 5
+python -m falconvar.cut <id>
+python -m falconvar.describe <id> --describer openai --limit 5     # costs money
+python -m falconvar.rag.embed <id> --index qdrant,supabase
+python -m falconvar.aggregate <id> --tier llm
 ```
 
-Selecting frames is the expensive half, so a sampler runs once however many
-questions it carries — and `clip:text,clip:scene` merges into that same single
-pass rather than doing the work twice.
+`--sink file,supabase` writes the document to both, on every stage that writes
+one; `embed` takes `--index qdrant,supabase` instead. `--calibrate` and
+`--retune` read the cached score series and run no model.
 
-Unpaired, a sampler is asked the question named after it. Every pairing is
-independent: two questions that answer the same field both answer it, and both
-answers are kept — overlap is your choice, and the answers differ.
+## Samplers and questions
 
-**Questions are data, and you can add your own.** A question is an instruction
-plus a *shape*, and the shape carries the response schema — the built-ins are
-written in the same terms, so `yolo` is just the `people` shape. Built-ins ship
-in `falconvar/describe/prompts.json`; anything you add lands in
-`data/prompts.json` and cannot shadow one.
+**Samplers** decide which frames get described:
+
+| sampler | keeps a frame when |
+|---|---|
+| `clip` | the scene changes |
+| `yolo` | the people change |
+| `objects` | an open-vocabulary detection changes (`--vocabulary`) |
+| `text` | the writing on screen changes |
+| `uniform` | every Nth decimated frame (`--every-frames`) |
+
+**Questions** decide what is asked about those frames, and the two are
+independent — pair any sampler with any question as `name:question`:
+
+```bash
+--sampler uniform:text          # read the screen on a stride
+--sampler yolo:overview         # frames where people changed, asked for prose
+--sampler "clip:[text,scene]"   # ONE pass over the video, two questions about it
+--sampler clip:text+scene       # the same, for shells that glob brackets
+```
+
+A sampler runs once however many questions it carries, and
+`clip:text,clip:scene` merges into that same single pass. Unpaired, a sampler is
+asked the question named after it. Two questions that answer the same field both
+answer it, and both answers are stored and searched separately.
+
+Rate limits are applied before a sampler runs: `--min-interval` in seconds and
+`--max-per-chunk`. Every chunk keeps at least one frame.
+
+### Adding a question
+
+A question is an instruction plus a **shape**, and the shape carries the
+response schema. The shipped shapes are `scene`, `people`, `objects`, `text` and
+`prose`; `yolo` is the `people` shape, `overview` is `prose`. Built-in questions
+live in `falconvar/describe/prompts.json`; anything you add lands in
+`data/prompts.json` and may not shadow a built-in.
 
 ```bash
 curl -X POST localhost:8000/prompts -H 'Content-Type: application/json' -d '{
@@ -86,51 +147,86 @@ curl -X POST localhost:8000/prompts -H 'Content-Type: application/json' -d '{
 python -m falconvar.workflow site.mp4 --sampler clip,uniform:safety
 ```
 
-Editing one question re-describes only the pairs that used it; adding one costs
-nothing.
+An instruction may use `{n}`, `{span}` and `{vocabulary}`; anything else is
+refused at submission. Editing a question re-describes only the pairs that used
+it, and adding one re-describes nothing.
 
 ## Retrieval
 
-Both modalities land in one index: a description and a transcript chunk are
-both text with a span, so `--sampler transcript` narrows a search to what was
-said exactly as `--sampler yolo` narrows it to who was seen.
+Descriptions and transcript chunks both become units in one index, keyed
+`(video_id, chunk_id, sampler_id)`. A transcript chunk is
+`sampler_id = transcript`, so it filters exactly like any visual pairing.
 
-Ranking is RRF twice — a dense and a lexical ranking fused per unit, then the
-units of a chunk fused into a moment. Two backends, both hybrid: **`qdrant`**
-(embedded or served) and **`supabase`** (pgvector + `ts_rank_cd`).
+```bash
+python -m falconvar.rag.retrieve "..." <id>
+python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
+python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
+```
+
+Ranking is RRF twice: a dense and a lexical ranking fused per unit, then the
+units of a chunk fused into a moment as `1/(k+best) + 0.5/(k+second)` at k=10.
+The number a search returns is a rank fusion, not a similarity.
+
+Two backends, both hybrid: **`qdrant`** (embedded at `data/out/_qdrant/`, or
+served with a url) and **`supabase`** (pgvector + `ts_rank_cd`).
 
 ## Aggregates
 
-What retrieval cannot answer, because embeddings cannot count. Three tiers, run
-cheapest first: `free` is arithmetic (`stats`, `speakers`, `coverage`), `local`
-adds GPU models (`ner`, `sentiment`), `llm` adds paid calls (`summary`,
-`chapters`, `events`).
+Video-level answers, one file per aggregator. A tier is a ceiling and they run
+cheapest first, so `--tier llm` runs all three tiers.
+
+| tier | aggregators | |
+|---|---|---|
+| `free` | `stats`, `speakers`, `coverage` | arithmetic |
+| `local` | `ner`, `sentiment` | GPU models |
+| `llm` | `summary`, `chapters`, `events` | paid calls |
+
+`speakers` needs a transcript and `chapters` needs `summary`; an aggregator
+whose input is missing is skipped with the reason rather than failing.
 
 ## The API
 
-20 routes. Two ways to run a video, and the choice is about how much you want
-to tune:
+20 routes. `python -m uvicorn api.main:app --port 8000`, then `/docs`.
+
+Two ways to run a video, and the choice is about how much you want to tune:
 
 ```bash
-# the whole pipeline, on workflow defaults                            202
-curl -X POST localhost:8000/videos -F file=@video.mp4      -F policy=vad -F sampler=clip,uniform:text -F tier=llm
+# the whole pipeline, on workflow defaults                             202
+curl -X POST localhost:8000/videos -F file=@video.mp4 \
+     -F policy=vad -F sampler=clip,uniform:text -F tier=llm
 
 # or register it and drive the stages yourself, with per-stage settings
-curl -X POST localhost:8000/videos -F file=@video.mp4 -F run=false      # 201
-curl -X POST localhost:8000/videos/video/run/boundaries      -H 'Content-Type: application/json'      -d '{"params": {"policy": "scene", "min_s": 30, "max_s": 60}}'
-curl -X POST localhost:8000/videos/video/run/video      -d '{"params": {"sampler": "uniform:overview,clip:[mood,motion]",
+curl -X POST localhost:8000/videos -F file=@video.mp4 -F run=false   # 201
+curl -X POST localhost:8000/videos/video/run/boundaries \
+     -H 'Content-Type: application/json' \
+     -d '{"params": {"policy": "scene", "min_s": 30, "max_s": 60}}'
+curl -X POST localhost:8000/videos/video/run/video \
+     -H 'Content-Type: application/json' \
+     -d '{"params": {"sampler": "uniform:overview,clip:[mood,motion]",
                      "per_second": 1, "every_n": 5}}'
 ```
 
-`GET /capabilities` publishes every registry, the defaults, **and each
-component's parameters with their types and defaults** — so a UI is generated
-from it rather than kept in step with it. `POST /search` narrows by pairing
-(`clip:text`) or by question (`text`, across every sampler that asked it).
-`docs/ROUTES.md` has the reasoning; `/docs` is the authority on shapes.
+`params` is passed to the component as keyword arguments, so every component
+setting is reachable over HTTP. Order on the second path is yours:
+`audio · boundaries.evidence · boundaries · video · cut · describe · embed ·
+aggregate`.
 
-`GET /db/tables` and `POST /db/query` read the rows a run wrote -- filtered,
-ordered and paged, with the size of the whole result beside the page -- under
-the publishable key, so they see what a reader with the read grants sees.
+Anything that decodes, transcribes or pays a model is queued one job at a time
+and answers **202** with a job id; poll `GET /jobs/{id}` for `stage` (running),
+`history` (finished) and `detail`. Job records die with the process; artifacts
+do not, and `GET /videos` reads them from disk.
+
+- `GET /capabilities` — every registry, the defaults, and each component's
+  parameters with their types and defaults
+- `GET /videos/{id}` · `/artifacts/{name}` · `/aggregates/{name}` ·
+  `/frames/{index}` — only the artifacts that exist are listed
+- `POST /search` — narrows by pairing (`clip:text`) or by question (`text`,
+  across every sampler that asked it)
+- `GET|POST|DELETE /prompts` — built-ins refuse edits with 409
+- `GET /db/tables` · `POST /db/query` — the rows a run wrote, filtered, ordered
+  and paged under the publishable key, with the size of the whole result
+
+`docs/ROUTES.md` is the full surface; `/docs` is the authority on shapes.
 
 ## Layout
 
@@ -158,32 +254,18 @@ docs/ROUTES.md     the HTTP surface
 
 102 Python files, ~11.0k lines.
 
-## Setup
-
-```bash
-pip install -r requirements.txt
-pip install -e .
-cp .env.example .env        # OpenAI key; Supabase and HF tokens if used
-```
-
-Run `db/supabase/install.sql` in the SQL editor and add `falconvar` to
-**Settings → API → Exposed schemas** if you want the Postgres backend. The file
-is idempotent and is also how a schema change is applied — re-run the whole
-thing. `db/supabase/reset.sql` drops everything first, and is the only
-destructive one.
-
 ## State
 
 Runs end to end on real models — Whisper, pyannote, CLIP, YOLO, GPT, GLiNER —
 writing documents to files and Postgres and vectors to Qdrant and pgvector.
 
 Last verified through the API from wiped local, Qdrant and Postgres state,
-driving every stage with its own settings: a `scene` grid with a 30 s floor
-gave 4 chunks of 39.8–55.6 s; `uniform:overview` at a 5 s stride and
+driving every stage with its own settings: a `scene` grid with a 30 s floor gave
+4 chunks of 39.8–55.6 s; `uniform:overview` at a 5 s stride and
 `clip:[mood,motion]` (two custom prompts added over HTTP) gave 12 descriptions
 and 16 searchable units; every Postgres table exact under both keys;
 `recovery.recreate` 76/76 byte-identical.
 
 Not built: a test suite, an import checker, an eval harness, video-level
-embedding, and sampler threshold calibration. See `CLAUDE.md` for what is
-measured and what is not.
+embedding, and sampler threshold calibration. `CLAUDE.md` is the reasoning
+behind every decision here, and records what is measured and what is not.
