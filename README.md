@@ -56,9 +56,9 @@ changes · `yolo` when the people change · `objects` for an open vocabulary ·
 --sampler yolo:overview     # frames where people changed, asked for prose
 ```
 
-Unpaired, a sampler is asked the question named after it. Which keys each
-answer may fill is narrowed by the other *questions* on the same chunk, so
-exactly one call answers each key.
+Unpaired, a sampler is asked the question named after it. Every pairing is
+independent: two questions that answer the same field both answer it, and both
+answers are kept — overlap is your choice, and the answers differ.
 
 **Questions are data, and you can add your own.** A question is an instruction
 plus a *shape*, and the shape carries the response schema — the built-ins are

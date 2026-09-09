@@ -205,14 +205,40 @@ Keying by the strategy alone loses the question, which is the more useful half
 when reading a search result. The id is what the manifest, `descriptions.json`,
 `embeddings.sampler_id` and `--sampler` all inherit.
 
-**Ownership is over the questions on a chunk, never the sampler ids.** `OWNER`
-is keyed by question, and the two are only equal while no sampler is paired
-with someone else's question. With `yolo:overview` present, passing ids would
-have `clip` surrender `people` to a call whose schema owns no keys at all, and
-the field would leave the document with everything still well-formed. Verified
-end to end: `clip,yolo:overview,uniform:text` on one chunk — `clip` keeps
-`people` and gives up `visible_text`, nothing is answered twice, the merge is a
-plain union of all seven keys.
+**Every (sampler, question) pairing is independent.** `schema_for` is a
+function of the question alone: two questions that share a field both answer
+it, and both answers are kept under their own sampler id. Overlap is a choice
+the user made at the `--sampler` line, and the answers are genuinely different
+— measured on one chunk, `clip` gave `visible_text` as
+`['RadioFreeEurope', 'RadioLiberty']`, `uniform:text` gave six objects each
+with a `context` and an explicit `[unreadable]`, and a custom `reactor`
+question gave five plain strings including `RADIATION` and `115,000`. All three
+are stored, embedded and separately searchable.
+
+**Sibling narrowing was tried and removed.** A call's schema used to depend on
+which other questions were asked about the same chunk: the fallback shape gave
+up any key a specialist owned. It produced three silent faults — sampler ids
+passed where questions were meant; `yolo:overview` taking a key from a call
+whose schema answered none; and two fallback questions overlapping on all seven
+keys with no rule for which won, so a chunk rollup kept whichever sorted first.
+
+Each fault left a well-formed document. That is the signature of a seam in the
+wrong place rather than three unrelated mistakes, and the payoff did not
+justify it: narrowing only ever fired for **one of four** pairings (fallback +
+specialist, for three specific keys) and saved 2.3% of output on the case
+measured, because the summary is half the output and was never narrowed.
+Extending it instead would have meant answering "when two questions both want
+`people`, who wins" — and there is no non-arbitrary answer, because the user
+asked both.
+
+Gone with it: `OWNER`, `owned_by`, `questions_on`, the `siblings` argument and
+the `chunk_questions` context key, across five files.
+
+**There is no chunk-level rollup.** `descriptions.chunks[].structured` used to
+flatten every sampler's answer into one record, which is what forced a winner
+for a shared key. Nothing read it — units, both index writers, `rows.py` and
+every aggregator work from the per-sampler blocks — so it was deleted rather
+than given a tie-break rule.
 
 **An unknown question is rejected, not fallen through.** `question_for` falls
 back to the scene question by design, which makes `yolo:overvew` a run that
@@ -236,21 +262,16 @@ thing they want the vocabulary for.
 `prompts.json` holds both; `prompts.py` is logic over it. The built-ins are
 expressed in the same terms a custom question uses -- `yolo` is not a special
 case in the code, it is the `people` shape -- so there is one mechanism rather
-than a shipped set and an extension point beside it. A shape either *is* the
-fallback (its fields are offered only where no sibling owns them) or is exact
-(its fields, always, and it owns those keys). `prose` is the degenerate exact
-shape: no fields at all, which is what `overview` answers in.
-
-**Ownership is derived from a shape's fields, never declared beside them.** A
-declared `owns` list is a second list to keep in step with the first, and the
-failure is silent: a key declared but absent is given up by the fallback and
-then answered by nobody.
+than a shipped set and an extension point beside it. A shape is a set of
+fields; `prose` is the degenerate one with none, which is what `overview`
+answers in. The shape marked `fallback` is what an unrecognised question
+resolves to, and that is its only privilege.
 
 **A custom question picks a shape; it may not define one.** Adding a question
 is writing prose, and ownership of a key like `people` stays a property of the
 shipped shapes rather than something an HTTP request can rearrange. Verified
 against the previous hard-coded module over **448 (question, siblings)
-combinations** -- every schema, every instruction, the owner map and `merge`
+combinations** at the time it was extracted -- every schema, every instruction, the owner map and `merge`
 identical.
 
 **Built-ins ship in the package; custom questions live in `data/prompts.json`.**
@@ -259,23 +280,6 @@ dropped at load time as well, because the file is hand-editable and a shadowed
 built-in is the one failure that would change a shipped question's meaning
 silently. The alternative is a deployment whose `yolo` means something other
 than every other deployment's, with nothing in the repo saying so.
-
-**Two questions on the fallback shape both answer every key, and the chunk
-rollup keeps only one.** `merge` skips a key already present unless the writer
-owns it, so with `clip,uniform:reactor` -- both `scene` shape, neither owning
-anything -- the alphabetically-first sampler wins every differing key.
-Measured: `reactor` read `RADIATION`, `8 TONS`, `EVACUATIONS`, `115,000` off
-the screen and `clip` found only the station watermark, and the rollup kept
-`clip`'s one entry.
-
-Nothing downstream reads that rollup -- `units.from_descriptions`, both index
-writers, `rows.py` and every aggregator work from the per-sampler blocks, so
-both answers are embedded, indexed and stored. The loss is confined to
-`descriptions.chunks[].structured`, a convenience field. It predates custom
-prompts (`clip,uniform` had it too) but they make it the common case, because a
-custom question defaults to the fallback shape. The honest fix is for the
-rollup to keep every answer per question rather than pick one; it is not worth
-doing until something reads it.
 
 **A single shared schema was tried and is wrong.** Every field being present
 means the model may fill any of them, and it does — asked about people it
@@ -290,9 +294,8 @@ afterwards.
 
 **`overview` is a question with no fields at all**, and only a question. Summary
 only, 4–5 sentences, overriding the ">= 150 words" instruction every other
-prompt carries. It owns no keys, so it takes none from the scene question and
-costs a `clip` running beside it nothing. Measured: 84 and 86 words, 4
-sentences, zero structured keys.
+prompt carries. Its shape has no fields at all, so it costs only a summary.
+Measured: 84 and 86 words, 4 sentences, zero structured keys.
 
 **Structured answers are ~3x longer than prose.** At `max_output_tokens=700`
 the people schema truncated mid-string and came back as unparseable JSON. The

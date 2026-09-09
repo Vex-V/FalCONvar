@@ -15,15 +15,11 @@ schema lives, so adding a question is writing prose rather than JSON Schema,
 and the shapes the built-ins use are the same ones a custom question picks --
 `yolo` is not a special case in the code, it is the `people` shape.
 
-A shape either *is* the fallback or owns its fields outright:
-
-    fallback   the general question. Its fields are offered only where no
-               sibling on the chunk owns them.
-    exact      its fields, always, and it owns those keys against the
-               fallback. `prose` is the degenerate case: no fields at all.
-
-Ownership is derived from a shape's fields rather than declared beside them,
-because a declaration is a second list to keep in step with the first.
+A shape is just a set of fields. The one marked `fallback` is what an
+unrecognised question resolves to; it has no other privilege. Two questions
+whose shapes share a field both answer it, and both answers are kept, because
+a (sampler, question) pairing is independent of every other pairing on the
+chunk.
 """
 
 from __future__ import annotations
@@ -165,24 +161,19 @@ def instruction_of(name: str) -> str:
     return (fallback or {}).get("instruction", "")
 
 
-def owns(name: str) -> list[str]:
-    """The keys this question claims outright. Derived from its shape."""
-    shape = shape_of(name)
-    return [] if shape.get("fallback") else list(shape.get("fields") or {})
+def fields_of(name: str) -> list[str]:
+    """The structured keys this question answers, from its shape.
 
-
-def owner_map() -> dict[str, str]:
-    """key -> the question that owns it.
-
-    Sorted so a collision resolves the same way every run rather than by dict
-    order. Two questions owning one key is legal but not useful; `check()`
-    reports it, and the fallback gives the key up to whichever wins here.
+    A property of the question alone. It used to depend on which other
+    questions were asked about the same chunk -- the fallback shape gave up any
+    key a specialist owned -- and that coupling was the source of three silent
+    faults: sampler ids passed where questions were meant, `yolo:overview`
+    taking a key from a call that answered none, and two fallback questions
+    overlapping on everything with no rule for which won. It bought a few
+    percent of output tokens in one of four possible pairings. Pairings are
+    independent now, and overlap is answered twice and kept twice.
     """
-    out: dict[str, str] = {}
-    for name in sorted(load()["questions"]):
-        for key in owns(name):
-            out.setdefault(key, name)
-    return out
+    return list(shape_of(name).get("fields") or {})
 
 
 # ------------------------------------------------------------------ validating

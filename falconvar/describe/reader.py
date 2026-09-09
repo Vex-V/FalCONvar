@@ -1,13 +1,9 @@
 """`describe()` -- one call per (chunk, sampler).
 
-**Ownership is resolved over questions, never sampler ids.** Which keys a
-call's schema may fill is narrowed by the other questions asked about the same
-chunk, so exactly one call answers each key and merging is a plain union.
-The owner map is keyed by question, and the two are only equal while no
-sampler is paired with someone else's question -- with `yolo:overview` present,
-passing ids would have `clip` give up `people` to a call whose schema owns
-nothing, and the field would leave the document with everything still
-well-formed.
+**Every (chunk, sampler) pairing is independent.** A call's schema is a
+function of its question alone, so two questions that share a field both answer
+it and both answers are kept under their own sampler id. Nothing is reconciled
+and nothing is dropped.
 
 **Resume is keyed on the manifest, the describer, and the prompts.** A stored
 description counts as done only if all three match. Without the describer
@@ -94,9 +90,7 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
     """Describe every (chunk, sampler) the manifest names."""
     # Every question this manifest asks, resolved before the first call so the
     # model block is complete whether or not a chunk is reached.
-    asked = sorted({q for chunk in manifest.chunks
-                    for q in prompts.questions_on(manifest, chunk)})
-    model = _model_block(describer, asked)
+    model = _model_block(describer, prompts.questions_in(manifest))
     started = time.perf_counter()
 
     done = _resumable(existing, manifest, model)
@@ -109,9 +103,6 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
     for chunk in manifest.chunks:
         chunk_id = chunk["chunk_id"]
         start_ts, end_ts = timeline.bounds_of(chunk_id)
-        # Resolved once per chunk, and this is the list every call's schema is
-        # narrowed against.
-        questions = prompts.questions_on(manifest, chunk)
         by_id = {s["id"]: s for s in manifest.config.get("samplers", [])}
 
         out = {"chunk_id": chunk_id, "samplers": {}}
@@ -137,7 +128,6 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
                 "end_ts": end_ts,
                 "sampler": sampler_id,
                 "sampler_config": by_id.get(sampler_id, {}),
-                "chunk_questions": questions,
             }
             call_started = time.perf_counter()
             answer = describer.describe(images, context)
@@ -153,10 +143,11 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
             if on_described is not None:
                 on_described(chunk_id, sampler_id, answer)
 
-        # Narrowing means the keys are already disjoint, so this is a union.
-        out["structured"] = prompts.merge(
-            {sid: block.get("structured", {})
-             for sid, block in out["samplers"].items()})
+        # No chunk-level rollup. It flattened every sampler's answer into one
+        # record, which forced a rule for who wins a shared key -- and there is
+        # no non-arbitrary one, because the user asked both questions. Nothing
+        # read it: units, both index writers and every aggregator work from the
+        # per-sampler blocks below.
         chunks.append(out)
 
     return Descriptions(

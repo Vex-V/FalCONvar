@@ -68,11 +68,11 @@ link reads as breakage rather than as a stage that never ran.
 be tidier, but a browser cannot set an `Accept` header on a plain link.
 
 **A custom prompt picks a shape; it does not define one.** The shape carries
-the response schema and decides which keys the answer owns, so adding a
-question is writing prose rather than JSON Schema -- and ownership of a key
-like `people` stays a property of the shipped shapes rather than something an
-HTTP request can rearrange. `/prompts` publishes the shapes, and the built-ins
-use exactly those: `yolo` is not a special case, it is the `people` shape.
+the response schema, so adding a question is writing prose rather than JSON
+Schema. `/prompts` publishes the shapes, and the built-ins use exactly those:
+`yolo` is not a special case, it is the `people` shape. Each entry lists the
+`fields` it answers; two questions may answer the same field, and both answers
+are kept -- a pairing is independent of every other pairing on the chunk.
 
 **Built-ins cannot be edited or deleted, and that is a 409 rather than a 404.**
 They ship in the package so that every deployment's `yolo` means the same

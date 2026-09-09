@@ -213,7 +213,7 @@ def prompt_list() -> dict[str, Any]:
             "name": name,
             "builtin": bool(entry.get("builtin")),
             "shape": entry.get("shape"),
-            "owns": library.owns(name),
+            "fields": library.fields_of(name),
             "about": entry.get("about", ""),
             "instruction": entry.get("instruction", ""),
         })
@@ -230,15 +230,14 @@ def prompt_list() -> dict[str, Any]:
 def prompt_get(name: str) -> dict[str, Any]:
     """One question, with the exact response schema a call would be given.
 
-    The schema is shown unnarrowed -- what this question asks for on its own.
-    On a real chunk the general question gives up any key a sibling owns.
+    Exact, not indicative: a call's schema depends on nothing but its question.
     """
     entry = library.question(name)
     return {
         "name": name,
         "builtin": bool(entry.get("builtin")),
         "shape": entry.get("shape"),
-        "owns": library.owns(name),
+        "fields": library.fields_of(name),
         "about": entry.get("about", ""),
         "instruction": entry.get("instruction", ""),
         "schema": prompts.schema_for(name),

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from .. import prompts
+from .. import library, prompts
 from ..base import Description, register
 from ..frames import LoadedFrame
 
@@ -26,11 +26,11 @@ class StubDescriber:
         span = f"{context['start_ts']:.1f}-{context['end_ts']:.1f}s"
         indexes = ", ".join(str(f.index) for f in images)
         question = prompts.question_for(context)
-        owned = prompts.owned_by(question, context.get("chunk_questions", ()))
+        fields = library.fields_of(question)
         return Description(
             summary=(f"[stub] {context['sampler']} chunk {context['chunk_id']} "
                      f"({span}): {len(images)} frames [{indexes}]"),
-            fields={key: "" if key == "setting" else [] for key in owned},
+            fields={key: "" if key == "setting" else [] for key in fields},
         )
 
     def config(self) -> dict[str, Any]:

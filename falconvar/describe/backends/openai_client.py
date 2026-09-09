@@ -125,9 +125,7 @@ class OpenAIDescriber:
                     "strict": True,
                     # Resolved the same way as the instruction, so the shape
                     # asked for and the question asked always agree.
-                    "schema": prompts.schema_for(
-                        prompts.question_for(context),
-                        context.get("chunk_questions", ())),
+                    "schema": prompts.schema_for(prompts.question_for(context)),
                 }},
             )
         except Exception as exc:                   # noqa: BLE001

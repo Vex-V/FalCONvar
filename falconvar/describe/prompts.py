@@ -4,11 +4,10 @@ Logic only. The instructions, response schemas and shapes are data, in
 `prompts.json` beside this file and `data/prompts.json` for anything added
 since -- `library.py` merges the two.
 
-A question resolves to a **shape**, and the shape decides the schema. The
-general question's shape is the fallback: its fields are offered only where no
-sibling question on the same chunk owns them, so ownership is exclusive per
-chunk and merging reconciles nothing. Every other shape is exact -- its fields,
-always, and it owns those keys against the fallback.
+A question resolves to a **shape**, and the shape decides the schema. Nothing
+else does: a (sampler, question) pairing is independent of every other pairing
+on the chunk, so `schema_for` is a function of the question alone and two
+questions that share a field both answer it.
 
 Any sampler may be paired with any question. The vocabulary is validated before
 a run rather than fallen through: an unknown name would otherwise quietly get
@@ -41,35 +40,15 @@ def questions() -> list[str]:
     return library.questions()
 
 
-def owned_by(question: str, siblings: Sequence[str] = ()) -> list[str]:
-    """The keys this question fills on a chunk where ``siblings`` are asked.
+def schema_for(question: str) -> dict[str, Any]:
+    """The strict response schema for one call. A function of the question.
 
-    ``siblings`` is every *question* on the chunk, never the sampler ids. The
-    owner map is keyed by question, and the two are only equal while no sampler
-    is paired with someone else's question. Passing ids would let `clip` give
-    up `people` because a `yolo` sampler is present, while that sampler was
-    asked `overview`, which owns nothing: the field would vanish from the chunk
-    with every document still well-formed.
+    Every property is required and `additionalProperties` is false, so the
+    model answers all of them: a strict schema is a guarantee where a prompt
+    saying "focus on X" is only a request.
     """
     shape = library.shape_of(question)
-    fields = shape.get("fields") or {}
-    if not shape.get("fallback"):
-        return list(fields)
-    taken = {key for key, owner in library.owner_map().items()
-             if owner in siblings and owner != question}
-    return [key for key in fields if key not in taken]
-
-
-def schema_for(question: str, siblings: Sequence[str] = ()) -> dict[str, Any]:
-    """The strict response schema for one call.
-
-    ``siblings`` is every *question* being asked about this chunk. It narrows
-    the fallback shape: a field a specialist is answering is removed rather
-    than asked for twice.
-    """
-    shape = library.shape_of(question)
-    keep = owned_by(question, siblings)
-    fields = {key: (shape.get("fields") or {})[key] for key in keep}
+    fields = dict(shape.get("fields") or {})
     summaries = library.load()["summaries"]
     summary = summaries.get(shape.get("summary", "standard")) or summaries["standard"]
     properties = {"summary": summary, **fields}
@@ -79,24 +58,6 @@ def schema_for(question: str, siblings: Sequence[str] = ()) -> dict[str, Any]:
         "required": list(properties),
         "properties": properties,
     }
-
-
-def merge(structured_by_sampler: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """One chunk's answers, flattened into a single record.
-
-    Narrowing means the keys are already disjoint, so this is a plain union.
-    The specialist-wins rule below only matters for documents written before a
-    schema changed, or where a run was assembled from two different sets of
-    samplers.
-    """
-    owner = library.owner_map()
-    merged: dict[str, Any] = {}
-    for sampler, fields in sorted(structured_by_sampler.items()):
-        for key, value in (fields or {}).items():
-            if key in merged and owner.get(key) != sampler:
-                continue                    # a specialist already answered it
-            merged[key] = value
-    return merged
 
 
 def version_of(question: str) -> str:
@@ -149,19 +110,15 @@ def question_for(context: dict[str, Any]) -> str:
     return config.get("prompt") or context.get("sampler") or ""
 
 
-def questions_on(manifest, chunk: dict[str, Any]) -> list[str]:
-    """Every question asked about this chunk, resolved the same way each call
-    resolves its own.
+def questions_in(manifest) -> list[str]:
+    """Every question this manifest asks, from its sampler config.
 
-    Questions, never sampler ids. The owner map is keyed by question, and the
-    two are only equal while no sampler is paired with someone else's question.
-    With `yolo:overview` on a chunk, passing ids would have `clip` give up
-    `people` to a call that was asked `overview` and owns no keys at all -- the
-    field would leave the document with everything still well-formed.
+    Read off the config rather than by walking chunks: the samplers are
+    declared once, and this only needs to know which questions exist so their
+    hashes can go in the resume key.
     """
-    by_id = {s["id"]: s for s in manifest.config.get("samplers", [])}
-    return [question_for({"sampler": sid, "sampler_config": by_id.get(sid, {})})
-            for sid in chunk.get("samplers", {})]
+    return sorted({question_for({"sampler": s.get("id", ""), "sampler_config": s})
+                   for s in manifest.config.get("samplers", [])})
 
 
 def span_of(context: dict[str, Any]) -> str:
