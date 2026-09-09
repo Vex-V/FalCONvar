@@ -132,17 +132,14 @@ create table if not exists falconvar.manifests (
   ingested_at  timestamptz not null default now()
 );
 
--- One row per (chunk, sampler) rather than a jsonb blob on the chunk. That is
--- what makes "which chunks did yolo pick frames in" a query rather than a scan.
--- One row per sampler RUN: one pass over the frames, and the list of questions
--- asked about what it kept. Selecting frames is the expensive half, so a run
--- is shared and `questions` is an array -- `clip:[text,scene]` is one row here
--- and two rows in `descriptions`.
+-- One row per (chunk, sampler RUN) rather than a jsonb blob on the chunk, so
+-- "which chunks did yolo pick frames in" is a query rather than a scan. A run
+-- is one pass over the frames and `questions` is the list asked about what it
+-- kept: `clip:[text,scene]` is one row here and two in `descriptions`.
 create table if not exists falconvar.chunk_samplers (
   video_id    text not null,
   chunk_id    int  not null,
-  sampler_id  text not null,              -- the run: "clip" | "uniform"
-  sampler     text not null,              -- the strategy
+  sampler_id  text not null,              -- the run, which IS the strategy name
   questions   text[] not null default '{}',
   frame_count int  not null,
   frames      jsonb not null,
@@ -158,8 +155,15 @@ alter table falconvar.chunk_samplers drop column if exists question;
 alter table falconvar.chunk_samplers
   add column if not exists questions text[] not null default '{}';
 
-create index if not exists chunk_samplers_sampler
-  on falconvar.chunk_samplers (video_id, sampler);
+-- `sampler` was a second copy of `sampler_id`. It made sense while a row was
+-- keyed by the pairing (`yolo:overview`) and the strategy had to be recovered
+-- from it; keying by the run made the two identical -- 28 of 28 rows equal on
+-- the measured video -- and nothing read the copy.
+alter table falconvar.chunk_samplers drop column if exists sampler;
+
+drop index if exists falconvar.chunk_samplers_sampler;
+create index if not exists chunk_samplers_run
+  on falconvar.chunk_samplers (video_id, sampler_id);
 
 -- ===========================================================================
 -- 6 · descriptions. NO FOREIGN KEY, deliberately. See the header.

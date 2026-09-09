@@ -62,8 +62,10 @@ class Sampler(ABC):
         `--sampler` still use; that id belongs to describe, which is the stage
         that knows a question was asked.
 
-        Two runs of one strategy are only distinguishable by configuration, so
-        the builder disambiguates with a suffix when it merges nothing.
+        So a run id and a strategy name are the same string. They would only
+        diverge if two runs of one strategy could differ in configuration, and
+        they cannot: one CLI has one `--threshold` and one `--vocabulary`, so
+        the builder merges every spec naming a strategy into a single run.
         """
         return self._sampler_id or self.name
 

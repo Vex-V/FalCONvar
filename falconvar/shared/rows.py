@@ -127,7 +127,6 @@ def _manifest(video_id: str, document: dict[str, Any], api: Any) -> None:
             rows.append({
                 "video_id": video_id, "chunk_id": chunk["chunk_id"],
                 "sampler_id": run_id,
-                "sampler": name,
                 "questions": asked,
                 "frame_count": block.get("frame_count", 0),
                 "frames": block.get("frames", []),
