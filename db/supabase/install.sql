@@ -225,10 +225,13 @@ create table if not exists falconvar.aggregates (
   primary key (video_id, aggregate_id)
 );
 
--- Only the summary is embedded, and into its own table. `embeddings` answers
--- *which twenty seconds*; a summary answers *which video*, and a video is not
--- a moment you can play. Putting summaries in the chunk table would need a
--- sentinel chunk_id and would return a whole-video "moment" beside real ones.
+-- NOTHING WRITES THIS YET. `units.py` builds units from descriptions and
+-- transcripts only, so this table stays empty after a complete run. It is kept
+-- because the shape is the decided one: a summary belongs in its own table
+-- rather than in `embeddings`, which answers *which twenty seconds* where a
+-- summary answers *which video* -- and a video is not a moment you can play.
+-- Putting summaries in the chunk table would need a sentinel chunk_id and
+-- would return a whole-video "moment" beside real ones in every search.
 create table if not exists falconvar.video_embeddings (
   video_id   text not null references falconvar.videos on delete cascade,
   kind       text not null,               -- "summary"

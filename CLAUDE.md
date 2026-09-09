@@ -574,11 +574,19 @@ against 363 in the prose-only era. Saying "at least 150 words" took it back to
 246 median. The summary is the only text that gets embedded, so its length is a
 retrieval parameter.
 
-**Every summary layer is recorded; only the topmost is embedded.** A leaf
-summary covers a real span and is the only description at that granularity,
-between one chunk and the whole file. Indexing them would return the same
+**Every summary layer is recorded; none of them is embedded.** A leaf summary
+covers a real span and is the only description at that granularity, between one
+chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
+
+Nor is the final summary. `db/supabase/install.sql` creates
+`video_embeddings` and `units.py` has only `from_descriptions` and
+`from_transcript`, so the table is empty after a complete `--tier llm` run into
+Postgres — verified, 0 rows where every other table is exactly full. The
+argument for it stands (`embeddings` answers *which twenty seconds*, a summary
+answers *which video*, and a video is not a moment you can play); the code does
+not exist. See "Not built".
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -767,6 +775,18 @@ chapters tiling 0-205.28 contiguously. `recovery.recreate` rebuilt the store
 skipped 28, embed found 41 unchanged, aggregate found 8 current -- all three
 resume fingerprints holding at once.
 
+Both backends verified against a schema installed from scratch. A run with
+`--sink file,supabase --index qdrant,supabase` filled every table to exactly
+the expected count -- 14 chunks, 28 chunk_samplers, 28 descriptions, 41
+embeddings, 8 aggregates -- and identical counts under the publishable key, so
+RLS reads what it should rather than silently denying. A second run left every
+count unchanged: upsert, not append. 28 descriptions re-rendered from the
+Postgres copy produced text byte-identical to the file although 14 came back
+with different `jsonb` key order, so the sort-at-every-level fix holds where it
+was designed to. Both indexes returned the same top moment on three queries and
+agreed on `0.1326` for one of them; they diverge at rank 3, which is the
+lexical-half difference recorded above.
+
 `shared.schemas --check` proves the dataclasses, the generated JSON Schema and
 the SQL still agree. The API serves 13 routes.
 
@@ -784,6 +804,10 @@ the SQL still agree. The API serves 13 routes.
   sampler thresholds (`clip 0.96`, `yolo 0.83`) do not.
 - **A local embedder, run.** Written and guarded, but every measurement is
   OpenAI.
+- **Video-level embedding.** `falconvar.video_embeddings` exists in the DDL and
+  nothing writes it: `units.py` builds units from descriptions and transcripts
+  only. Searching "which video is this about" is therefore not possible, only
+  "which moment".
 - **Filterable structured values.** The mechanism works; the values are free
   text, so a filter for `cashier` matches everything. Needs an `enum`.
 - **Live sources.** `Frame` carries no `gap_before`/`discontinuity` seams, so
