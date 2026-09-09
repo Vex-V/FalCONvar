@@ -52,9 +52,15 @@ changes · `yolo` when the people change · `objects` for an open vocabulary ·
 **Questions** are independent of them, and any pair is legal as `name:prompt`:
 
 ```bash
---sampler uniform:text      # read the screen on a stride, no OCR at ingest
---sampler yolo:overview     # frames where people changed, asked for prose
+--sampler uniform:text        # read the screen on a stride, no OCR at ingest
+--sampler yolo:overview       # frames where people changed, asked for prose
+--sampler "clip:[text,scene]" # ONE pass over the video, two questions about it
+--sampler clip:text+scene     # the same, for shells that glob brackets
 ```
+
+Selecting frames is the expensive half, so a sampler runs once however many
+questions it carries — and `clip:text,clip:scene` merges into that same single
+pass rather than doing the work twice.
 
 Unpaired, a sampler is asked the question named after it. Every pairing is
 independent: two questions that answer the same field both answer it, and both

@@ -19,6 +19,53 @@ from .reader import UnreadableSource
 from .store import FrameStore
 
 
+def split_specs(sampler: str | Sequence[str]) -> list[str]:
+    """`"clip:[text,scene],yolo"` -> `["clip:[text,scene]", "yolo"]`.
+
+    Bracket-aware, because a comma separates top-level samplers *and* the
+    questions inside a group. Splitting naively would turn one grouped spec
+    into two broken ones.
+    """
+    if not isinstance(sampler, str):
+        return [s.strip() for s in sampler if str(s).strip()]
+    out, depth, current = [], 0, []
+    for ch in sampler:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            out.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    out.append("".join(current))
+    return [s.strip() for s in out if s.strip()]
+
+
+def parse_spec(spec: str) -> tuple[str, list[str]]:
+    """`"clip:[text,scene]"` -> `("clip", ["text", "scene"])`.
+
+    Three spellings, one meaning. `clip:[a,b]` is the form to read; `clip:a+b`
+    is the same thing without brackets, because some shells glob them and
+    quoting a sampler list is a poor first experience. `clip:a` and `clip` are
+    the one- and zero-question cases they always were.
+    """
+    name, sep, rest = spec.partition(":")
+    name, rest = name.strip(), rest.strip()
+    if not sep or not rest:
+        return name, []
+    if rest.startswith("[") and rest.endswith("]"):
+        rest = rest[1:-1]
+    parts = [q.strip() for q in rest.replace("+", ",").split(",")]
+    seen, questions = set(), []
+    for q in parts:
+        if q and q not in seen:          # a repeat would pay for the same call twice
+            seen.add(q)
+            questions.append(q)
+    return name, questions
+
+
 def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
                    min_interval_s: float = 0.0,
                    max_per_chunk: Optional[int] = None,
@@ -26,15 +73,29 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
                    vocabulary: Optional[Sequence[str]] = None,
                    questions: Optional[Sequence[str]] = None
                    ) -> list[samplers_mod.Sampler]:
-    """`["yolo", "uniform:text"]` -> sampler objects.
+    """`["yolo", "clip:[text,scene]"]` -> sampler objects.
 
-    Any name may carry a question after a colon. The two halves are
-    independent: `uniform:text` reads the screen on a stride without paying OCR
-    to decide *when*; `yolo:overview` keeps frames where the people changed and
-    asks for prose. Unpaired, the question is the sampler's own name.
+    Any name may carry one question after a colon or several in a list. The
+    two halves are independent: `uniform:text` reads the screen on a stride
+    without paying OCR to decide *when*; `clip:[text,scene]` asks two questions
+    of one set of frames. Unpaired, the question is the sampler's own name.
+
+    **Specs naming the same strategy are merged into one run.** Selecting
+    frames is the expensive half -- CLIP or YOLO on every decimated frame,
+    EasyOCR at 98% of the text sampler's cost -- and asking a second question
+    about frames already chosen costs one more describe call. So
+    `clip:text,clip:scene` runs CLIP once and means exactly `clip:[text,scene]`;
+    brackets are the explicit spelling of something that happens anyway, rather
+    than the only way to avoid paying twice. Measured before this: `uniform:text`
+    and `uniform:reactor` produced identical frame lists on all 14 chunks of a
+    video, having each walked it separately.
+
+    Every spec here shares one configuration -- there is a single `--threshold`,
+    a single `--vocabulary` -- so merging by name is merging by configuration.
+    The suffix below is for the day that stops being true.
 
     ``questions`` is the vocabulary to validate against, passed in rather than
-    imported: ingest does not depend on describe, and a sampler records the
+    imported: ingest does not depend on describe, and a sampler records a
     prompt as an opaque string. The caller that knows the question registry
     supplies it; without one, any name is accepted and validated later.
     """
@@ -42,14 +103,22 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
     tuned = {} if threshold is None else {"threshold": threshold}
     stride = {} if every_n is None else {"every_n": every_n}
 
-    built: list[samplers_mod.Sampler] = []
+    grouped: dict[str, list[str]] = {}
     for spec in [s.strip() for s in specs if s.strip()]:
-        name, _, prompt = spec.partition(":")
-        if prompt and questions is not None and prompt not in questions:
-            raise ValueError(
-                f"{spec!r}: unknown question {prompt!r}; "
-                f"known: {', '.join(questions)}")
-        ask = {"prompt": prompt} if prompt else {}
+        name, asked = parse_spec(spec)
+        for question in asked:
+            if questions is not None and question not in questions:
+                raise ValueError(
+                    f"{spec!r}: unknown question {question!r}; "
+                    f"known: {', '.join(questions)}")
+        merged = grouped.setdefault(name, [])
+        for question in asked:
+            if question not in merged:
+                merged.append(question)
+
+    built: list[samplers_mod.Sampler] = []
+    for name, asked in grouped.items():
+        ask = {"prompts": asked} if asked else {}
         if name == "uniform":
             built.append(samplers_mod.build(name, **ask, **stride, **rate))
         elif name == "objects":
@@ -79,10 +148,8 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
     media = load_media(video_id)
     timeline = load_timeline(video_id)
 
-    specs = ([s.strip() for s in sampler.split(",")]
-             if isinstance(sampler, str) else list(sampler))
-    built = build_samplers(specs, every_n, min_interval_s, max_per_chunk,
-                           threshold, vocabulary)
+    built = build_samplers(split_specs(sampler), every_n, min_interval_s,
+                           max_per_chunk, threshold, vocabulary)
 
     store = (FrameStore(paths.artifact(video_id, "store"))
              if frame_store else None)

@@ -105,9 +105,47 @@ def question_for(context: dict[str, Any]) -> str:
     `manifest_fingerprint`, which means changing it correctly invalidates
     describe's resume. A question absent from the vocabulary falls back to the
     general one, exactly as an unregistered sampler does.
+
+    The caller states it outright when it has it: one run answers a list of
+    questions, so which of them this call is for cannot be recovered from the
+    sampler config alone.
     """
+    if context.get("question"):
+        return str(context["question"])
     config = context.get("sampler_config") or {}
+    asked = config.get("prompts") or []
+    if len(asked) == 1:
+        return asked[0]
     return config.get("prompt") or context.get("sampler") or ""
+
+
+def questions_of(sampler_config: dict[str, Any], run_id: str = "") -> list[str]:
+    """The questions asked about one sampler run's frames.
+
+    `prompts` is a list because selecting frames is the expensive half: one
+    pass over the video can answer any number of questions about what it kept.
+    Empty means one question named after the strategy, which is what an
+    unpaired sampler has always meant.
+    """
+    asked = list(sampler_config.get("prompts") or [])
+    if asked:
+        return asked
+    single = sampler_config.get("prompt")          # documents written before lists
+    if single:
+        return [single]
+    return [sampler_config.get("name") or run_id]
+
+
+def answer_id(sampler_name: str, question: str) -> str:
+    """The key one answer is stored under: `name:question`, or the bare name.
+
+    The manifest is keyed by *run* -- one pass over the frames -- and this is
+    keyed by *answer*, because `clip:text` and `clip:scene` are different units
+    to a search even though one pass produced both. Bare when the question is
+    the strategy's own name, so an unpaired sampler keeps the id it always had
+    and nothing already indexed becomes unreachable.
+    """
+    return sampler_name if question == sampler_name else f"{sampler_name}:{question}"
 
 
 def questions_in(manifest) -> list[str]:
@@ -117,8 +155,8 @@ def questions_in(manifest) -> list[str]:
     declared once, and this only needs to know which questions exist so their
     hashes can go in the resume key.
     """
-    return sorted({question_for({"sampler": s.get("id", ""), "sampler_config": s})
-                   for s in manifest.config.get("samplers", [])})
+    return sorted({q for s in manifest.config.get("samplers", [])
+                   for q in questions_of(s, s.get("id", ""))})
 
 
 def span_of(context: dict[str, Any]) -> str:

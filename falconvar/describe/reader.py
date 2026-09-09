@@ -108,40 +108,51 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
         out = {"chunk_id": chunk_id, "samplers": {}}
         previous = kept.get(chunk_id, {}).get("samplers", {})
 
-        for sampler_id in chunk.get("samplers", {}):
-            if samplers is not None and sampler_id not in samplers:
-                continue
-            if (chunk_id, sampler_id) in done:
-                out["samplers"][sampler_id] = previous[sampler_id]
-                skipped += 1
-                continue
-            if limit is not None and described >= limit:
-                continue
+        # One run of a sampler, one set of frames, one call per question asked
+        # about them. The frames are read once however many questions there are.
+        for run_id in chunk.get("samplers", {}):
+            config = by_id.get(run_id, {})
+            name = config.get("name") or run_id
+            images = None
 
-            images = source.images_for(chunk_id, sampler_id)
-            if not images:
-                continue
-            context = {
-                "video_id": manifest.video_id,
-                "chunk_id": chunk_id,
-                "start_ts": start_ts,
-                "end_ts": end_ts,
-                "sampler": sampler_id,
-                "sampler_config": by_id.get(sampler_id, {}),
-            }
-            call_started = time.perf_counter()
-            answer = describer.describe(images, context)
-            described += 1
-            out["samplers"][sampler_id] = {
-                "question": prompts.question_for(context),
-                "frame_count": len(images),
-                "frame_indexes": [f.index for f in images],
-                "description": answer.summary,
-                "structured": answer.fields,
-                "elapsed_s": round(time.perf_counter() - call_started, 3),
-            }
-            if on_described is not None:
-                on_described(chunk_id, sampler_id, answer)
+            for question in prompts.questions_of(config, run_id):
+                sampler_id = prompts.answer_id(name, question)
+                if samplers is not None and sampler_id not in samplers:
+                    continue
+                if (chunk_id, sampler_id) in done:
+                    out["samplers"][sampler_id] = previous[sampler_id]
+                    skipped += 1
+                    continue
+                if limit is not None and described >= limit:
+                    continue
+
+                if images is None:
+                    images = source.images_for(chunk_id, run_id)
+                if not images:
+                    break
+
+                context = {
+                    "video_id": manifest.video_id,
+                    "chunk_id": chunk_id,
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                    "sampler": sampler_id,
+                    "question": question,
+                    "sampler_config": config,
+                }
+                call_started = time.perf_counter()
+                answer = describer.describe(images, context)
+                described += 1
+                out["samplers"][sampler_id] = {
+                    "question": question,
+                    "frame_count": len(images),
+                    "frame_indexes": [f.index for f in images],
+                    "description": answer.summary,
+                    "structured": answer.fields,
+                    "elapsed_s": round(time.perf_counter() - call_started, 3),
+                }
+                if on_described is not None:
+                    on_described(chunk_id, sampler_id, answer)
 
         # No chunk-level rollup. It flattened every sampler's answer into one
         # record, which forced a rule for who wins a shared key -- and there is

@@ -105,17 +105,17 @@ def validate(options: Options) -> list[str]:
     if options.use_video:
         from .describe import prompts
         from .video import samplers as _samplers
+        from .video.driver import parse_spec, split_specs
         known_samplers, known_questions = _samplers.available(), prompts.questions()
-        for spec in (s.strip() for s in options.sampler.split(",")):
-            if not spec:
-                continue
-            name, _, question = spec.partition(":")
+        for spec in split_specs(options.sampler):
+            name, asked = parse_spec(spec)
             if name not in known_samplers:
                 problems.append(f"unknown sampler {name!r} in {spec!r}; "
                                 f"known: {', '.join(known_samplers)}")
-            if question and question not in known_questions:
-                problems.append(f"unknown question {question!r} in {spec!r}; "
-                                f"known: {', '.join(known_questions)}")
+            for question in asked:
+                if question not in known_questions:
+                    problems.append(f"unknown question {question!r} in {spec!r}; "
+                                    f"known: {', '.join(known_questions)}")
     return problems
 
 

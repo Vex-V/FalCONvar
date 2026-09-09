@@ -81,7 +81,11 @@ async def upload(
     policy: str = Form(workflow.Options.policy,
                        description="uniform | scene | vad | speaker"),
     sampler: str = Form(workflow.Options.sampler,
-                        description="comma-separated; `yolo:overview` allowed"),
+                        description="comma-separated; a sampler may carry one "
+                                    "question (`yolo:overview`) or several "
+                                    "(`clip:[text,scene]`, or `clip:text+scene`). "
+                                    "Specs naming the same sampler are merged "
+                                    "into one pass over the frames."),
     use_video: bool = Form(True),
     use_audio: bool = Form(True),
     describer: str = Form(workflow.Options.describer),

@@ -134,17 +134,29 @@ create table if not exists falconvar.manifests (
 
 -- One row per (chunk, sampler) rather than a jsonb blob on the chunk. That is
 -- what makes "which chunks did yolo pick frames in" a query rather than a scan.
+-- One row per sampler RUN: one pass over the frames, and the list of questions
+-- asked about what it kept. Selecting frames is the expensive half, so a run
+-- is shared and `questions` is an array -- `clip:[text,scene]` is one row here
+-- and two rows in `descriptions`.
 create table if not exists falconvar.chunk_samplers (
   video_id    text not null,
   chunk_id    int  not null,
-  sampler_id  text not null,              -- "yolo" | "yolo:overview"
-  sampler     text not null,              -- the strategy half
-  question    text not null,              -- the prompt half, resolved
+  sampler_id  text not null,              -- the run: "clip" | "uniform"
+  sampler     text not null,              -- the strategy
+  questions   text[] not null default '{}',
   frame_count int  not null,
   frames      jsonb not null,
   primary key (video_id, chunk_id, sampler_id),
   foreign key (video_id, chunk_id) references falconvar.chunks on delete cascade
 );
+
+-- Rebuilt rather than added if absent, for the reason `fts` is below: `add
+-- column if not exists` is a no-op on a table that already has the old scalar
+-- `question`, so a re-run would leave the old shape in place and the writer
+-- would fail on a column that is not there.
+alter table falconvar.chunk_samplers drop column if exists question;
+alter table falconvar.chunk_samplers
+  add column if not exists questions text[] not null default '{}';
 
 create index if not exists chunk_samplers_sampler
   on falconvar.chunk_samplers (video_id, sampler);

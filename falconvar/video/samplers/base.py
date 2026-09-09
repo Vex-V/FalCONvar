@@ -7,23 +7,27 @@ Three things live here rather than in each strategy:
 
     min_interval_s  smallest gap between two kept frames
     max_per_chunk   ceiling on frames kept from one chunk
-    prompt          which question describe should ask about these frames
+    prompts         which questions describe should ask about these frames
 
 The rate limits short-circuit before `propose` runs, so a rate-limited frame
 costs no inference. Every chunk keeps at least one frame.
 
-`prompt` is on the base class, so any strategy pairs with any question as
-`name:prompt` -- `uniform:text` reads the screen on a stride, `yolo:overview`
-asks for prose about frames the people detector chose. Unpaired, the question
-is the sampler's own name. Nothing here reads the prompt: it is an opaque
-string, validated by whoever built the sampler, because a sampler knowing the
-prompt registry would be an edge from ingest to describe.
+`prompts` is on the base class, so any strategy pairs with any number of
+questions -- `uniform:text` reads the screen on a stride, `clip:[text,scene]`
+asks two questions of one set of frames. Selecting frames is the expensive
+half and asking about them is the cheap one, so a sampler runs **once** per
+distinct configuration however many questions it carries. Unpaired, the
+question is the sampler's own name.
+
+Nothing here reads a prompt: they are opaque strings, validated by whoever
+built the sampler, because a sampler knowing the prompt registry would be an
+edge from ingest to describe.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..reader import Frame
 
@@ -36,7 +40,7 @@ class Sampler(ABC):
     def __init__(self, min_interval_s: float = 0.0,
                  max_per_chunk: Optional[int] = None,
                  sampler_id: Optional[str] = None,
-                 prompt: Optional[str] = None) -> None:
+                 prompts: Optional[Sequence[str]] = None) -> None:
         if min_interval_s < 0:
             raise ValueError("min_interval_s must be >= 0")
         if max_per_chunk is not None and max_per_chunk < 1:
@@ -44,26 +48,24 @@ class Sampler(ABC):
         self.min_interval_s = min_interval_s
         self.max_per_chunk = max_per_chunk
         self._sampler_id = sampler_id
-        self.prompt = prompt
+        self.prompts: list[str] = list(prompts or [])
         self._kept_in_chunk = 0
         self._last_kept_ts: Optional[float] = None
 
     @property
     def sampler_id(self) -> str:
-        """The manifest key, and the key every later stage inherits.
+        """The manifest key: this **run** of this sampler.
 
-        `name:prompt` for a pairing, the bare name otherwise. Keying by the
-        question alone was the earlier rule and it breaks the moment any
-        sampler can ask anything: `yolo:overview` and `clip:overview` would
-        both be `overview`, colliding on one key while holding different
-        frames. Keying by the strategy alone loses the question, which is the
-        more useful half when reading a search result.
+        The strategy's name, because a run is one pass over the frames and the
+        questions asked about them are a separate list. An answer is keyed
+        `name:question` further downstream, which is what a search result and
+        `--sampler` still use; that id belongs to describe, which is the stage
+        that knows a question was asked.
+
+        Two runs of one strategy are only distinguishable by configuration, so
+        the builder disambiguates with a suffix when it merges nothing.
         """
-        if self._sampler_id:
-            return self._sampler_id
-        if self.prompt and self.prompt != self.name:
-            return f"{self.name}:{self.prompt}"
-        return self.name
+        return self._sampler_id or self.name
 
     def reset(self, chunk_id: int) -> None:
         """Called once when a chunk opens, before any frame is offered.
@@ -128,18 +130,25 @@ class Sampler(ABC):
         return None
 
     def _base_config(self) -> dict[str, Any]:
-        # `prompt` omitted when unset rather than written as null, so a sampler
-        # that pairs no question produces exactly the config it always did and
-        # `manifest_fingerprint` does not move for every video already ingested.
+        # `prompts` omitted when empty rather than written as [], so a sampler
+        # that pairs no question keeps the config it always had.
         config: dict[str, Any] = {
             "id": self.sampler_id,
             "name": self.name,
             "min_interval_s": self.min_interval_s,
             "max_per_chunk": self.max_per_chunk,
         }
-        if self.prompt is not None:
-            config["prompt"] = self.prompt
+        if self.prompts:
+            config["prompts"] = list(self.prompts)
         return config
+
+    def questions(self) -> list[str]:
+        """The questions to ask about this run's frames.
+
+        Empty means one question named after the strategy, which is what an
+        unpaired sampler has always meant.
+        """
+        return list(self.prompts) or [self.name]
 
     def config(self) -> dict[str, Any]:
         """Serialised into the manifest so a run can be reproduced."""

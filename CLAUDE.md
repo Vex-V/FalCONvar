@@ -66,6 +66,8 @@ python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --thres
 python -m falconvar.boundaries <id> --calibrate        # sweep, no decode
 python -m falconvar.boundaries <id> --retune 45        # rethreshold cached scores
 python -m falconvar.boundaries <id> --policy scene --chunk-duration 30
+python -m falconvar.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
+python -m falconvar.video <id> --sampler clip:text+scene       # same, no brackets
 python -m falconvar.video <id> --sampler yolo --per-second 4 --min-interval 3
 python -m falconvar.video <id> --sampler objects --vocabulary "crate,pallet"
 python -m falconvar.video <id> --prune-store           # irreversible, opt-in
@@ -197,13 +199,31 @@ out costs EasyOCR on every decimated frame — 98.1% of that sampler's total.
 `RadioFreeEurope RadioLiberty`, `BYELORUSSIAN S.S.R.`, `REACTOR 1`, `1977`
 correctly. Two different questions, not two settings of one.
 
-**A pairing is keyed by both halves.** `sampler_id` is `name:prompt` when a
-question is paired and the bare name otherwise. Keying by the question alone
-breaks the moment any sampler can ask anything: `yolo:overview` and
-`clip:overview` hold different frames and would collide on one manifest key.
-Keying by the strategy alone loses the question, which is the more useful half
-when reading a search result. The id is what the manifest, `descriptions.json`,
-`embeddings.sampler_id` and `--sampler` all inherit.
+**A sampler runs once and answers a list of questions.** `clip:[text,scene]`
+is one pass over the video answering two questions about the frames it kept;
+`clip:text+scene` is the same thing without brackets, for shells that glob
+them. Selecting frames is the expensive half -- CLIP or YOLO on every decimated
+frame, EasyOCR at 98% of the text sampler's cost -- and a second question about
+frames already chosen costs one more describe call.
+
+**Specs naming the same sampler merge into one run.** `clip:text,clip:scene`
+means exactly `clip:[text,scene]`, so brackets are the explicit spelling of
+something that happens anyway rather than the only way to avoid paying twice.
+Measured before this existed: `uniform:text` and `uniform:reactor` produced
+**identical frame lists on all 14 chunks**, each having walked the video
+separately. Merging is by name because one CLI has one `--threshold` and one
+`--vocabulary`, so every spec shares a configuration.
+
+**The manifest is keyed by run; everything downstream is keyed by answer.**
+`chunks[].samplers` holds `clip` once, with its frames and `prompts:
+[text, scene]` in the config. `descriptions` and `embeddings` hold `clip:text`
+and `clip:scene` separately, because they are different units to a search even
+though one pass produced both. `answer_id` is the bare name when the question
+is the strategy's own, so an unpaired sampler keeps the id it always had and
+nothing already indexed becomes unreachable.
+
+`chunk_samplers.questions` is a `text[]` for the same reason: one row per run,
+carrying the list.
 
 **Every (sampler, question) pairing is independent.** `schema_for` is a
 function of the question alone: two questions that share a field both answer

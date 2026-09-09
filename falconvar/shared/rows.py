@@ -112,18 +112,23 @@ def _manifest(video_id: str, document: dict[str, Any], api: Any) -> None:
         "stats": document.get("stats", {}),
     }], api)
 
-    # One row per (chunk, sampler) rather than a jsonb blob on the chunk, so
-    # "which chunks did yolo pick frames in" is a query.
+    # One row per (chunk, sampler RUN) rather than a jsonb blob on the chunk,
+    # so "which chunks did yolo pick frames in" is a query. `questions` is an
+    # array because one run answers a list of them -- the frames were chosen
+    # once, and each question is a separate describe call on the same set.
     by_id = {s["id"]: s for s in document.get("config", {}).get("samplers", [])}
     rows = []
     for chunk in document.get("chunks", []):
-        for sampler_id, block in chunk.get("samplers", {}).items():
-            config = by_id.get(sampler_id, {})
+        for run_id, block in chunk.get("samplers", {}).items():
+            config = by_id.get(run_id, {})
+            name = config.get("name") or run_id.split(":")[0]
+            asked = (list(config.get("prompts") or [])
+                     or ([config["prompt"]] if config.get("prompt") else [name]))
             rows.append({
                 "video_id": video_id, "chunk_id": chunk["chunk_id"],
-                "sampler_id": sampler_id,
-                "sampler": config.get("name", sampler_id.split(":")[0]),
-                "question": config.get("prompt") or sampler_id,
+                "sampler_id": run_id,
+                "sampler": name,
+                "questions": asked,
                 "frame_count": block.get("frame_count", 0),
                 "frames": block.get("frames", []),
             })

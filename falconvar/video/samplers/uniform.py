@@ -21,7 +21,7 @@ sampler -- `overview` is a *prompt*, and every sampler takes one.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..reader import Frame
 from .base import Sampler
@@ -35,7 +35,7 @@ class UniformSampler(Sampler):
     def __init__(self, every_n: int = 1, min_interval_s: float = 0.0,
                  max_per_chunk: Optional[int] = None,
                  sampler_id: Optional[str] = None,
-                 prompt: Optional[str] = None) -> None:
+                 prompts: Optional[Sequence[str]] = None) -> None:
         every_n = int(every_n)
         if every_n < 1:
             raise ValueError("every_n must be >= 1; it is a frame stride")
@@ -44,7 +44,7 @@ class UniformSampler(Sampler):
         # unset by default. Nothing is lost by deciding here because this
         # sampler runs no model, so a frame it turns down costs what one the
         # base class never offered it costs.
-        super().__init__(min_interval_s, max_per_chunk, sampler_id, prompt)
+        super().__init__(min_interval_s, max_per_chunk, sampler_id, prompts)
         self.every_n = every_n
 
     def propose(self, frame: Frame, chunk_local_index: int) -> bool:

@@ -67,6 +67,12 @@ link reads as breakage rather than as a stage that never ran.
 **`?download=1` only adds a `Content-Disposition`.** Content negotiation would
 be tidier, but a browser cannot set an `Accept` header on a plain link.
 
+**A sampler may carry several questions.** `sampler=clip:[text,scene]` is one
+pass over the video answering two questions about the frames it kept, and
+specs naming the same sampler merge into one pass. The manifest is keyed by
+run, `descriptions` and `/search` by answer (`clip:text`), so `--sampler
+clip:text` narrows exactly as it did.
+
 **A custom prompt picks a shape; it does not define one.** The shape carries
 the response schema, so adding a question is writing prose rather than JSON
 Schema. `/prompts` publishes the shapes, and the built-ins use exactly those:

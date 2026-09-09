@@ -45,7 +45,7 @@ class PersonChangeSampler(DetectionChangeSampler):
         min_interval_s: float = 0.0,
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
-        prompt: Optional[str] = None,
+        prompts: Optional[Sequence[str]] = None,
     ) -> None:
         from .perception.descriptors import CropEmbeddingDescriptor
 
@@ -60,7 +60,7 @@ class PersonChangeSampler(DetectionChangeSampler):
             min_interval_s=min_interval_s,
             max_per_chunk=max_per_chunk,
             sampler_id=sampler_id,
-            prompt=prompt,
+            prompts=prompts,
         )
 
 

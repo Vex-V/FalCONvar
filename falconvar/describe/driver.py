@@ -32,8 +32,10 @@ def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
             f"({manifest.timeline_fingerprint} vs {timeline.fingerprint()}). "
             "Re-run ingest against the current timeline.")
 
+    known = prompts.questions()
     unknown = sorted({q for s in manifest.config.get("samplers", [])
-                      if (q := s.get("prompt")) and q not in prompts.questions()})
+                      for q in prompts.questions_of(s, s.get("id", ""))
+                      if q not in known})
     if unknown:
         raise ValueError(
             f"manifest names unknown question(s) {', '.join(unknown)}; "
