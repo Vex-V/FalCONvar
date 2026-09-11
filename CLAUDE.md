@@ -36,6 +36,8 @@ falconvar/
     llm/           summary · chapters · events      llm: paid calls
 api/               main (routes) · service (dispatch) · jobs (one worker)
                    browse (read-only queries over the rows a run wrote)
+web/               the client at /app. No build step: index.html · app.js ·
+                   app.css. Every form generated from /capabilities
 recovery/          STANDALONE: recreate.py, imports nothing from the pipeline
 db/
   supabase/        install.sql · reset.sql
@@ -55,13 +57,13 @@ docs/ROUTES.md     the HTTP surface
 ## Commands
 
 ```bash
-python -m falconvar.workflow media/x.mp4 --policy vad --sampler clip,yolo:overview
-python -m falconvar.workflow media/x.mp4 --no-audio --sampler uniform:text
-python -m falconvar.workflow media/x.mp4 --tier llm --sink file,supabase \
+python -m falconvar.workflow samples/x.mp4 --policy vad --sampler clip,yolo:overview
+python -m falconvar.workflow samples/x.mp4 --no-audio --sampler uniform:text
+python -m falconvar.workflow samples/x.mp4 --tier llm --sink file,supabase \
        --index qdrant,supabase
 
 # one component at a time; per-stage tuning lives on these, not on workflow
-python -m falconvar.media media/x.mp4
+python -m falconvar.media samples/x.mp4
 python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
 python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
 python -m falconvar.boundaries <id> --calibrate        # sweep, no decode
@@ -83,7 +85,7 @@ python -m falconvar.aggregate <id> --tier llm
 python -m falconvar.shared.schemas --check     # CI: are the schemas stale
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 #      ^ from the checkout root: recovery/ is not an installed package, on purpose
-python -m uvicorn api.main:app --port 8000     # /docs for the schema, and / redirects there
+python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
 ```
 
 **Everything a run writes lives under `data/out/<video-id>/`.** Grouped by
@@ -306,11 +308,28 @@ fields; `prose` is the degenerate one with none, which is what `overview`
 answers in. The shape marked `fallback` is what an unrecognised question
 resolves to, and that is its only privilege.
 
-**A custom question picks a shape; it may not define one.** Adding a question
-is writing prose, and ownership of a key like `people` stays a property of the
-shipped shapes rather than something an HTTP request can rearrange. Verified
-against the previous hard-coded module over **448 (question, siblings)
-combinations** at the time it was extracted -- every schema, every instruction, the owner map and `merge`
+**A custom question names a shape or brings its own, and a custom shape is
+built rather than accepted.** `fields` is a builder -- `text` or `list`, plus
+`of` for a list of objects and `one_of` for a fixed vocabulary -- and the JSON
+Schema is generated from it. Raw JSON Schema over HTTP is refused because the
+call goes out with `strict: true`, whose subset is narrow: a schema the API
+rejects would fail *after* the frames are read, with the request about to be
+paid for, which is the same late failure `check()` exists to prevent for a
+`{typo}` placeholder. The builder spans exactly what the shipped shapes use --
+verified by rebuilding all five of them from their own field lists, identical.
+
+Shipped shapes stay shipped. A custom shape is stored under its question's
+name, dies with it, may not take a built-in shape's name (`people` and `prose`
+are shape names that are *not* question names, so the question-level guard
+misses them), and can never claim `fallback`. So `yolo` still means the same
+thing in every deployment; what is deployment-local is a custom question, which
+it already was. Caps -- 12 fields, 8 nested keys, 24 enum values -- are refused
+at write time, because structured answers already run ~3x longer than prose and
+the `people` schema truncated into unparseable JSON at 700 output tokens.
+
+The earlier shipped-shapes-only rule was verified against the previous
+hard-coded module over **448 (question, siblings) combinations** at the time it
+was extracted -- every schema, every instruction, the owner map and `merge`
 identical.
 
 **Built-ins ship in the package; custom questions live in `data/prompts.json`.**
@@ -854,8 +873,50 @@ uniform:text(v9,tNone)`, and `tNone` is how a reader sees the lexical half was
 silent. The API does not expose those ranks yet.
 
 **Prompts are editable at runtime.** `GET/POST/DELETE /prompts`; a custom
-question picks a shape rather than defining one, built-ins refuse edits with
-409, and adding a question invalidates nothing already described.
+question names a shape or brings its own, built-ins refuse edits with 409, and
+adding a question invalidates nothing already described.
+
+**`/search` narrows nine ways, and `/capabilities.search` publishes them** --
+`sampler` (a pairing), `question`, `strategy` (one sampler's whole output),
+`chunk_ids`, `window`, `after`/`before`, `structured`, `candidates`. None costs
+a re-embedding: `text_hash` is over content alone, so every one of them is a
+query-layer change over payload the unit already carries. Measured across both
+backends, all six filters tried select **identical chunk sets**; rank order
+differs on two, which is the lexical halves diverging.
+
+**Time is resolved to chunk ids through the grid, never stored beside a
+vector.** One mechanism for both stores, and no Qdrant payload change -- payload
+is written only on upsert, so a span there would need a forced re-index.
+
+**`structured` is only useful with `one_of`.**
+`/capabilities.search.structured_fields` reads the shapes and lists exactly the
+fields whose values are a vocabulary, so a form offers `severity: severe` and
+not a free-text box that would match three different things.
+
+**A moment carries the ranks.** `ranks[sampler_id] = {dense, text}`, `text:
+null` meaning the lexical half was silent. Measured on the four-video corpus: a
+nonsense query scores **0.1136** against a real one's **0.1294**, so there is no
+relevance floor and the number alone says nothing. The ranks are the signal, and
+the CLI printed them long before the API did.
+
+**Scope is a set of videos, and that is one endpoint.** `video_ids` names them,
+omitting it searches every one, and `video_id` is the one-element shorthand.
+Searching one video, three, or all is the same question over a different set, so
+a second route for "all" was a distinction the data never had.
+
+**Moments are keyed by `(video_id, chunk_id)`.** A chunk id indexes *one*
+video's grid. Grouping on the id alone fused chunk 0 of two videos into one
+moment with two unrelated accounts, and the agreement bonus scored that
+collision above either real answer -- invisible while the scope was one video,
+which is why it was written that way.
+
+**`level` picks granularity and never mixes the two.** `moment` ranks chunks;
+`video` ranks whole videos by their summary out of `video_embeddings`, which
+`embed` writes from the `summary` aggregate (Postgres only; 4/4 on the test
+corpus, winner 0.40-0.50 against runners-up of 0.05-0.32). One endpoint, but
+never one ranking: a whole-video "moment" beside real ones is not something you
+can play. At `level=video` the moment filters are reported under `ignored`
+rather than silently dropped, because they narrow *inside* a video.
 
 ---
 
@@ -944,6 +1005,17 @@ quietly stopped indexing the terms it is best at. Nothing reported it. The
 statement is `drop column if exists` followed by an unconditional add; the
 column is generated, so nothing is lost.
 
+**A `vector` column comes back from PostgREST as a *string*.** `vector(1536)`
+arrives as the text `"[-0.0342,0.0450,...]"`, not a list. `SupabaseIndex`'s
+dense-only fallback compared it against a list of floats, so its cosine
+returned the not-comparable sentinel for every row and `sorted` fell through to
+whatever order the rows arrived in. It had therefore never ranked anything --
+and it said so only as "the ranking has no lexical half", which is a different
+and much smaller claim. Found by `video_embeddings` returning -1.0000 for four
+rows at once; on the moment path the wrongness was invisible, because table
+order is roughly chunk order and scores a plausible MRR. `as_vector()` parses
+either form.
+
 **PostgREST's cached schema is the fastest way to see what is really
 deployed.** `GET /rest/v1/` with `Accept: application/openapi+json` lists every
 column and RPC parameter it knows. That is how a table-name collision with the
@@ -953,10 +1025,21 @@ previous pipeline was found before it silently ate writes.
 schema is in Settings → API → Exposed schemas, every request returns
 `PGRST106`, which reads as a missing table rather than a missing setting.
 
-**Embedded Qdrant takes an exclusive lock** on its storage folder, so two
-processes cannot open it at once. Sequential CLI use never hits this; an API
-serving search while a run ingests would. Served mode (`url=`) has no such
-limit.
+**Embedded Qdrant takes an exclusive lock** on its storage folder -- and it is
+not only a *two-process* problem, which is how this was filed until a server
+reproduced it alone. `QdrantIndex` had no `close`, no `__del__` and no context
+manager, so a client opened for one search never gave the lock back. A CLI run
+never notices: the process exits and the lock goes with it. A long-lived API
+leaks it on the first search and every later one fails with `Storage folder ...
+is already accessed by another instance`, on a route that worked a minute
+earlier -- and the traceback frame of the first failure pins the client alive,
+so it never recovers.
+
+`close()` is now called from a `finally` in both `retrieve.search` and
+`embed.run` (`indexes.release`), because the not-indexed raise in the middle of
+search is exactly the exit that leaked it. Verified: ten sequential opens
+through one server process. Served mode (`url=`) holds no lock, so `close` is a
+no-op there, and `supabase` is REST and has nothing to release.
 
 **`weights/clip/ViT-B-32.pt` (338 MB) is NOT stale.** YOLO-World embeds its
 vocabulary with OpenAI CLIP. That is a *different* CLIP from the one the scene
@@ -1012,8 +1095,10 @@ firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
 `shared.schemas --check` proves the dataclasses, the generated JSON Schema and
-the SQL still agree. The API serves **20 routes**; `docs/ROUTES.md` is the
-reasoning and `/docs` the authority on shapes.
+the SQL still agree. The API serves **21 routes**; `docs/ROUTES.md` is the
+reasoning and `/docs` the authority on shapes. The web client at `/app` drives
+every route a run or a question needs, generating each form from
+`/capabilities` rather than restating it.
 
 ## Not built
 
@@ -1022,19 +1107,17 @@ reasoning and `/docs` the authority on shapes.
 - **An import checker.** The previous tree had one that AST-enforced the
   recovery invariant and proved every module loads after an install. Nothing
   enforces the recovery rule automatically now.
-- **An eval harness.** Every ranking claim above predates the current tree and
-  was measured on the previous pipeline's corpus. Nothing here can currently
-  show a retrieval change helps.
+- **A bigger corpus.** `eval/harness.py` exists and runs, but 18 cases over 4
+  videos is a direction, not a result -- the low-overlap band is n=3.
 - **Sampler threshold calibration.** Scene thresholds sweep from cached scores;
   sampler thresholds (`clip 0.96`, `yolo 0.83`) do not.
 - **A local embedder, run.** Written and guarded, but every measurement is
   OpenAI.
-- **Video-level embedding.** `falconvar.video_embeddings` exists in the DDL and
-  nothing writes it: `units.py` builds units from descriptions and transcripts
-  only. Searching "which video is this about" is therefore not possible, only
-  "which moment".
-- **Filterable structured values.** The mechanism works; the values are free
-  text, so a filter for `cashier` matches everything. Needs an `enum`.
+- **A stemmed, properly weighted sparse half.** `indexes.tokenize` does not
+  stem and the sparse vector sends raw counts where `Modifier.IDF` expects BM25
+  weights. `eval/harness.py` can now grade the change; nothing has been
+  measured yet.
+- **Reranking, query expansion, fusion tuning.** All plausible; none measured.
 - **Live sources.** `Frame` carries no `gap_before`/`discontinuity` seams, so
   that is a retrofit through every stage rather than a field already there.
 - **Entity narratives.** Linking the same person or object across chunks, then

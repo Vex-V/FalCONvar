@@ -15,7 +15,6 @@ knobs are documented as process variables and this file handles keys only.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional
 
 from .paths import REPO_ROOT

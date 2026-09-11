@@ -18,6 +18,37 @@ from . import indexes as backends
 DEFAULT_EMBEDDER = "openai"
 
 
+def _embed_video(video_id: str, built, names: Sequence[str]) -> int:
+    """Embed the video-level summary into `video_embeddings`. Postgres only.
+
+    `falconvar.video_embeddings` has existed in the DDL since before anything
+    wrote it -- CLAUDE.md lists it under "Not built", and a complete `--tier
+    llm` run left it at 0 rows while every other table was exactly full. This
+    is what fills it.
+
+    Postgres only for now: Qdrant would need a second collection with its own
+    name, and the whole-video corpus is one row per video, which is not a size
+    that needs a vector database.
+    """
+    if "supabase" not in names:
+        return 0
+    from ...shared import paths, sinks
+    from .indexes.supabase import write_video_unit
+
+    path = paths.artifact(video_id, "aggregates") / "summary.json"
+    if not path.exists():
+        return 0
+    try:
+        payload = sinks.read_json(path).get("payload") or {}
+        unit = units_mod.from_summary(video_id, payload)
+        if unit is None:
+            return 0
+        unit.vector = built.embed([unit.content])[0]
+        return write_video_unit(unit, built.key)
+    except Exception:                                    # noqa: BLE001
+        return 0
+
+
 def collect(video_id: str) -> list[units_mod.Unit]:
     """Every embeddable unit this video has, from both modalities."""
     out: list[units_mod.Unit] = []
@@ -48,7 +79,16 @@ def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
     names = ([n.strip() for n in index_name.split(",") if n.strip()]
              if isinstance(index_name, str) else list(index_name))
     indexes = [(n, backends.build(n, video_id, built.key)) for n in names]
-    index = indexes[0][1]
+    try:
+        return _embed(built, names, indexes, video_id, batch)
+    finally:
+        # Every one, in a `finally`: a failure part-way through would otherwise
+        # leave an embedded Qdrant lock held for the life of the process.
+        for _, target in indexes:
+            backends.release(target)
+
+
+def _embed(built, names, indexes, video_id: str, batch: int) -> Produced:
 
     wanted = collect(video_id)
     if not wanted:
@@ -94,10 +134,16 @@ def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
         dropped += target.prune(live)
         artifacts[name] = str(target.save())
 
+    # The whole-video vector, if this video has a summary to make one from.
+    # After the moments, and best-effort: it answers a different question, and
+    # losing it must not fail a run whose moments are already written.
+    videos = _embed_video(video_id, built, names)
+
     return Produced(
         video_id=video_id, component="embed", backend=",".join(names),
         artifacts=artifacts,
         stats={"units": len(wanted), "embedded": len(changed),
+               "video_units": videos,
                "unchanged": len(wanted) - len(changed), "pruned": dropped,
                "embedder": built.key, "indexes": names,
                "samplers": sorted({u.sampler_id for u in wanted})},

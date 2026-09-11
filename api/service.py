@@ -201,12 +201,71 @@ def frame_path(video_id: str, index: int) -> Path:
     return path
 
 
-def search(query: str, video_id: str, **params) -> list[dict[str, Any]]:
+def search(query: str, video_id: Any = None, **params) -> list[dict[str, Any]]:
     moments, notes = retrieve.search(query, video_id, **params)
     return [{**m.as_dict(), "notes": notes} for m in moments]
 
 
+def search_videos(query: str, **params) -> list[dict[str, Any]]:
+    """Which video, rather than which moment. See `retrieve.videos`."""
+    return retrieve.videos(query, **params)
+
+
 # ------------------------------------------------------------ capabilities
+
+#: What `/search` narrows by. Published rather than restated in a client, for
+#: the same reason `parameters` is introspected: a form built from a second
+#: copy offers a filter the route does not take, or hides one it does.
+SEARCH_FILTERS: list[dict[str, Any]] = [
+    {"name": "video_ids", "type": "list[str]",
+     "about": "which videos to search. Omit for every video; one id, three or "
+              "all is the same question over a different set"},
+    {"name": "level", "type": "str",
+     "about": "`moment` (default) ranks chunks; `video` ranks whole videos by "
+              "their summary, from `video_embeddings`"},
+    {"name": "sampler", "type": "str",
+     "about": "one PAIRING, e.g. `clip:text`"},
+    {"name": "question", "type": "str",
+     "about": "one question across every sampler that asked it, e.g. `text`"},
+    {"name": "strategy", "type": "str",
+     "about": "one sampler's whole output, e.g. `clip`. Not a prefix of "
+              "`sampler`: a bare id means the question IS the strategy name"},
+    {"name": "chunk_ids", "type": "list[int]",
+     "about": "the drill-down: search, read the ids back, ask for more"},
+    {"name": "window", "type": "int",
+     "about": "widen `chunk_ids` by N neighbours each side"},
+    {"name": "after", "type": "float",
+     "about": "seconds. Resolved to chunk ids through the grid"},
+    {"name": "before", "type": "float", "about": "seconds"},
+    {"name": "structured", "type": "dict",
+     "about": "exact structured values. Only meaningful where a shape fixed "
+              "the vocabulary with `one_of`"},
+    {"name": "candidates", "type": "int",
+     "about": "units ranked per half before fusion. Measured: 5 truncates the "
+              "fusion, 20 and 100 agree"},
+]
+
+
+def filterable() -> dict[str, list[str]]:
+    """Structured fields whose values are a vocabulary, and what it is.
+
+    The only fields worth offering as a filter. A free-text field is
+    filterable in the mechanical sense and useless in practice -- one video
+    produced `cashier`, `customer` and `cashier or customer near checkout`, and
+    a filter for the first matched all three. `one_of` is what makes the
+    difference, so this reads the shapes rather than guessing.
+    """
+    out: dict[str, list[str]] = {}
+    for shape in library.shapes().values():
+        for field, spec in (shape.get("fields") or {}).items():
+            values = spec.get("enum")
+            if values is None:
+                items = spec.get("items")
+                values = items.get("enum") if isinstance(items, dict) else None
+            if values:
+                out.setdefault(field, sorted(set(out.get(field, [])) | set(values)))
+    return out
+
 
 def available() -> dict[str, Any]:
     """What this deployment can be asked for, read from the registries.
@@ -238,6 +297,11 @@ def available() -> dict[str, Any]:
                         for name in aggregate.available()},
         "tiers": list(aggregate.TIERS),
         "artifacts": dict(ARTIFACTS),
+        # What a search may narrow by, and which structured values are a
+        # vocabulary rather than free text.
+        "search": {"filters": SEARCH_FILTERS,
+                   "structured_fields": filterable(),
+                   "levels": ["moment", "video"]},
         # What each component may be tuned with, for a form that configures a
         # run stage by stage rather than accepting the workflow's defaults.
         "parameters": parameters(),
@@ -261,6 +325,7 @@ def prompt_list() -> dict[str, Any]:
     The shape is resolved rather than just named, so a caller sees which keys
     an answer will carry without having to fetch the shape separately.
     """
+    builtin = library.builtin_shapes()
     entries = []
     for name in library.questions():
         entry = library.question(name)
@@ -275,9 +340,14 @@ def prompt_list() -> dict[str, Any]:
     return {
         "prompts": entries,
         "shapes": {name: {"fallback": bool(shape.get("fallback")),
+                          "builtin": name in builtin,
                           "fields": sorted(shape.get("fields") or {}),
                           "summary": shape.get("summary")}
                    for name, shape in sorted(library.shapes().items())},
+        "field_types": list(library.FIELD_TYPES),
+        "limits": {"fields": library.MAX_FIELDS,
+                   "nested_keys": library.MAX_NESTED_KEYS,
+                   "one_of": library.MAX_ENUM},
         "custom_file": str(paths.PROMPTS),
     }
 
@@ -301,9 +371,15 @@ def prompt_get(name: str) -> dict[str, Any]:
 
 
 def prompt_add(name: str, instruction: str, shape: str = "scene",
-               about: str = "") -> dict[str, Any]:
-    """Add or replace a custom question. Built-ins are refused."""
-    library.add(name, instruction, shape=shape, about=about)
+               about: str = "", fields: Optional[dict[str, Any]] = None,
+               summary: str = "standard") -> dict[str, Any]:
+    """Add or replace a custom question. Built-ins are refused.
+
+    ``fields`` makes the question carry its own shape rather than naming a
+    shipped one; the shape is then stored under the question's own name.
+    """
+    library.add(name, instruction, shape=shape, about=about,
+                fields=fields, summary=summary)
     return prompt_get(name)
 
 
@@ -315,4 +391,4 @@ __all__ = ["ARTIFACTS", "COMPONENTS", "UPLOADS", "artifact", "available",
            "parameters", "register",
            "exports", "frame_path", "prompt_add", "prompt_get", "prompt_list",
            "prompt_remove", "run_component", "run_workflow", "search",
-           "videos"]
+           "search_videos", "videos"]

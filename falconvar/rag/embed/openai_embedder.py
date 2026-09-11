@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 # The key's names live in one place. Two modules each spelling out their own
 # list is how `OPENAI_API` worked for the describer and not for this.
-from ...shared.llm import KEY_VARS, LLMUnavailable, api_key
+from ...shared.llm import LLMUnavailable, api_key
 from .embedders import EmbedderUnavailable
 
 DEFAULT_MODEL = "text-embedding-3-small"

@@ -121,6 +121,38 @@ class QdrantIndex:
             store = Path(path or (paths.OUT_ROOT / "_qdrant"))
             store.mkdir(parents=True, exist_ok=True)
             self._client = QdrantClient(path=str(store))
+            # Only a client this object opened is one this object may close.
+            self._owned = True
+
+    #: Whether `close` should release the client. False for a client handed in
+    #: or a served one, which the caller owns.
+    _owned = False
+
+    def close(self) -> None:
+        """Release the storage lock. Idempotent.
+
+        **Embedded Qdrant takes an exclusive lock on its folder**, and a client
+        that is never closed never gives it back. A CLI run does not notice --
+        the process exits and the lock goes with it, which is why this looked
+        like a two-process problem. In a server it is a one-process problem:
+        the first search leaks the lock and every later one fails with
+        `Storage folder ... is already accessed by another instance`, on a
+        route that worked a minute earlier.
+
+        Served mode (`url=`) holds no lock, so there is nothing to release.
+        """
+        client, self._client = getattr(self, "_client", None), None
+        if client is not None and self._owned:
+            try:
+                client.close()
+            except Exception:                            # noqa: BLE001
+                pass                                     # already closed
+
+    def __enter__(self) -> "QdrantIndex":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
 
     # -- schema ----------------------------------------------------------
     def _has_sparse(self) -> bool:
@@ -226,26 +258,71 @@ class QdrantIndex:
 
     # -- reading ---------------------------------------------------------
     def _filter(self, sampler: Optional[str],
-                question: Optional[str] = None) -> Any:
-        """Narrow by pairing, by question, or by both.
+                question: Optional[str] = None,
+                strategy: Optional[str] = None,
+                chunk_ids: Optional[Sequence[int]] = None,
+                structured: Optional[dict[str, Any]] = None,
+                video_ids: Optional[Sequence[str]] = None) -> Any:
+        """Every narrowing, as equalities on payload the unit already carries.
 
         `sampler` matches `sampler_id` -- the pairing, `clip:text` -- because
         that is the id every recorded measurement and every stored result uses.
         `question` matches across samplers, which is the query a person makes:
-        "the text on screen", not "what the CLIP sampler said". It cannot be
-        done as a suffix match on the id, since a bare `clip` means the
-        question *is* the strategy name.
-        """
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        "the text on screen", not "what the CLIP sampler said". `strategy`
+        matches one sampler's whole output. None of the three is a prefix or
+        suffix of the id: a bare `clip` means the question *is* the strategy
+        name, so the two halves are carried as their own keys.
 
-        must = [FieldCondition(key="video_id",
-                               match=MatchValue(value=self.video_id))]
+        `chunk_ids` is the drill-down -- search, read the ids back, ask for
+        more about those -- and it is also how a *time* window is expressed,
+        because the caller resolves seconds to ids through the grid rather than
+        a span being stored a second time beside every vector.
+
+        `structured` is exact values, and is only meaningful where a shape
+        fixed the vocabulary with `one_of`. On free text one video produced
+        `cashier`, `customer` and `cashier or customer near checkout`, and a
+        filter for the first matched all three.
+        """
+        from qdrant_client.models import (FieldCondition, Filter, MatchAny,
+                                          MatchValue)
+
+        # Scope is a SET of videos: one, three, or every video is the same
+        # question asked over a different set. `None` means every video, which
+        # is why it adds no condition at all rather than defaulting to this
+        # index's own id.
+        must: list[Any] = []
+        scope = list(video_ids) if video_ids is not None else (
+            [self.video_id] if self.video_id else [])
+        if scope:
+            must.append(FieldCondition(key="video_id",
+                                       match=MatchAny(any=scope)))
         if sampler is not None:
             must.append(FieldCondition(key="sampler_id",
                                        match=MatchValue(value=sampler)))
         if question is not None:
             must.append(FieldCondition(key="question",
                                        match=MatchValue(value=question)))
+        if strategy is not None:
+            must.append(FieldCondition(key="sampler",
+                                       match=MatchValue(value=strategy)))
+        if chunk_ids:
+            must.append(FieldCondition(key="chunk_id",
+                                       match=MatchAny(any=list(chunk_ids))))
+        for field, value in (structured or {}).items():
+            # Nested payload is addressed by path, so a shape's field is
+            # filterable without a schema change -- the payload already holds
+            # the whole structured answer.
+            #
+            # A list is one condition PER element, not `MatchAny`. Qdrant
+            # matches an array field when *any* element equals the value, so N
+            # separate must-conditions mean all N are present -- which is what
+            # Postgres `structured @> {...}` means. `MatchAny` would mean *any*
+            # of them, so the two backends would answer different questions
+            # from the same request, and `speakers: [A, B]` is exactly where
+            # that shows.
+            for one in (value if isinstance(value, list) else [value]):
+                must.append(FieldCondition(key=f"structured.{field}",
+                                           match=MatchValue(value=one)))
         return Filter(must=must)
 
     def _ranks(self, query: Any, using: str, limit: int,
@@ -266,13 +343,19 @@ class QdrantIndex:
 
     def search(self, vector: Sequence[float], query: str, limit: int = 20,
                sampler: Optional[str] = None,
-               question: Optional[str] = None) -> list[dict[str, Any]]:
+               question: Optional[str] = None,
+               strategy: Optional[str] = None,
+               chunk_ids: Optional[Sequence[int]] = None,
+               structured: Optional[dict[str, Any]] = None,
+               video_ids: Optional[Sequence[str]] = None
+               ) -> list[dict[str, Any]]:
         """Dense and sparse, fused by the server with RRF."""
         from qdrant_client.models import Fusion, FusionQuery, Prefetch
 
         if not self._client.collection_exists(self.collection):
             return []
-        where = self._filter(sampler, question)
+        where = self._filter(sampler, question, strategy, chunk_ids,
+                             structured, video_ids)
         dense = list(vector)
         sparse = sparse_of(query)
 
@@ -298,6 +381,10 @@ class QdrantIndex:
             payload = point.payload or {}
             pid = str(point.id)
             hits.append({
+                # Carried, not assumed from the caller: with a scope of several
+                # videos a hit is only identifiable with it, and `to_moments`
+                # groups on (video_id, chunk_id).
+                "video_id": payload.get("video_id"),
                 "chunk_id": payload.get("chunk_id"),
                 "sampler_id": payload.get("sampler_id"),
                 "sampler": payload.get("sampler", ""),

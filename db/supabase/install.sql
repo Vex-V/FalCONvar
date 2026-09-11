@@ -305,14 +305,26 @@ create table if not exists falconvar.video_embeddings (
 -- look like the filter silently doing nothing.
 drop function if exists falconvar.search_embeddings(
   text, vector, text, text, text, int, int);
+-- ...and the signature before this one. `create or replace` cannot change a
+-- parameter list, so every widening leaves the previous overload callable --
+-- which would answer without the new filters and look like a filter silently
+-- doing nothing.
+drop function if exists falconvar.search_embeddings(
+  text, vector, text, text, text, text, int, int);
+drop function if exists falconvar.search_embeddings(
+  text, vector, text, text, text, text, text, int[], jsonb, int, int);
 
 create or replace function falconvar.search_embeddings(
   p_embedder     text,
   p_query_vector vector,
   p_query_text   text default null,
-  p_video_id     text default null,
-  p_sampler      text default null,
-  p_question     text default null,
+  p_video_ids    text[] default null, -- null = every video. One, three or all
+                                      -- is one question over a different set
+  p_sampler      text default null,   -- the PAIRING: sampler_id = 'clip:text'
+  p_question     text default null,   -- the question, whoever asked it
+  p_strategy     text default null,   -- one sampler's whole output: 'clip'
+  p_chunk_ids    int[] default null,  -- a set of chunks, for a drill-down
+  p_structured   jsonb default null,  -- exact values, e.g. {"severity":"severe"}
   p_limit        int  default 20,
   p_rrf_k        int  default 60
 )
@@ -325,7 +337,7 @@ language sql stable as $$
   with candidates as (
     select e.* from falconvar.embeddings e
     where e.embedder = p_embedder
-      and (p_video_id is null or e.video_id = p_video_id)
+      and (p_video_ids is null or e.video_id = any(p_video_ids))
       -- A filter over one shared space, not a space of its own: every row with
       -- this embedder is comparable to every other. Narrowing to one sampler
       -- asks one question's answers rather than all of them -- and gives up the
@@ -335,6 +347,22 @@ language sql stable as $$
       -- `p_sampler`: both given narrows to one pairing, which is the same as
       -- naming the pairing outright.
       and (p_question is null or e.question = p_question)
+      -- One strategy's whole output, whatever it was asked. `sampler` rather
+      -- than a prefix of `sampler_id`, because a bare id like `clip` means the
+      -- question IS the strategy name and a prefix match cannot tell them
+      -- apart.
+      and (p_strategy is null or e.sampler = p_strategy)
+      -- A set of chunks. The drill-down: search, read the ids back, then ask
+      -- for more about those. A time window is this filter too -- the caller
+      -- resolves seconds to ids through the grid, which is the one place a
+      -- span is stored.
+      and (p_chunk_ids is null or e.chunk_id = any(p_chunk_ids))
+      -- Exact structured values. Containment, so `{"severity":"severe"}` uses
+      -- the `embeddings_structured` GIN index rather than scanning. Only
+      -- meaningful where a shape fixed the vocabulary with `one_of`: on free
+      -- text one video produced `cashier`, `customer` and `cashier or customer
+      -- near checkout`, and a filter for the first matched all three.
+      and (p_structured is null or e.structured @> p_structured)
   ),
   by_vector as (
     select c.video_id, c.chunk_id, c.sampler_id,
@@ -365,11 +393,38 @@ language sql stable as $$
              websearch_to_tsquery('english', coalesce(p_query_text, ''))::text,
              '&', '|'), '')::tsquery as q
   ),
+  -- The query's own lexemes, for the floor below. Same parser, so they are
+  -- stemmed and stopword-stripped exactly as the documents were.
+  query_terms as (
+    select array_agg(lexeme) as lexemes
+    from unnest(to_tsvector('english', coalesce(p_query_text, '')))
+  ),
+  -- A FLOOR ON THE LOOSENED QUERY.
+  --
+  -- `|` was necessary: `websearch_to_tsquery` ANDs, so one word absent from the
+  -- corpus silenced the whole lexical half -- "the moment the reactor exploded"
+  -- ranked 0 rows because "moment" appears nowhere. But ANY-term over-corrects,
+  -- and it fires on a single stem collision. Measured: a query sharing *no*
+  -- content word with the corpus still matched here, promoted an unrelated
+  -- chunk to second and pushed the right answer to third, where Qdrant's half
+  -- stayed correctly silent and ranked better for it.
+  --
+  -- So: with two or more query lexemes, a row must share at least two. One
+  -- lexeme still needs one, because a single-word query has nothing else to
+  -- agree on. That keeps the partial-overlap case the `|` exists for -- "the
+  -- moment the reactor exploded" shares `reactor` and `explod`, so it still
+  -- ranks -- while a lone accidental stem no longer counts as an opinion.
   by_text as (
     select c.video_id, c.chunk_id, c.sampler_id,
            row_number() over (order by ts_rank_cd(c.fts, o.q) desc) as rank
-    from candidates c cross join query_or o
-    where o.q is not null and c.fts @@ o.q
+    from candidates c
+    cross join query_or o
+    cross join query_terms t
+    where o.q is not null
+      and c.fts @@ o.q
+      and (select count(*) from unnest(c.fts) d
+            where d.lexeme = any(t.lexemes))
+          >= least(2, coalesce(cardinality(t.lexemes), 1))
     limit greatest(p_limit * 4, 40)
   ),
   fused as (
@@ -397,9 +452,57 @@ language sql stable as $$
     and c.sampler_id = f.sampler_id
   left join falconvar.chunks k
     on k.video_id = f.video_id and k.chunk_id = f.chunk_id
-  order by f.score desc
+  -- Deterministic. RRF ties are exact and common -- dense 1 / text 2 and
+  -- dense 2 / text 1 are both 1/61 + 1/62 -- and `order by score` alone left
+  -- the winner to whatever order the planner produced. The vector rank breaks
+  -- it, because that half has an opinion on every query where the lexical one
+  -- does not, and the two backends now agree rather than flipping a coin
+  -- opposite ways.
+  order by f.score desc,
+           f.vector_rank asc nulls last,
+           f.video_id, f.chunk_id, f.sampler_id
   limit p_limit;
 $$;
+
+-- ===========================================================================
+-- 9b · prompts -- what a question actually said, at the version it was asked.
+--
+-- Provenance, not configuration. `data/prompts.json` stays authoritative:
+-- `library.load()` is on the path of every describe call, so a round trip here
+-- would put a network failure in the stage that costs money -- and a component
+-- has to run with no database configured at all.
+--
+-- What this answers is the thing nothing else can. `descriptions.model` records
+-- {question: hash}, so a reader can *detect* that an answer came from a
+-- different prompt version, but not recover what that version said: edit an
+-- instruction and the old text is gone. Keyed by (name, version) and written
+-- when a run uses it, so the instruction and shape behind any description stay
+-- recoverable.
+--
+-- **Never deleted.** Removing a question does not orphan the descriptions that
+-- point at its hash -- the same reason `descriptions` carries no foreign key to
+-- `videos`.
+-- ===========================================================================
+create table if not exists falconvar.prompts (
+  name        text not null,
+  version     text not null,          -- prompts.version_of(): instruction+shape+system
+  instruction text not null,
+  shape       jsonb not null default '{}'::jsonb,
+  summary     text not null default 'standard',
+  builtin     boolean not null default false,
+  about       text,
+  first_seen  timestamptz not null default now(),
+  primary key (name, version)
+);
+
+-- Added after first deployment, so each needs its own `alter`: `create table
+-- if not exists` is a no-op on a table that already exists, and a column
+-- declared only inside the `create` is absent on every database that had it.
+alter table falconvar.prompts add column if not exists about text;
+alter table falconvar.prompts add column if not exists summary text
+  not null default 'standard';
+
+create index if not exists prompts_name on falconvar.prompts (name, first_seen desc);
 
 -- ===========================================================================
 -- 10 · row level security, and grants.
@@ -420,6 +523,7 @@ alter table falconvar.descriptions       enable row level security;
 alter table falconvar.embeddings         enable row level security;
 alter table falconvar.aggregates         enable row level security;
 alter table falconvar.video_embeddings   enable row level security;
+alter table falconvar.prompts            enable row level security;
 
 do $$
 declare t text;
@@ -427,7 +531,7 @@ begin
   foreach t in array array[
     'videos','timelines','chunks','cuts','transcripts','transcript_chunks',
     'manifests','chunk_samplers','descriptions','embeddings','aggregates',
-    'video_embeddings'
+    'video_embeddings','prompts'
   ] loop
     execute format('drop policy if exists "public read" on falconvar.%I', t);
     execute format(
@@ -438,7 +542,8 @@ end $$;
 grant select on all tables in schema falconvar to anon, authenticated;
 grant all    on all tables in schema falconvar to service_role;
 grant execute on function falconvar.search_embeddings(
-  text, vector, text, text, text, text, int, int) to anon, authenticated, service_role;
+  text, vector, text, text[], text, text, text, int[], jsonb, int, int)
+  to anon, authenticated, service_role;
 
 -- Anything created later gets the same treatment without re-running the grants.
 alter default privileges in schema falconvar

@@ -1,0 +1,188 @@
+/* Black and white only.
+ *
+ * State is carried by fill and rule -- a filled chip is running, a hairline
+ * chip is idle -- so nothing depends on a hue the palette does not have, and
+ * `[data-theme="dark"]` inverts every token rather than restating a palette.
+ */
+
+:root {
+  --ink: #111;
+  --paper: #fff;
+  --rule: #d8d8d8;
+  --quiet: #666;
+  --hush: #f6f6f6;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #eee; --paper: #111; --rule: #333; --quiet: #999; --hush: #1a1a1a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ink: #eee; --paper: #111; --rule: #333; --quiet: #999; --hush: #1a1a1a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 18px;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  z-index: 5;
+}
+
+h1 { font-size: 15px; margin: 0; letter-spacing: .12em; text-transform: uppercase; }
+h2 { font-size: 13px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--quiet); }
+h3 { font-size: 13px; margin: 16px 0 6px; }
+
+nav { display: flex; gap: 4px; }
+
+nav button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--quiet);
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+  border-radius: 2px;
+}
+nav button[aria-selected="true"] { border-color: var(--rule); color: var(--ink); background: var(--hush); }
+
+.spacer { flex: 1; }
+
+main { padding: 18px; max-width: 1500px; }
+
+.cols { display: grid; grid-template-columns: 230px 1fr; gap: 18px; align-items: start; }
+/* The component list is a menu and fits 230px. A table of questions is not:
+ * at 230px it overflowed its panel and collided with the form beside it. */
+.cols.wide { grid-template-columns: minmax(380px, 46%) 1fr; }
+@media (max-width: 1100px) { .cols, .cols.wide { grid-template-columns: 1fr; } }
+
+.panel { border: 1px solid var(--rule); border-radius: 3px; padding: 14px; }
+
+/* the component list ---------------------------------------------------- */
+
+ol.steps { list-style: none; margin: 0; padding: 0; }
+ol.steps li { margin-bottom: 2px; }
+
+ol.steps button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink);
+  padding: 7px 9px;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+ol.steps button[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+ol.steps .n { font: 11px var(--mono); opacity: .6; min-width: 12px; }
+ol.steps .mark { margin-left: auto; font: 11px var(--mono); opacity: .75; }
+
+/* forms ------------------------------------------------------------------ */
+
+.field { margin-bottom: 11px; }
+.field label { display: block; font-size: 12px; margin-bottom: 3px; }
+.field .hint { color: var(--quiet); font: 11px var(--mono); margin-left: 6px; }
+
+input[type=text], input[type=number], select, textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px var(--mono);
+}
+textarea { min-height: 70px; resize: vertical; line-height: 1.45; }
+input[type=checkbox] { width: auto; }
+
+button.go {
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font: inherit;
+}
+button.go[disabled] { opacity: .4; cursor: default; }
+
+button.small {
+  background: none; border: 1px solid var(--rule); border-radius: 2px;
+  color: var(--ink); padding: 3px 9px; cursor: pointer; font: 12px inherit;
+}
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* output ----------------------------------------------------------------- */
+
+pre.out {
+  background: var(--hush);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 12px;
+  overflow-x: auto;
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.chip {
+  display: inline-block;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  padding: 1px 8px;
+  font: 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+/* Filled means running or done-with-work; hairline means idle. No hue. */
+.chip.on { background: var(--ink); color: var(--paper); }
+.chip.bad { background: var(--ink); color: var(--paper); text-decoration: line-through; }
+
+.note { color: var(--quiet); font-size: 12px; margin: 6px 0 0; }
+.err { border-left: 3px solid var(--ink); padding-left: 10px; }
+
+table { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+th, td { border-bottom: 1px solid var(--rule); padding: 5px 7px; text-align: left; vertical-align: top; }
+th { color: var(--quiet); font-weight: normal; text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+td.wrap { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 480px; }
+
+.scroll { overflow-x: auto; }
+
+.frames { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.frames figure { margin: 0; width: 130px; }
+.frames img { width: 100%; border: 1px solid var(--rule); border-radius: 2px; display: block; }
+.frames figcaption { font: 10px var(--mono); color: var(--quiet); padding-top: 2px; }
+
+.fieldrow {
+  display: grid;
+  grid-template-columns: 130px 90px 1fr 1fr 28px;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+@media (max-width: 900px) { .fieldrow { grid-template-columns: 1fr; } }
+
+details { border: 1px solid var(--rule); border-radius: 3px; padding: 8px 12px; margin-bottom: 10px; }
+summary { cursor: pointer; font-size: 12px; color: var(--quiet); }

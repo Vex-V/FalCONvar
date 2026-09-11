@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
-    from .perception.descriptors import RegionDescriptor
     from .perception.detectors import ObjectDetector
 
 

@@ -12,7 +12,7 @@
 # The pipeline takes any video as an argument; nothing here is required to
 # run it. Model weights are downloaded on first use by ultralytics/HF.
 # ---------------------------------------------------------------------------
-/media/
+/samples/
 /weights/
 *.mp4
 *.mov

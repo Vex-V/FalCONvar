@@ -7,7 +7,7 @@ first.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 from ..shared import paths, sinks
 from ..shared.documents import Aggregate, Produced

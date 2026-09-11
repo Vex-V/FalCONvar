@@ -17,7 +17,7 @@ under every policy.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from ..shared.documents import Cuts, RawTranscript
 
