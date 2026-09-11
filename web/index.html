@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FalCONvar</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ctext y=%2713%27 font-size=%2713%27%3E%E2%97%89%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header>
+  <h1>FalCONvar</h1>
+  <nav id="tabs">
+    <button data-tab="run" aria-selected="true">Run</button>
+    <button data-tab="prompts" aria-selected="false">Prompts</button>
+    <button data-tab="search" aria-selected="false">Search</button>
+    <button data-tab="data" aria-selected="false">Data</button>
+  </nav>
+  <span class="spacer"></span>
+  <div class="row">
+    <label for="video" style="font-size:12px">video</label>
+    <select id="video" style="width:auto;min-width:170px"></select>
+    <button class="small" id="refresh">reload</button>
+    <span id="video-facts" class="hint"></span>
+  </div>
+</header>
+
+<main>
+
+<!-- ------------------------------------------------------------------ run -->
+<section id="tab-run">
+  <div class="cols">
+    <div class="panel">
+      <h2>Components</h2>
+      <ol class="steps" id="steps"></ol>
+      <p class="note" id="plan-note"></p>
+    </div>
+
+    <div>
+      <div class="panel" id="params-panel">
+        <h2 id="params-title">Parameters</h2>
+        <div id="params"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="go" id="run">Run</button>
+          <span id="run-state"></span>
+        </div>
+        <p class="note" id="params-note"></p>
+      </div>
+
+      <div class="panel" style="margin-top:18px">
+        <h2>Output</h2>
+        <pre class="out" id="output">Pick a component and run it.</pre>
+        <div id="artifacts"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- prompts -->
+<section id="tab-prompts" hidden>
+  <div class="cols wide">
+    <div class="panel">
+      <h2>Questions</h2>
+      <div class="scroll" id="prompt-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Add a question</h2>
+
+      <div class="field">
+        <label for="p-name">name <span class="hint">lowercase, no colon</span></label>
+        <input type="text" id="p-name" placeholder="safety">
+      </div>
+
+      <div class="field">
+        <label for="p-instruction">instruction
+          <span class="hint">may use {n} {span} {vocabulary}</span></label>
+        <textarea id="p-instruction">These {n} frames span {span}. </textarea>
+      </div>
+
+      <div class="field">
+        <label for="p-about">about <span class="hint">a note for whoever reads the list</span></label>
+        <input type="text" id="p-about">
+      </div>
+
+      <div class="field">
+        <label>answer shape</label>
+        <div class="row">
+          <label><input type="radio" name="p-mode" value="named" checked> a shipped shape</label>
+          <label><input type="radio" name="p-mode" value="custom"> my own fields</label>
+        </div>
+      </div>
+
+      <div class="field" id="p-shape-wrap">
+        <label for="p-shape">shape</label>
+        <select id="p-shape"></select>
+        <p class="note" id="p-shape-fields"></p>
+      </div>
+
+      <div id="p-custom-wrap" hidden>
+        <div class="field">
+          <label for="p-summary">summary style</label>
+          <select id="p-summary">
+            <option value="standard">standard &mdash; at least 150 words</option>
+            <option value="brief">brief &mdash; 4 to 5 sentences</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>fields</label>
+          <div class="fieldrow" style="color:var(--quiet);font-size:11px">
+            <span>name</span><span>type</span><span>about</span>
+            <span>of / one_of</span><span></span>
+          </div>
+          <div id="p-fields"></div>
+          <button class="small" id="p-add-field" type="button">+ field</button>
+          <p class="note">
+            <code>list</code> + <b>of</b> <code>key: description, key: description</code>
+            makes each entry an object.<br>
+            <code>text</code> or <code>list</code> + <b>one_of</b>
+            <code>low, medium, high</code> fixes the vocabulary &mdash; the only
+            way a structured value becomes filterable.
+          </p>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <button class="go" id="p-save">Create</button>
+        <span id="p-state"></span>
+      </div>
+      <pre class="out" id="p-out" style="margin-top:12px" hidden></pre>
+    </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- search -->
+<section id="tab-search" hidden>
+  <div class="panel">
+    <h2>Search</h2>
+
+    <div class="field">
+      <label for="s-query">query</label>
+      <input type="text" id="s-query" placeholder="the moment the reactor exploded">
+    </div>
+
+    <div class="row">
+      <div class="field" style="flex:2;min-width:240px">
+        <label>scope <span class="hint">which videos &mdash; none selected means all</span></label>
+        <div class="row" id="s-scope" style="gap:12px"></div>
+      </div>
+      <div class="field" style="width:150px">
+        <label for="s-level">level</label>
+        <select id="s-level">
+          <option value="moment">moment &mdash; rank chunks</option>
+          <option value="video">video &mdash; rank videos</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1;min-width:130px">
+        <label for="s-index">index</label><select id="s-index"></select>
+      </div>
+      <div class="field" style="width:95px">
+        <label for="s-moments">results</label>
+        <input type="number" id="s-moments" value="5" min="1" max="50">
+      </div>
+      <div class="field" style="width:110px">
+        <label for="s-candidates">candidates <span class="hint">depth</span></label>
+        <input type="number" id="s-candidates" value="20" min="1" max="500">
+      </div>
+    </div>
+
+    <details open id="s-filters">
+      <summary>Narrow it &mdash; every filter the route takes (moment level only)</summary>
+      <div class="row" style="margin-top:10px">
+        <div class="field" style="flex:1;min-width:150px">
+          <label for="s-question">question <span class="hint">across samplers</span></label>
+          <select id="s-question"></select>
+        </div>
+        <div class="field" style="flex:1;min-width:150px">
+          <label for="s-strategy">strategy <span class="hint">whole output</span></label>
+          <select id="s-strategy"></select>
+        </div>
+        <div class="field" style="flex:1;min-width:150px">
+          <label for="s-sampler">sampler <span class="hint">one pairing</span></label>
+          <input type="text" id="s-sampler" placeholder="clip:hazards">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:1;min-width:150px">
+          <label for="s-chunks">chunk ids <span class="hint">drill-down</span></label>
+          <input type="text" id="s-chunks" placeholder="4,6">
+        </div>
+        <div class="field" style="width:100px">
+          <label for="s-window">window <span class="hint">&plusmn;N</span></label>
+          <input type="number" id="s-window" value="0" min="0" max="20">
+        </div>
+        <div class="field" style="width:110px">
+          <label for="s-after">after <span class="hint">s</span></label>
+          <input type="number" id="s-after" step="any">
+        </div>
+        <div class="field" style="width:110px">
+          <label for="s-before">before <span class="hint">s</span></label>
+          <input type="number" id="s-before" step="any">
+        </div>
+      </div>
+      <div class="field">
+        <label>structured <span class="hint">only fields whose values are a vocabulary</span></label>
+        <div class="row" id="s-structured"></div>
+      </div>
+    </details>
+
+    <div class="row" style="margin-top:10px">
+      <button class="go" id="s-go">Search</button>
+      <button class="small" id="s-clear" type="button">clear filters</button>
+      <span id="s-state"></span>
+    </div>
+    <p class="note">
+      Scope is a set: one video, three, or all of them is the same question over
+      a different set. <code>level=video</code> ranks whole videos by their
+      summary instead of chunks &mdash; one endpoint, never one ranking, because
+      a whole-video &ldquo;moment&rdquo; is not something you can play.<br>
+      A score is a rank fusion, not a similarity:
+      <code>1/(k+best) + 0.5/(k+second)</code> at k=10. A nonsense query scores
+      like a good one, so read the <b>ranks</b>; <code>text&nbsp;&ndash;</code>
+      means the lexical half was silent.
+    </p>
+    <div id="s-results" style="margin-top:12px"></div>
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------------- data -->
+<section id="tab-data" hidden>
+  <div class="panel">
+    <h2>Database</h2>
+    <div id="db-status"></div>
+    <div class="row" style="margin-top:12px">
+      <div class="field" style="flex:1;min-width:200px">
+        <label for="d-table">table</label><select id="d-table"></select>
+      </div>
+      <div class="field" style="width:110px">
+        <label for="d-limit">limit</label>
+        <input type="number" id="d-limit" value="25" min="1" max="1000">
+      </div>
+      <div class="field" style="width:150px">
+        <label for="d-heavy">&nbsp;</label>
+        <label><input type="checkbox" id="d-heavy"> include heavy</label>
+      </div>
+      <div class="field" style="width:150px">
+        <label for="d-thisvideo">&nbsp;</label>
+        <label><input type="checkbox" id="d-thisvideo" checked> this video only</label>
+      </div>
+      <button class="go" id="d-go" style="height:34px">Query</button>
+    </div>
+    <p class="note" id="d-about"></p>
+    <div id="d-results" style="margin-top:10px"></div>
+  </div>
+</section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
