@@ -10,6 +10,8 @@ Three shapes of route:
 
 `browse.router` adds a fourth thing to read: the rows themselves, filtered and
 paged, which is the question shape a whole-document download cannot answer.
+`web/` is mounted at `/app` when it exists -- static files, no build step,
+generating every form from `/capabilities` rather than restating it.
 
 `workflow.validate` answers synchronously, so a contradictory request is a 422
 rather than a job that fails a minute later. `docs/ROUTES.md` records the rest
@@ -26,6 +28,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from api import browse, service
@@ -180,18 +183,34 @@ def run_component(video_id: str, component: str,
 # ------------------------------------------------------------------ prompts
 
 class PromptRequest(BaseModel):
-    """A custom question: what to ask, and which shape to answer in.
+    """A custom question: what to ask, and what shape to answer in.
 
-    No schema field. A question picks an existing shape rather than defining
-    one, so adding a question is writing prose -- and so ownership of a key
-    like `people` stays a property of the shipped shapes rather than something
-    an HTTP request can rearrange.
+    Two ways to answer the second half. Name a shipped shape with `shape`, or
+    bring your own with `fields` -- which wins when both are given.
+
+    `fields` is a builder, not a JSON Schema. The schema reaches the API with
+    `strict: true`, whose subset is narrow, so it is *generated* from the
+    builder: a raw schema over HTTP could express something the model API
+    refuses, and that failure would land after the frames are read with the
+    call about to be paid for.
+
+    Shipped shapes stay shipped: a custom shape cannot take a built-in shape's
+    name, and none of them can claim `fallback`.
     """
 
     name: str = Field(..., description="lowercase, no colon: `sampler:question` splits on one")
     instruction: str = Field(..., description="may use {n}, {span}, {vocabulary}")
-    shape: str = Field("scene", description="a name from /prompts.shapes")
+    shape: str = Field("scene", description="a name from /prompts.shapes. "
+                                            "Ignored when `fields` is given")
     about: str = Field("", description="a note for whoever reads the list later")
+    fields: Optional[dict[str, Any]] = Field(
+        None, description="bring your own shape: {name: {type, about}} where "
+                          "type is 'text' or 'list'. Add `of` "
+                          "({key: description}) to make each list entry an "
+                          "object, or `one_of` ([...]) to fix the vocabulary")
+    summary: str = Field("standard", description="with `fields`: 'standard' "
+                                                 "(>=150 words) or 'brief' "
+                                                 "(4-5 sentences)")
 
 
 @app.get("/prompts", tags=["prompts"])
@@ -219,7 +238,9 @@ def add_prompt(request: PromptRequest) -> dict[str, Any]:
     """
     try:
         return service.prompt_add(request.name, request.instruction,
-                                  shape=request.shape, about=request.about)
+                                  shape=request.shape, about=request.about,
+                                  fields=request.fields,
+                                  summary=request.summary)
     except library.Protected as exc:
         # 409, not 422: the request is well-formed and the name exists. There
         # is nothing to correct except which name it asks for.
@@ -329,8 +350,22 @@ def frame(video_id: str, index: int) -> FileResponse:
 # ----------------------------------------------------------------- searching
 
 class SearchRequest(BaseModel):
+    """One search. The scope is a SET of videos, and `level` picks granularity.
+
+    There is no second endpoint for "search every video" or for "which video":
+    one video, three, or all of them is the same question asked over a
+    different set, and a set of one is not a special case.
+    """
+
     query: str
-    video_id: str
+    video_ids: Optional[list[str]] = Field(
+        None, description="which videos to search. Omit for every video")
+    video_id: Optional[str] = Field(
+        None, description="shorthand for a scope of one. `video_ids` wins")
+    level: str = Field(
+        "moment", description="`moment` ranks chunks within the scope; "
+                              "`video` ranks whole videos by their summary. "
+                              "The moment filters do not apply to `video`")
     moments: int = 5
     sampler: Optional[str] = Field(
         None, description="narrow to one pairing, e.g. `clip:text`")
@@ -339,6 +374,29 @@ class SearchRequest(BaseModel):
                           "asked it, e.g. `text`. Either filter gives up the "
                           "agreement signal: a chunk contributes fewer terms, "
                           "so scores fall")
+    strategy: Optional[str] = Field(
+        None, description="one sampler's whole output, whatever it was asked, "
+                          "e.g. `clip`. Not a prefix of `sampler`: a bare id "
+                          "like `clip` means the question IS the strategy name")
+    chunk_ids: Optional[list[int]] = Field(
+        None, description="narrow to a set of chunks. The drill-down: search, "
+                          "read the ids back, then ask for more about those")
+    window: int = Field(
+        0, ge=0, le=20,
+        description="widen `chunk_ids` by this many neighbours each side -- "
+                    "`more context around chunk 6` is usually 5, 6, 7")
+    after: Optional[float] = Field(
+        None, description="seconds. Resolved to chunk ids through the grid, "
+                          "which is the one place a span is stored")
+    before: Optional[float] = Field(None, description="seconds")
+    structured: Optional[dict[str, Any]] = Field(
+        None, description="exact structured values, e.g. "
+                          "{\"severity\": \"severe\"}. Only meaningful where "
+                          "a shape fixed the vocabulary with `one_of`")
+    candidates: int = Field(
+        20, ge=1, le=500,
+        description="units ranked per half before they are fused. Deeper is a "
+                    "better fusion and a slower query")
     embedder: str = workflow.Options.embedder
     index: str = workflow.Options.index
     model: Optional[str] = None
@@ -346,23 +404,75 @@ class SearchRequest(BaseModel):
 
 @app.post("/search", tags=["search"])
 def search(request: SearchRequest) -> dict[str, Any]:
-    """Ranked moments. Immediate -- one embedding call and one query.
+    """Search. Immediate -- one embedding call and one query.
+
+    **Scope is a set.** `video_ids` names the videos to search; omitting it
+    searches every one. A single `video_id` is the one-element shorthand, not a
+    different route -- searching one video, three, or all of them is the same
+    question over a different set.
+
+    **`level` picks granularity.** `moment` ranks chunks and honours every
+    filter; `video` ranks whole videos by their summary out of
+    `video_embeddings`, which answers *which video* rather than *which twenty
+    seconds*. They are one endpoint but never one ranking: a whole-video
+    "moment" beside real ones is a result nobody can play.
 
     The query is embedded with the embedder named here, which must be the one
     that built the index: a mismatch across widths fails loudly, but two models
     of the same width return a well-formed ranking that means nothing.
     """
+    if request.level not in ("moment", "video"):
+        raise HTTPException(422, {"error": f"unknown level {request.level!r}",
+                                  "known": ["moment", "video"]})
+    scope = request.video_ids
+    if scope is None and request.video_id:
+        scope = [request.video_id]
+
+    if request.level == "video":
+        # The moment filters narrow inside a video, so they have nothing to say
+        # about which video. Said out loud rather than ignored.
+        ignored = [name for name, value in
+                   (("sampler", request.sampler), ("question", request.question),
+                    ("strategy", request.strategy), ("chunk_ids", request.chunk_ids),
+                    ("after", request.after), ("before", request.before),
+                    ("structured", request.structured)) if value]
+        try:
+            found = service.search_videos(request.query,
+                                          embedder=request.embedder,
+                                          model=request.model,
+                                          limit=request.moments)
+        except Exception as exc:                          # noqa: BLE001
+            raise HTTPException(422, {"error": f"{type(exc).__name__}: {exc}"}) from None
+        if scope:
+            found = [v for v in found if v["video_id"] in scope]
+        out: dict[str, Any] = {"query": request.query, "level": "video",
+                               "scope": scope, "videos": found}
+        if not found:
+            out["note"] = ("nothing in video_embeddings for this embedder -- "
+                           "run `aggregate --tier llm`, then "
+                           "`embed --index supabase`")
+        if ignored:
+            out["ignored"] = (f"{', '.join(ignored)} narrow inside a video, so "
+                              "they do not apply to level=video")
+        return out
+
     try:
-        found = service.search(request.query, request.video_id,
+        found = service.search(request.query, video_ids=scope,
                                embedder=request.embedder, model=request.model,
                                moments=request.moments, sampler=request.sampler,
                                question=request.question,
+                               strategy=request.strategy,
+                               chunk_ids=request.chunk_ids,
+                               window=request.window,
+                               after=request.after, before=request.before,
+                               structured=request.structured,
+                               candidates=request.candidates,
                                index_name=request.index)
     except FileNotFoundError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, {"error": str(exc)}) from None
-    return {"query": request.query, "video_id": request.video_id,
+    return {"query": request.query, "level": "moment", "scope": scope,
             "moments": found}
 
 
@@ -375,10 +485,41 @@ app.include_router(browse.router)
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    """The schema, because that is the whole surface there is.
+    """The app when there is one, the schema otherwise.
 
-    This used to redirect to a static client at `/app`; that client is gone, so
-    a bare root has one honest destination left. A 404 here would be correct
-    and useless -- `/docs` is what someone opening the host in a browser wants.
+    Decided from the directory rather than assumed: `web/` is optional, and a
+    redirect to a mount that does not exist is a 404 that reads as breakage
+    rather than as a client nobody installed.
     """
-    return RedirectResponse("/docs")
+    return RedirectResponse("/app/" if WEB.exists() else "/docs")
+
+
+WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+class Client(StaticFiles):
+    """The web app, revalidated on every load.
+
+    `StaticFiles` sends `last-modified` and no `Cache-Control`, which leaves a
+    browser free to guess a freshness lifetime from the file's age -- and it
+    does. Measured here: an edited `app.js` was served from disk cache without
+    a request, so the page ran the previous version and the fault looked like
+    the *new* code being wrong. `no-cache` still allows a 304; it only forbids
+    answering without asking.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = "no-cache"
+        return response
+
+
+if WEB.exists():
+    # Mounted last, and under a prefix. `html=True` serves `index.html` for the
+    # directory, so `/app/` is the page.
+    #
+    # A prefix rather than `/`: a mount at the root shadows nothing already
+    # declared, but it would make every future route a question of whether a
+    # file of that name exists, and a 404 from a static directory reads as a
+    # missing page rather than a missing route.
+    app.mount("/app", Client(directory=WEB, html=True), name="app")

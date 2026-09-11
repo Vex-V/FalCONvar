@@ -12,7 +12,7 @@ Rewritten whole each time, so it cannot hold a stale unit.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Sequence
 
 from ...shared import paths, sinks
 from ...shared.documents import Embedded

@@ -21,7 +21,7 @@ also occurs inside values and made field boundaries invisible.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from ...shared.documents import Descriptions, Transcript, fingerprint_of
 
@@ -136,4 +136,36 @@ def from_transcript(document: Transcript) -> list[Unit]:
     return units
 
 
-__all__ = ["Unit", "render", "from_descriptions", "from_transcript"]
+def from_summary(video_id: str, payload: dict[str, Any]) -> Optional[Unit]:
+    """The whole video as one unit, from the `summary` aggregate.
+
+    **Kept apart from the chunk units, in its own table.** `embeddings` answers
+    *which twenty seconds*; a summary answers *which video*, and a video is not
+    a moment you can play. Mixing them would return a whole-video "moment"
+    beside real ones in every search, and it would need a sentinel `chunk_id`
+    to sit in a table keyed by one.
+
+    Only the final summary, never the intermediate layers. A leaf summary
+    covers a real span and is worth keeping as a record, but indexing the
+    layers would return the same moment two or three times over under
+    different wordings -- the count bias the moment aggregation guards against,
+    one level up.
+
+    `chunk_id = -1` marks it as not-a-chunk for anything that reads a Unit
+    generically; nothing keyed by chunk ever sees it, because this goes to its
+    own table.
+    """
+    summary = (payload.get("summary") or "").strip()
+    if not summary:
+        return None
+    # The same three-level render as a chunk unit, so the text a video is
+    # found by is built exactly like the text a moment is found by.
+    structured = {key: payload[key] for key in ("topics", "setting", "notable")
+                  if payload.get(key)}
+    content = render(summary, structured)
+    return Unit(video_id, -1, "summary", content, structured,
+                sampler="summary", question="summary")
+
+
+__all__ = ["Unit", "render", "from_descriptions", "from_summary",
+           "from_transcript"]

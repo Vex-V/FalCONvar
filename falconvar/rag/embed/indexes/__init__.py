@@ -74,6 +74,10 @@ class VectorIndex(Protocol):
     def save(self) -> Any: ...
     def search(self, vector: Sequence[float], query: str, limit: int = 20,
                sampler: Optional[str] = None) -> list[dict[str, Any]]: ...
+    #: Release whatever the backend holds. A no-op for a REST backend; for
+    #: embedded Qdrant it gives back an exclusive folder lock that would
+    #: otherwise outlive the request and fail every later one.
+    def close(self) -> None: ...
 
 
 def build(name: str, video_id: str, embedder_key: str, **kwargs) -> VectorIndex:
@@ -82,6 +86,21 @@ def build(name: str, video_id: str, embedder_key: str, **kwargs) -> VectorIndex:
     module_name, class_name = _BACKENDS[name][0].split(":")
     module = importlib.import_module(f".{module_name}", __package__)
     return getattr(module, class_name)(video_id, embedder_key, **kwargs)
+
+
+def release(index: Any) -> None:
+    """Close an index if its backend has anything to release.
+
+    Called from a `finally` rather than left to refcounting: an exception
+    holding a traceback frame keeps the index alive, which is exactly the case
+    where the next request needs the lock back.
+    """
+    closer = getattr(index, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:                                # noqa: BLE001
+            pass
 
 
 def has_lexical(name: str) -> bool:
@@ -94,4 +113,4 @@ def available() -> list[str]:
 
 
 __all__ = ["STOPWORDS", "VectorIndex", "available", "build", "has_lexical",
-           "tokenize"]
+           "release", "tokenize"]
