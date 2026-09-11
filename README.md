@@ -21,9 +21,9 @@ and is also how a schema change is applied — re-run the whole thing.
 ## Quickstart
 
 ```bash
-python -m falconvar.workflow media/video.mp4 --policy vad --sampler clip,yolo:overview
+python -m falconvar.workflow samples/video.mp4 --policy vad --sampler clip,yolo:overview
 python -m falconvar.rag.retrieve "the moment the reactor exploded" video
-python -m uvicorn api.main:app --port 8000     # /docs for the schema; / redirects there
+python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
 ```
 
 ## The pipeline
@@ -83,7 +83,7 @@ length is merged into the one before it. A floor above the ceiling is refused.
 Per-stage tuning lives on these, not on `workflow`.
 
 ```bash
-python -m falconvar.media media/x.mp4
+python -m falconvar.media samples/x.mp4
 python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
 python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
 python -m falconvar.boundaries <id> --calibrate            # what each threshold costs
@@ -161,7 +161,20 @@ Descriptions and transcript chunks both become units in one index, keyed
 python -m falconvar.rag.retrieve "..." <id>
 python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
 python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
+python -m falconvar.rag.retrieve "..." <id> --strategy clip       # one sampler's output
+python -m falconvar.rag.retrieve "..." <id> --chunks 4,6 --window 1   # drill-down
+python -m falconvar.rag.retrieve "..." <id> --after 90 --before 130   # a time window
+python -m falconvar.rag.retrieve "..." <id> --where severity=severe   # a fixed vocabulary
 ```
+
+A time window is resolved to chunk ids through the grid, so a span is stored in
+one place and both backends get one filter. `--where` only means something
+where a shape fixed the values with `one_of`.
+
+`POST /search` takes `video_ids` as its scope — omit it for every video, name
+one, or name three; a set of one is not a special case. `level: "video"` ranks
+whole videos by their summary out of `video_embeddings` instead of ranking
+chunks.
 
 Ranking is RRF twice: a dense and a lexical ranking fused per unit, then the
 units of a chunk fused into a moment as `1/(k+best) + 0.5/(k+second)` at k=10.
@@ -186,7 +199,12 @@ whose input is missing is skipped with the reason rather than failing.
 
 ## The API
 
-20 routes. `python -m uvicorn api.main:app --port 8000`, then `/docs`.
+21 routes. `python -m uvicorn api.main:app --port 8000`, then `/` for the
+client or `/docs` for the schema.
+
+The client is three files under `web/` with no build step. Every parameter
+form is generated from `/capabilities`, so nothing about the pipeline is
+written down twice.
 
 Two ways to run a video, and the choice is about how much you want to tune:
 
@@ -244,6 +262,7 @@ falconvar/
   rag/retrieve/   10
   aggregate/       9  statistics/ · model/ · llm/
 api/               HTTP: routes, dispatch, one background worker, db reads
+web/               the client at /app: one page, no build step
 recovery/          STANDALONE: rebuild a store from a manifest + the video
 db/
   supabase/        install.sql · reset.sql

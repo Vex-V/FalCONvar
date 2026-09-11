@@ -15,7 +15,6 @@ from .base import Sampler
 if TYPE_CHECKING:
     from .perception.descriptors import RegionDescriptor
     from .perception.detectors import ObjectDetector
-    from .perception.embedders import FrameEmbedder
 
 
 class DetectionChangeSampler(Sampler):

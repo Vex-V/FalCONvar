@@ -13,7 +13,7 @@ A track below `SILENCE_RMS` gets no model at all and says so.
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from typing import Optional
 
 from ..shared.documents import RawTranscript
 from . import source

@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np

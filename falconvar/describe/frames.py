@@ -13,8 +13,7 @@ frames it claims is indistinguishable from a correct one once written down.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..shared import paths
 from ..shared.documents import Manifest

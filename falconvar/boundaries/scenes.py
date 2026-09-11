@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import time
 from fractions import Fraction
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import av
 
