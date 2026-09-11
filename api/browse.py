@@ -49,6 +49,7 @@ TABLES: dict[str, str] = {
     "embeddings": "the text that went into the index, and the vector it became",
     "aggregates": "video-level answers, one row per aggregator",
     "video_embeddings": "empty by design: nothing writes it yet. See CLAUDE.md",
+    "prompts": "what each question said, at the version a run asked it under",
 }
 
 #: Columns not worth sending unless they are asked for. A 1536-wide vector and
@@ -70,6 +71,8 @@ ORDER: dict[str, tuple[str, ...]] = {
     "descriptions": ("video_id", "chunk_id", "sampler_id"),
     "embeddings": ("video_id", "chunk_id", "sampler_id"),
     "aggregates": ("video_id", "aggregate_id"),
+    # Not keyed by a video at all: name, then newest version first.
+    "prompts": ("name",),
 }
 
 #: The PostgREST operators a client may name. An allowlist rather than a
@@ -151,8 +154,14 @@ def status() -> dict[str, Any]:
     try:
         api = db.client(write=False)
         for table in TABLES:
-            found = (api.table(table).select("video_id", count="exact")
-                     .limit(1).execute())
+            # `*` with `head`, not a named column. Counting by `video_id`
+            # assumed every table is keyed by a video, and `prompts` is not --
+            # it is keyed by (name, version), so naming that column returned
+            # `42703 column prompts.video_id does not exist` and took the whole
+            # endpoint down with it. `head` asks for the count and no rows, so
+            # `*` costs nothing even on a table carrying a 1536-wide vector.
+            found = (api.table(table).select("*", count="exact", head=True)
+                     .execute())
             counts[table] = found.count
     except db.DatabaseUnavailable as exc:
         return {"configured": False, "reachable": False, "schema": db.SCHEMA,

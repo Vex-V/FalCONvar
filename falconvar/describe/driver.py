@@ -8,7 +8,7 @@ from ..boundaries import load as load_timeline
 from ..video import load as load_manifest
 from ..shared import env, paths, sinks
 from ..shared.documents import Descriptions, Produced
-from . import base, prompts
+from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
 
@@ -57,8 +57,51 @@ def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
         video_id=video_id, component="describe", backend=",".join(written),
         artifacts={"descriptions": written.get("file", "")},
         stats={**document.stats, "describer": describer,
-               "model": document.model.get("model", describer)},
+               "model": document.model.get("model", describer),
+               **_record_prompts(document.model.get("prompts") or {}, sink)},
     )
+
+
+def _record_prompts(versions: dict[str, str],
+                    sink: str | Sequence[str]) -> dict[str, object]:
+    """Append what each question said, at the version this run asked it under.
+
+    `descriptions.model` already records `{question: hash}`, which lets a
+    reader *detect* that an answer came from a different prompt version. It
+    cannot recover what that version said -- edit an instruction and the old
+    text is gone -- so the row is what makes a description's provenance
+    readable rather than merely comparable.
+
+    Best-effort and after the descriptions are written, exactly as the Postgres
+    half of `sinks.write` is: this is provenance, and losing it must not fail a
+    stage that has already paid for its answers.
+
+    But the failure is **reported**, never swallowed. Returning a bare 0 made a
+    missing column read exactly like a run with nothing to record -- and the
+    first version of this did precisely that, hiding a `PGRST204` behind a
+    number that looked ordinary. `sinks.write` takes the same stance: continue,
+    and say what went wrong.
+    """
+    if "supabase" not in sinks.parse(sink) or not versions:
+        return {"prompts_recorded": 0}
+    from ..shared import rows
+    entries = []
+    for name, version in sorted(versions.items()):
+        entry = library.load()["questions"].get(name) or {}
+        shape = library.shape_of(name)
+        entries.append({
+            "name": name, "version": version,
+            "instruction": library.instruction_of(name),
+            "shape": shape,
+            "summary": shape.get("summary", "standard"),
+            "builtin": bool(entry.get("builtin")),
+            "about": entry.get("about") or None,
+        })
+    try:
+        return {"prompts_recorded": rows.write_prompts(entries)}
+    except Exception as exc:                              # noqa: BLE001
+        return {"prompts_recorded": 0,
+                "prompts_error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
 def load(video_id: str) -> Descriptions:

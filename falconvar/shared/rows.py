@@ -179,6 +179,23 @@ def _aggregate(video_id: str, document: dict[str, Any], api: Any) -> None:
     }], api)
 
 
+def write_prompts(entries: list[dict[str, Any]], api: Any = None) -> int:
+    """Record the prompt versions a run actually used. Append-only.
+
+    Not a document writer, so it is not in `WRITERS`: the vocabulary is not a
+    per-video artifact and has no file half to fan out from. It lives here for
+    the same reason everything else does -- this is the only module that knows
+    a table name.
+
+    Keyed `(name, version)`, so re-running with an unchanged prompt writes the
+    row it already had. Nothing is ever deleted: a description records the hash
+    it was asked under, and removing the question must not orphan it.
+    """
+    if not entries:
+        return 0
+    return db.upsert("prompts", entries, api)
+
+
 #: artifact name -> the function that writes its rows. A document absent from
 #: here has no Postgres representation, and `sinks.write` refuses the
 #: `supabase` backend for it rather than silently writing nothing.
@@ -198,4 +215,4 @@ def writer_for(artifact: str) -> Optional[Callable[[str, dict[str, Any]], None]]
     return WRITERS.get(artifact)
 
 
-__all__ = ["WRITERS", "writer_for"]
+__all__ = ["WRITERS", "write_prompts", "writer_for"]
