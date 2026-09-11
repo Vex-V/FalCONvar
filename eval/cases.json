@@ -1,0 +1,182 @@
+{
+  "about": "Query cases for eval/harness.py. `relevant` is the chunk ids a person says answer the query, read off `embedded.json` for each video -- not off a ranking, which would grade the system against itself. `kind` is verified by `--check`, never trusted: a paraphrase that shares the corpus's wording is a literal case wearing a label.",
+  "corpus": "4 videos, 49 units. Chernobyl 9 chunks (clip:archival, clip:hazards, transcript) \u00b7 slides 4 (text:signage, text:topic) \u00b7 test1 4 (clip:topic, clip:activity) \u00b7 test2 3 (yolo:topic, yolo:activity)",
+  "cases": [
+    {
+      "query": "the RBMK reactor schematic with coolant loops and pumps",
+      "video_id": "Chernobyl",
+      "relevant": [
+        3,
+        4
+      ],
+      "kind": "literal",
+      "why": "c3 and c4 are both labelled RBMK-1000 diagrams with coolant piping and pumps"
+    },
+    {
+      "query": "a map of Eastern Europe and the Soviet republics",
+      "video_id": "Chernobyl",
+      "relevant": [
+        1
+      ],
+      "kind": "literal",
+      "why": "only c1 is a map"
+    },
+    {
+      "query": "the title card at the very start",
+      "video_id": "Chernobyl",
+      "relevant": [
+        0
+      ],
+      "kind": "literal",
+      "why": "c0 is the CHERNOBYL 1986 title card"
+    },
+    {
+      "query": "damaged reactor building and containment",
+      "video_id": "Chernobyl",
+      "relevant": [
+        6,
+        8
+      ],
+      "kind": "literal",
+      "why": "c6 is the accident and containment sequence, c8 the arched containment structure"
+    },
+    {
+      "query": "Radio Free Europe watermark",
+      "video_id": "Chernobyl",
+      "relevant": [
+        5
+      ],
+      "kind": "literal",
+      "why": "c5 is the only chunk naming the watermark"
+    },
+    {
+      "query": "how is warmth carried away from the middle",
+      "video_id": "Chernobyl",
+      "relevant": [
+        3,
+        4
+      ],
+      "kind": "paraphrase",
+      "why": "asks about the coolant diagram without saying RBMK, schematic or loop -- 50% overlap; see `why`"
+    },
+    {
+      "query": "the very first thing you see before anything happens",
+      "video_id": "Chernobyl",
+      "relevant": [
+        0
+      ],
+      "kind": "paraphrase",
+      "why": "the title card, described without title, card or 1986"
+    },
+    {
+      "query": "the bit that tells you where in the world",
+      "video_id": "Chernobyl",
+      "relevant": [
+        1
+      ],
+      "kind": "paraphrase",
+      "why": "the map, without map, Europe or Soviet -- 0% overlap, measured"
+    },
+    {
+      "query": "after it went wrong, how did they seal it up",
+      "video_id": "Chernobyl",
+      "relevant": [
+        6,
+        8
+      ],
+      "kind": "paraphrase",
+      "why": "containment, without containment, damaged or reactor"
+    },
+    {
+      "query": "a bird's eye view of the whole industrial site",
+      "video_id": "Chernobyl",
+      "relevant": [
+        2,
+        7
+      ],
+      "kind": "literal",
+      "why": "c2 and c7 are both wide site views with smokestacks"
+    },
+    {
+      "query": "the QUARTERLY REVIEW header on the slide",
+      "video_id": "slides",
+      "relevant": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "kind": "literal",
+      "why": "every slide chunk carries the header; a sanity case that should be easy"
+    },
+    {
+      "query": "what words are written across the top of the page",
+      "video_id": "slides",
+      "relevant": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "kind": "paraphrase",
+      "why": "asks for the header without header, slide or quarterly"
+    },
+    {
+      "query": "a cashier handling the register at the counter",
+      "video_id": "test1",
+      "relevant": [
+        0,
+        2
+      ],
+      "kind": "literal",
+      "why": "c0 and c2 both name a cashier at the register"
+    },
+    {
+      "query": "customers browsing the toy shelves",
+      "video_id": "test1",
+      "relevant": [
+        0,
+        1
+      ],
+      "kind": "literal",
+      "why": "c0 and c1 both name the toy shelves"
+    },
+    {
+      "query": "somebody buying goods",
+      "video_id": "test1",
+      "relevant": [
+        0,
+        2
+      ],
+      "kind": "paraphrase",
+      "why": "the checkout, without cashier, register or counter -- 33% overlap, measured"
+    },
+    {
+      "query": "somebody elevated off the floor",
+      "video_id": "test2",
+      "relevant": [
+        0
+      ],
+      "kind": "paraphrase",
+      "why": "the man on a ladder near the coolers, without ladder or cooler -- 50% overlap; the corpus wording is hard to avoid"
+    },
+    {
+      "query": "someone on a ladder near the coolers",
+      "video_id": "test2",
+      "relevant": [
+        0
+      ],
+      "kind": "literal",
+      "why": "c0 names both the ladder and the coolers"
+    },
+    {
+      "query": "a bald person wearing sunglasses",
+      "video_id": "test2",
+      "relevant": [
+        2
+      ],
+      "kind": "literal",
+      "why": "only c2 names the bald person with sunglasses"
+    }
+  ]
+}
