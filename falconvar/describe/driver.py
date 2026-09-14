@@ -12,16 +12,17 @@ from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
 
-DEFAULT_DESCRIBER = "openai"
-
-
-def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
+def run(video_id: str, describer: Optional[str] = None,
         model: Optional[str] = None,
         samplers: Optional[Sequence[str]] = None,
         limit: Optional[int] = None,
         resume: bool = True,
         sink: str | Sequence[str] = "file") -> Produced:
-    """One call per (chunk, sampler). The expensive stage."""
+    """One call per (chunk, sampler). The expensive stage.
+
+    `describer` is a provider or `provider/model`; None resolves through
+    `shared.providers` -- FALCONVAR_DESCRIBER, then openai.
+    """
     env.load()
     manifest = load_manifest(video_id)
     timeline = load_timeline(video_id)
@@ -45,7 +46,7 @@ def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
     if resume and paths.exists(video_id, "descriptions"):
         existing = load(video_id)
 
-    built = base.build(describer, **({"model": model} if model else {}))
+    built = base.build(describer, model=model)
     from .reader import describe
 
     with FrameSource(video_id, manifest) as source:
@@ -56,8 +57,8 @@ def run(video_id: str, describer: str = DEFAULT_DESCRIBER,
     return Produced(
         video_id=video_id, component="describe", backend=",".join(written),
         artifacts={"descriptions": written.get("file", "")},
-        stats={**document.stats, "describer": describer,
-               "model": document.model.get("model", describer),
+        stats={**document.stats, "describer": built.name,
+               "model": (document.model.get("params") or {}).get("model", built.name),
                **_record_prompts(document.model.get("prompts") or {}, sink)},
     )
 
@@ -115,9 +116,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ap = argparse.ArgumentParser(description="Describe every (chunk, sampler).")
     ap.add_argument("video_id")
-    ap.add_argument("--describer", default=DEFAULT_DESCRIBER,
-                    choices=sorted(set(base.available()) | {"stub"}))
-    ap.add_argument("--model", default=None)
+    ap.add_argument("--describer", default=None,
+                    help="a provider or provider/model; default "
+                         f"FALCONVAR_DESCRIBER, then openai. Known: "
+                         f"{', '.join(base.available())}")
+    ap.add_argument("--model", default=None,
+                    help="blank: the provider's default chat model")
     ap.add_argument("--sampler", default=None,
                     help="comma-separated subset to describe")
     ap.add_argument("--limit", type=int, default=None,

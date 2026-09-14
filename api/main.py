@@ -35,6 +35,7 @@ from api import browse, service
 from api.jobs import Runner, progress
 from falconvar import workflow
 from falconvar.describe import library
+from falconvar.rag.embed import EmbedderUnavailable
 from falconvar.shared import env, paths
 
 runner = Runner()
@@ -94,8 +95,17 @@ async def upload(
                                     "into one pass over the frames."),
     use_video: bool = Form(True),
     use_audio: bool = Form(True),
-    describer: str = Form(workflow.Options.describer),
-    embedder: str = Form(workflow.Options.embedder),
+    describer: Optional[str] = Form(
+        None, description="a provider, or provider/model (`ollama/gemma3:4b`). "
+                          "Blank: FALCONVAR_DESCRIBER, then openai"),
+    describe_model: Optional[str] = Form(None),
+    embedder: Optional[str] = Form(
+        None, description="a provider, or provider/model (`local`). "
+                          "Blank: FALCONVAR_EMBEDDER, then openai"),
+    embed_model: Optional[str] = Form(None),
+    llm: Optional[str] = Form(
+        None, description="who answers `tier=llm`. Blank: FALCONVAR_LLM, then openai"),
+    llm_model: Optional[str] = Form(None),
     tier: str = Form(workflow.Options.tier, description="free | local | llm"),
     sink: str = Form(workflow.Options.sink, description="where documents go"),
     index: str = Form(workflow.Options.index, description="where vectors go"),
@@ -135,8 +145,10 @@ async def upload(
 
     options = workflow.Options(
         source=target, video_id=vid, policy=policy, sampler=sampler,
-        use_video=use_video, use_audio=use_audio, describer=describer,
-        embedder=embedder, tier=tier, sink=sink, index=index)
+        use_video=use_video, use_audio=use_audio, describer=describer or None,
+        describe_model=describe_model or None, embedder=embedder or None,
+        embed_model=embed_model or None, llm=llm or None,
+        llm_model=llm_model or None, tier=tier, sink=sink, index=index)
 
     problems = workflow.validate(options)
     if problems:
@@ -397,9 +409,11 @@ class SearchRequest(BaseModel):
         20, ge=1, le=500,
         description="units ranked per half before they are fused. Deeper is a "
                     "better fusion and a slower query")
-    embedder: str = workflow.Options.embedder
+    embedder: Optional[str] = Field(
+        None, description="a provider, or provider/model -- the one that built "
+                          "the index. Blank resolves exactly as `embed` does")
     index: str = workflow.Options.index
-    model: Optional[str] = None
+    model: Optional[str] = Field(None, description="blank: the provider's default")
 
 
 @app.post("/search", tags=["search"])
@@ -472,8 +486,12 @@ def search(request: SearchRequest) -> dict[str, Any]:
         raise HTTPException(404, {"error": str(exc)}) from None
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, {"error": str(exc)}) from None
+    except EmbedderUnavailable as exc:
+        # The provider, not the request: no key, a local server that is down,
+        # a model it does not serve. A 500 said none of that.
+        raise HTTPException(503, {"error": str(exc)}) from None
     return {"query": request.query, "level": "moment", "scope": scope,
-            "moments": found}
+            "moments": found["moments"], "notes": found["notes"]}
 
 
 # ------------------------------------------------------------- reading rows

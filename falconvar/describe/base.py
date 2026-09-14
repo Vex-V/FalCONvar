@@ -1,18 +1,18 @@
 """The Describer protocol, and a registry.
 
 A describer takes frames and a context and returns a summary plus whatever
-structured fields its question owns. Two exist: a stub that loads nothing, and
-the OpenAI call.
+structured fields its question owns. Two kinds exist: a stub that loads nothing,
+and `backends.model.ModelDescriber`, which any provider in `shared.providers`
+answers through.
 
-The registry is lazy: importing this must not pull in `openai`, so a stub run
-pays for no client and no key.
+Resolution is lazy: importing this must not pull in a client, so a stub run
+pays for no SDK and no key.
 """
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence
+from typing import Any, Optional, Protocol, Sequence
 
 from .frames import LoadedFrame
 
@@ -36,7 +36,7 @@ class Describer(Protocol):
     def config(self) -> dict[str, Any]: ...
 
 
-_LAZY = {"openai": "backends.openai_client:OpenAIDescriber"}
+#: Describers that are not a model provider: the stub, which loads nothing.
 _REGISTRY: dict[str, Any] = {}
 
 
@@ -45,18 +45,26 @@ def register(cls) -> Any:
     return cls
 
 
-def build(name: str, **kwargs) -> Describer:
-    if name in _REGISTRY:
-        return _REGISTRY[name](**kwargs)
-    if name not in _LAZY:
-        raise KeyError(f"unknown describer {name!r}; known: {', '.join(available())}")
-    module_name, class_name = _LAZY[name].split(":")
-    module = importlib.import_module(f".{module_name}", __package__)
-    return register(getattr(module, class_name))(**kwargs)
+def build(name: Optional[str] = None, **kwargs) -> Describer:
+    """A provider, `provider/model`, `stub`, or None for the default.
+
+    Every provider is one class; which wire format it speaks is `shared.llm`'s
+    concern, so adding a provider adds no describer.
+    """
+    from ..shared import providers
+
+    chosen, model = providers.choose("describe", name, kwargs.pop("model", None))
+    if chosen == providers.OFFLINE["describe"]:
+        from .backends import stub  # noqa: F401  -- self-registers
+    if chosen in _REGISTRY:
+        return _REGISTRY[chosen]()
+    from .backends.model import ModelDescriber
+    return ModelDescriber(chosen, model, **kwargs)
 
 
 def available() -> list[str]:
-    return sorted(set(_REGISTRY) | set(_LAZY))
+    from ..shared import providers
+    return sorted(set(_REGISTRY) | set(providers.names("describe")))
 
 
 __all__ = ["Describer", "DescriberUnavailable", "Description", "available",

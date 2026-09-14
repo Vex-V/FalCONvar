@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ...shared.llm import DEFAULT_MODEL, LLMUnavailable, complete
+from ...shared.llm import LLMUnavailable, Model
 from ..base import Context
 from ..rendering import chunk_rows, resolve_span
 from . import SYSTEM
@@ -41,18 +41,23 @@ class ChaptersAggregator:
     about = "a table of contents: contiguous chapters over the whole video"
     depends_on = ("summary",)
 
-    def __init__(self, model: Optional[str] = None) -> None:
-        self.model = model or DEFAULT_MODEL
+    def __init__(self, provider: Optional[str] = None,
+                 model: Optional[str] = None) -> None:
+        self.llm = Model(provider, model, role="llm")
+
+    @property
+    def model_key(self) -> str:
+        return self.llm.key
 
     def run(self, context: Context) -> dict[str, Any]:
         rows = chunk_rows(context)
         if not rows:
             raise LLMUnavailable("nothing to divide into chapters")
         body = "\n".join(line for _, line in rows)
-        answer = complete(
+        answer = self.llm.complete(
             "Divide this video into chapters. They must be contiguous and "
             "cover every chunk, and you must cite chunk ids from the input:\n\n"
-            + body, _CHAPTERS_SCHEMA, self.model, SYSTEM)
+            + body, _CHAPTERS_SCHEMA, SYSTEM)
 
         chapters = []
         for chapter in answer["chapters"]:

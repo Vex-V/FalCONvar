@@ -209,7 +209,7 @@ create table if not exists falconvar.embeddings (
   text_hash   text not null,              -- embed only what changed
   content     text not null,
   structured  jsonb not null default '{}'::jsonb,
-  embedding   vector(1536) not null,
+  embedding   vector not null,            -- any width; the embedder key carries it
   timeline_fingerprint text,
   embedded_at timestamptz not null default now(),
   primary key (video_id, chunk_id, sampler_id, embedder)
@@ -254,8 +254,23 @@ create index if not exists embeddings_question
 create index if not exists embeddings_fts on falconvar.embeddings using gin (fts);
 create index if not exists embeddings_structured
   on falconvar.embeddings using gin (structured jsonb_path_ops);
-create index if not exists embeddings_vector on falconvar.embeddings
-  using hnsw (embedding vector_cosine_ops);
+-- ANY WIDTH. `vector(1536)` was OpenAI's width written into the schema, so a
+-- local embedder at 384 or Voyage at 1024 was refused at the first upsert. The
+-- embedder key already carries `provider:model:dims`, and every query filters
+-- on it before a distance is taken, so one column holds every space without
+-- two widths ever being compared.
+--
+-- An HNSW index needs a fixed width, so it goes. The RPC ranks with a window
+-- function over rows already narrowed by embedder and video -- an exact scan,
+-- which on a corpus this size is milliseconds. A deployment with millions of
+-- rows in ONE space would want back a partial expression index,
+-- `using hnsw ((embedding::vector(N)) vector_cosine_ops) where embedder = '...'`,
+-- with the RPC casting to match.
+--
+-- Re-runnable: the index drop is `if exists`, and altering a column to the
+-- type it already has is a no-op.
+drop index if exists falconvar.embeddings_vector;
+alter table falconvar.embeddings alter column embedding type vector;
 
 -- ===========================================================================
 -- 8 · aggregates. Video-level, so not keyed by chunk at all.
@@ -270,11 +285,10 @@ create table if not exists falconvar.aggregates (
   primary key (video_id, aggregate_id)
 );
 
--- NOTHING WRITES THIS YET. `units.py` builds units from descriptions and
--- transcripts only, so this table stays empty after a complete run. It is kept
--- because the shape is the decided one: a summary belongs in its own table
--- rather than in `embeddings`, which answers *which twenty seconds* where a
--- summary answers *which video* -- and a video is not a moment you can play.
+-- One vector per video, from its `summary` aggregate; `embed` writes it. A
+-- summary belongs in its own table rather than in `embeddings`, which answers
+-- *which twenty seconds* where a summary answers *which video* -- and a video
+-- is not a moment you can play.
 -- Putting summaries in the chunk table would need a sentinel chunk_id and
 -- would return a whole-video "moment" beside real ones in every search.
 create table if not exists falconvar.video_embeddings (
@@ -283,9 +297,10 @@ create table if not exists falconvar.video_embeddings (
   embedder   text not null,
   text_hash  text not null,
   content    text not null,
-  embedding  vector(1536) not null,
+  embedding  vector not null,             -- any width, as `embeddings`
   primary key (video_id, kind, embedder)
 );
+alter table falconvar.video_embeddings alter column embedding type vector;
 
 -- ===========================================================================
 -- 9 · the hybrid search, in the database.

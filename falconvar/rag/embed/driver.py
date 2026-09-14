@@ -15,9 +15,6 @@ from . import readable
 from . import units as units_mod
 from . import indexes as backends
 
-DEFAULT_EMBEDDER = "openai"
-
-
 def _embed_video(video_id: str, built, names: Sequence[str]) -> int:
     """Embed the video-level summary into `video_embeddings`. Postgres only.
 
@@ -63,7 +60,7 @@ def collect(video_id: str) -> list[units_mod.Unit]:
 DEFAULT_INDEX = "qdrant"
 
 
-def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
+def run(video_id: str, embedder: Optional[str] = None,
         model: Optional[str] = None,
         batch: int = 64,
         index_name: str | Sequence[str] = DEFAULT_INDEX,
@@ -73,8 +70,12 @@ def run(video_id: str, embedder: str = DEFAULT_EMBEDDER,
     Several indexes take the same vectors: embedding is the paid half and the
     backends are the cheap one, so writing to `local,qdrant` costs one set of
     API calls rather than two.
+
+    `embedder` is a provider or `provider/model`; None resolves through
+    `shared.providers` -- FALCONVAR_EMBEDDER, then openai -- exactly as
+    `retrieve` resolves it, so the two cannot disagree about the space.
     """
-    built = embedders_mod.build(embedder, **({"model": model} if model else {}))
+    built = embedders_mod.build(embedder, model=model)
     names = ([n.strip() for n in index_name.split(",") if n.strip()]
              if isinstance(index_name, str) else list(index_name))
     indexes = [(n, backends.build(n, video_id, built.key)) for n in names]
@@ -155,8 +156,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ap = argparse.ArgumentParser(description="Embed what changed.")
     ap.add_argument("video_id")
-    ap.add_argument("--embedder", default=DEFAULT_EMBEDDER,
-                    choices=embedders_mod.available())
+    ap.add_argument("--embedder", default=None,
+                    help="a provider or provider/model; default FALCONVAR_EMBEDDER, "
+                         f"then openai. Known: {', '.join(embedders_mod.available())}")
     ap.add_argument("--model", default=None)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--index", default=DEFAULT_INDEX, dest="index_name",

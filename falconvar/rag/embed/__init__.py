@@ -12,10 +12,12 @@ vectors, for reading rather than searching.
 from __future__ import annotations
 
 from . import indexes, readable
-from .driver import DEFAULT_EMBEDDER, DEFAULT_INDEX, collect, main, run
-from .embedders import Embedder, EmbedderUnavailable, available, build
+from .driver import DEFAULT_INDEX, collect, main, run
+from .embedders import (Embedder, EmbedderUnavailable, available, build,
+                        query_vector)
 from .units import Unit, from_descriptions, from_transcript, render
 
-__all__ = ["DEFAULT_EMBEDDER", "DEFAULT_INDEX", "Embedder", "EmbedderUnavailable",
+__all__ = ["DEFAULT_INDEX", "Embedder", "EmbedderUnavailable",
            "Unit", "available", "build", "collect", "from_descriptions",
-           "from_transcript", "indexes", "main", "readable", "render", "run"]
+           "from_transcript", "indexes", "main", "query_vector", "readable",
+           "render", "run"]
