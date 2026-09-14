@@ -48,7 +48,7 @@ TABLES: dict[str, str] = {
     "descriptions": "one model answer per (chunk, sampler:question)",
     "embeddings": "the text that went into the index, and the vector it became",
     "aggregates": "video-level answers, one row per aggregator",
-    "video_embeddings": "empty by design: nothing writes it yet. See CLAUDE.md",
+    "video_embeddings": "one vector per video, from its summary aggregate",
     "prompts": "what each question said, at the version a run asked it under",
 }
 

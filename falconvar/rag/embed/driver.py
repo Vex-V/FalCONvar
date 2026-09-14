@@ -21,10 +21,9 @@ DEFAULT_EMBEDDER = "openai"
 def _embed_video(video_id: str, built, names: Sequence[str]) -> int:
     """Embed the video-level summary into `video_embeddings`. Postgres only.
 
-    `falconvar.video_embeddings` has existed in the DDL since before anything
-    wrote it -- CLAUDE.md lists it under "Not built", and a complete `--tier
-    llm` run left it at 0 rows while every other table was exactly full. This
-    is what fills it.
+    `falconvar.video_embeddings` existed in the DDL before anything wrote it:
+    a complete `--tier llm` run left it at 0 rows while every other table was
+    exactly full. This is what fills it.
 
     Postgres only for now: Qdrant would need a second collection with its own
     name, and the whole-video corpus is one row per video, which is not a size

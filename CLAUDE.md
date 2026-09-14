@@ -730,13 +730,12 @@ chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
 
-Nor is the final summary. `db/supabase/install.sql` creates
-`video_embeddings` and `units.py` has only `from_descriptions` and
-`from_transcript`, so the table is empty after a complete `--tier llm` run into
-Postgres — verified, 0 rows where every other table is exactly full. The
-argument for it stands (`embeddings` answers *which twenty seconds*, a summary
-answers *which video*, and a video is not a moment you can play); the code does
-not exist. See "Not built".
+The final summary goes somewhere else: `units.from_summary` turns it into one
+unit per video, which `embed` writes to `video_embeddings` rather than
+`embeddings`. `embeddings` answers *which twenty seconds*, a summary answers
+*which video*, and a video is not a moment you can play -- so the two never
+share a ranking, and `/search` reaches the second only as `level=video`.
+Postgres only, and best-effort: a missing `summary.json` writes nothing.
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -870,7 +869,7 @@ a nonsense query scores identically to the best real one, because dense always
 returns nearest neighbours and there is no relevance floor. If a UI shows a
 number, show the ranks beside it — the CLI prints `clip(v7,t1)
 uniform:text(v9,tNone)`, and `tNone` is how a reader sees the lexical half was
-silent. The API does not expose those ranks yet.
+silent. The API carries them as `moments[].ranks`.
 
 **Prompts are editable at runtime.** `GET/POST/DELETE /prompts`; a custom
 question names a shape or brings its own, built-ins refuse edits with 409, and

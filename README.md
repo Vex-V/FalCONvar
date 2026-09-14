@@ -285,6 +285,7 @@ driving every stage with its own settings: a `scene` grid with a 30 s floor gave
 and 16 searchable units; every Postgres table exact under both keys;
 `recovery.recreate` 76/76 byte-identical.
 
-Not built: a test suite, an import checker, an eval harness, video-level
-embedding, and sampler threshold calibration. `CLAUDE.md` is the reasoning
+Not built: a test suite, an import checker, a corpus big enough for
+`eval/harness.py` to give a result rather than a direction, and sampler
+threshold calibration. `CLAUDE.md` is the reasoning
 behind every decision here, and records what is measured and what is not.
