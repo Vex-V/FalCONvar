@@ -13,7 +13,7 @@ measurements and the traps live here.
 ```
 falconvar/
   workflow.py      the whole run, as a list of component calls
-  shared/          paths · documents · sinks · env · llm · db · rows · schemas
+  shared/          paths · documents · sinks · env · providers · llm · db · rows · schemas
                    paths and documents import nothing
   media/         1 split: what streams the file carries
   audio/         2 source · reader · models
@@ -26,8 +26,8 @@ falconvar/
   cut/           6 the transcript, onto the grid
   describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
     prompts.json   BUILT-IN questions and shapes; shipped, read-only
-    backends/      stub · openai_client
-  rag/embed/     8 units · embedders · readable
+    backends/      stub · model (every provider, through shared/llm)
+  rag/embed/     8 units · embedders · remote · local · readable
     indexes/       qdrant · supabase
   rag/retrieve/ 10 search
   aggregate/     9 base · rendering
@@ -48,11 +48,12 @@ data/              everything a run writes; gitignored
   out/_qdrant/     the embedded vector store, beside the videos not inside one
   uploads/         what the API parked until a run read it
   prompts.json     custom questions, added through the API
+  providers.json   model endpoints added or overridden; names key variables, never keys
 weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-102 Python files, ~11.0k lines.
+104 Python files, ~13.0k lines.
 
 ## Commands
 
@@ -76,6 +77,9 @@ python -m falconvar.video <id> --sampler objects --vocabulary "crate,pallet"
 python -m falconvar.video <id> --prune-store           # irreversible, opt-in
 python -m falconvar.cut <id>
 python -m falconvar.describe <id> --describer openai --limit 5   # costs money
+python -m falconvar.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
+python -m falconvar.aggregate <id> --tier llm --llm anthropic
+python -m falconvar.rag.embed <id> --embedder local --index qdrant   # in-process, no key
 python -m falconvar.video <id> --sampler uniform:safety   # a custom question
 python -m falconvar.rag.embed <id> --index qdrant,supabase
 python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
@@ -746,6 +750,128 @@ cannot be left to a reader to notice.
 
 ---
 
+## Models and providers
+
+**A stage names a provider and a model; `shared/providers.py` knows the rest.**
+Three roles -- `describe`, `llm`, `embed` -- and four protocols, because the
+wire format is the only thing that really differs between vendors:
+
+    openai     Responses + /embeddings
+    chat       Chat Completions + /embeddings: Ollama, LM Studio, llama.cpp,
+               vLLM, Gemini, Mistral, Groq, OpenRouter, Together, DeepSeek,
+               xAI, Voyage
+    anthropic  Messages, with the schema as a forced tool's input
+    local      a Hugging Face model in this process. Vectors only
+
+One `ModelDescriber` and one `llm.Model` serve every provider, so adding one is
+a row in `_BUILTIN` or an entry in `data/providers.json`, never a class. A
+describer and an embedder per vendor would be the per-stage copies of
+connect-and-complain that `db.py` and `llm.py` each exist to prevent.
+
+**OpenAI stayed on Responses rather than joining Chat Completions.** A
+describer's `config()` is half of describe's resume key, and every description
+in the corpus was paid for on the Responses path; folding OpenAI into the
+generic path would have been one branch fewer and a reason to re-describe
+everything. Verified: `ModelDescriber().config()` is dict-equal to the old
+describer's, and **40/40** stored pairs across four videos still resolve as
+current. The generic path was then run against OpenAI itself, as a custom
+`chat` provider: the same pair in the same shape, and embeddings identical to
+the native path's (cosine 1.000000).
+
+**A default is resolved when a call is made, never captured.** `Options`'
+model fields are `None`; `providers.choose` reads the call, then
+`FALCONVAR_DESCRIBER` / `_LLM` / `_EMBEDDER`, then `openai`. A constant would be
+read at import, before `.env` -- the trap that keeps `FALCONVAR_DATA` a process
+variable. `/capabilities.defaults` calls `providers.defaults()` for the same
+reason: a form defaulting to the dataclass's `None` shows nothing where the
+answer is `openai`.
+
+**An environment model applies only to the environment's provider.**
+`FALCONVAR_DESCRIBER=ollama` with `FALCONVAR_DESCRIBE_MODEL=gemma3:4b` must not
+turn `--describer openai` into a request asking OpenAI for `gemma3:4b`.
+
+**`provider/model` splits on the first slash, and only after a known
+provider.** Model ids carry slashes (`BAAI/bge-small-en-v1.5`), so a provider
+name may not. An unknown head leaves the spec whole, so the error names what
+was typed rather than half of it.
+
+**A missing key is a 422, not a failed job.** `workflow.validate` checks every
+role the run will use -- describe only when reading the picture, llm only at
+`--tier llm` -- because `describe` finding no `ANTHROPIC_API_KEY` happens after
+the whole video has been decoded. It does not ping local servers: validation
+stays synchronous and offline.
+
+**Keys never enter `providers.json`.** A field with `key` in its name is
+refused; the file names variables in `key_vars`. A bad entry is dropped and
+listed under `/capabilities.models.problems` rather than raised, because one
+typo in a hand-edited file taking down `/capabilities` takes every generated
+form with it.
+
+**Switching `--llm` rebuilds the llm aggregates.** `inputs_fingerprint` said
+nothing about who wrote an answer, so a switch reused the stored summary and
+reported success -- describe's silent no-op, one stage later. Aggregates now
+record `stats.model` and reuse needs it to match. A stored llm aggregate with
+no `model` reads as `openai:gpt-5.4-mini`, which is a fact rather than a guess:
+before this, `aggregate.run` had no way to name another. That reading is also
+what stopped the change rebuilding every summary -- verified, `--tier llm` on
+defaults computed **0**.
+
+**An embedder key carries its width, known before the index opens.** OpenAI's
+are tabled; any other remote model is probed with one short string, once per
+process, and every later batch is checked against it -- a server swapping the
+model behind a name would otherwise write a new width into the old space.
+
+**Query and document are embedded differently where the model says so.** e5,
+nomic, bge and mxbai were trained with prefixes, and a search embedded as a
+passage loses recall with no error anywhere. `embedders.PREFIXES` looks them up
+by model id and `retrieve` goes through `query_vector`. A hand-set prefix adds
+`:p<hash>` to the key, since its vectors are not comparable to the defaults';
+nothing is added otherwise, so every key already written is unchanged.
+
+**`local` pools the way the model declares.** Without `sentence-transformers`,
+`transformers` reads `1_Pooling/config.json` -- bge is CLS, not mean -- and
+refuses a model whose `modules.json` has a Dense layer after pooling. Skipping
+that layer still produces vectors of the right width, and installing
+`sentence-transformers` later would then put two different functions under one
+key. Weights land in `weights/embedders/`; a model is loaded once per process,
+because `/search` runs in the server and a reload is seconds.
+
+**Measured: a 33M-parameter local embedder is level with OpenAI here.**
+`BAAI/bge-small-en-v1.5` (384-d, CUDA) against `text-embedding-3-small`, same
+Qdrant hybrid, `eval/harness.py`:
+
+| embedder | MRR | top-1 | recall@5 | median query |
+|---|---|---|---|---|
+| openai | 0.7315 | 0.611 | 0.833 | 0.619 s |
+| local bge-small | 0.7241 | 0.611 | **0.917** | **0.051 s** |
+
+By band: low overlap 0.222 vs 0.333 (n=3), mixed 0.694 vs 0.806 (n=6), high
+overlap 0.911 vs 0.815 (n=9). Eighteen cases is a direction, and the direction
+is "not obviously worse, and free". The 12x latency is the network round trip.
+Indexing all 49 units took 2.0 s after a 34.5 s first load, download included.
+
+**Supabase's vector columns were `vector(1536)`** -- OpenAI's width written into
+the schema, refusing any other embedder at the first upsert. `install.sql`
+alters both to unconstrained `vector` and drops the HNSW index, which needs a
+fixed width. Every query filters on `embedder`, whose key carries the width,
+before a distance is taken, so two widths never meet. On a corpus this size the
+exact scan is milliseconds; one space with millions of rows would want a
+partial expression index back. `SupabaseIndex` turns "expected 1536
+dimensions" into "re-run install.sql".
+
+**Verified as far as this machine reaches.** Real: OpenAI on both protocols
+(including gpt-5.4-mini refusing `max_tokens` on Chat Completions and the retry
+answering), and the local embedder end to end. A mock server that records
+requests covered every other shape: images as data URIs, json_schema /
+json_object / prompt modes, fenced JSON, truncation, an unreachable local
+server, and Anthropic's base64 image blocks, forced tool, 401 and `max_tokens`
+stop. **Not run against** the real Anthropic, Gemini, Mistral, Groq,
+OpenRouter, Together, DeepSeek, xAI or Voyage APIs, nor a real Ollama or LM
+Studio. Their default model ids are reasonable picks, not measured ones, and a
+server's schema support is exactly what `structured` exists to downgrade.
+
+---
+
 ## API
 
 **Every component has the same signature, so one route runs any of them.**
@@ -821,7 +947,9 @@ link reads as breakage, not as a stage that never ran.
 `stub`: an audio-only run completed in 10.6 s, reported 42 segments and 205
 words, and wrote a transcript of `[stub0.0][stub0.1]`. Nothing was wrong enough
 to report. `/capabilities` publishes `defaults` read off `workflow.Options`, so
-the default lives in the dataclass the pipeline actually uses.
+the default lives in the dataclass the pipeline actually uses -- and, for the
+three model roles, `providers.defaults()`, since those fields stay `None` until
+a run resolves them.
 
 ---
 
@@ -902,6 +1030,13 @@ the CLI printed them long before the API did.
 omitting it searches every one, and `video_id` is the one-element shorthand.
 Searching one video, three, or all is the same question over a different set, so
 a second route for "all" was a distinction the data never had.
+
+**A search's notes are top-level, not only on its moments.** They rode on each
+moment, so an empty result -- the case "nothing matched those filters" exists
+for -- had nowhere to put them and reached the caller as a bare `[]`. Found by
+searching with an embedder that had never indexed the video: a silent 200. The
+note now names the embedder key, because that is exactly how such a search
+comes back empty.
 
 **Moments are keyed by `(video_id, chunk_id)`.** A chunk id indexes *one*
 video's grid. Grouping on the id alone fused chunk 0 of two videos into one
@@ -1110,8 +1245,13 @@ every route a run or a question needs, generating each form from
   videos is a direction, not a result -- the low-overlap band is n=3.
 - **Sampler threshold calibration.** Scene thresholds sweep from cached scores;
   sampler thresholds (`clip 0.96`, `yolo 0.83`) do not.
-- **A local embedder, run.** Written and guarded, but every measurement is
-  OpenAI.
+- **The other providers, run.** Anthropic, Gemini, Mistral, Groq, OpenRouter,
+  Together, DeepSeek, xAI, Voyage, Ollama and LM Studio are verified against a
+  mock server's recording of the request, not against the real thing.
+- **An answering model in-process.** Local answers go through a server --
+  Ollama, LM Studio, llama.cpp, vLLM. Nothing loads a VLM into this process.
+- **Supabase at any width, run.** `install.sql` drops the fixed width; nothing
+  has written a non-1536 vector to the live database yet.
 - **A stemmed, properly weighted sparse half.** `indexes.tokenize` does not
   stem and the sparse vector sends raw counts where `Modifier.IDF` expects BM25
   weights. `eval/harness.py` can now grade the change; nothing has been
