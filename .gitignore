@@ -101,8 +101,6 @@ scratch/
 *.tmp
 *.json.tmp
 
-
-
 # Playwright MCP scratch output and ad-hoc screenshots
 .playwright-mcp/
 /*.png

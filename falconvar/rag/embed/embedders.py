@@ -1,4 +1,4 @@
-"""The Embedder protocol, and a lazy registry.
+"""The Embedder protocol, and resolving a name to one.
 
 **One vector space per embedder, never per sampler.** A space is defined by the
 model, not by which prompt produced the text, so everything one embedder writes
@@ -7,18 +7,24 @@ separate spaces per sampler would partition one space while making
 cross-sampler queries impossible.
 
 Different embedders *do* get separate spaces, and the key carries
-`name:model:dims` -- which is what stops 768-wide vectors being ranked against
-1536-wide ones. A mismatch across widths fails loudly; a mismatch between two
-models of the same width returns a well-formed ranking that means nothing,
-which is the reason the key is in the collection name at all.
+`provider:model:dims` -- which is what stops 768-wide vectors being ranked
+against 1536-wide ones. A mismatch across widths fails loudly; a mismatch
+between two models of the same width returns a well-formed ranking that means
+nothing, which is the reason the key is in the collection name at all.
+
+**A query and a document are embedded differently where the model says so.**
+e5, nomic and bge were trained with a prefix on one side or both, and embedding
+a query as a document costs them recall with no error anywhere. The prefixes
+are a property of the model, so they are looked up rather than configured, and
+a prefix set by hand changes the key -- the vectors it makes are not
+comparable to the defaults'.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import math
-from typing import Any, Protocol, Sequence
+from typing import Any, Optional, Protocol, Sequence
 
 
 class EmbedderUnavailable(Exception):
@@ -27,9 +33,50 @@ class EmbedderUnavailable(Exception):
 
 class Embedder(Protocol):
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed_query(self, text: str) -> list[float]: ...
     @property
     def key(self) -> str: ...
     def config(self) -> dict[str, Any]: ...
+
+
+def query_vector(embedder: Any, text: str) -> list[float]:
+    """The vector for a search, through the query side where there is one."""
+    side = getattr(embedder, "embed_query", None)
+    return side(text) if side else embedder.embed([text])[0]
+
+
+_BGE = "Represent this sentence for searching relevant passages: "
+
+#: model id fragment -> (query prefix, document prefix). Matched lowercase,
+#: first hit wins. From each family's model card.
+PREFIXES: tuple[tuple[str, str, str], ...] = (
+    ("multilingual-e5", "query: ", "passage: "),
+    ("e5-", "query: ", "passage: "),
+    ("nomic-embed-text", "search_query: ", "search_document: "),
+    ("bge-small-en", _BGE, ""),
+    ("bge-base-en", _BGE, ""),
+    ("bge-large-en", _BGE, ""),
+    ("mxbai-embed-large", _BGE, ""),
+)
+
+
+def prefixes_for(model: str) -> tuple[str, str]:
+    lowered = model.lower()
+    for fragment, query, document in PREFIXES:
+        if fragment in lowered:
+            return query, document
+    return "", ""
+
+
+def key_for(name: str, model: str, dims: int,
+            query_prefix: str, document_prefix: str) -> str:
+    """`name:model:dims`, plus a suffix only when the prefixes are not the
+    model's own -- so every key written before prefixes existed is unchanged."""
+    key = f"{name}:{model}:{dims}"
+    if (query_prefix, document_prefix) != prefixes_for(model):
+        digest = hashlib.sha1(f"{query_prefix}\0{document_prefix}".encode()).hexdigest()
+        key += f":p{digest[:6]}"
+    return key
 
 
 class HashEmbedder:
@@ -58,6 +105,9 @@ class HashEmbedder:
             out.append([v / norm for v in vector])
         return out
 
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
+
     @property
     def key(self) -> str:
         return f"{self.name}:none:{self.dims}"
@@ -66,24 +116,30 @@ class HashEmbedder:
         return {"embedder": self.name, "dims": self.dims}
 
 
-_LAZY = {"openai": "openai_embedder:OpenAIEmbedder"}
-_REGISTRY: dict[str, Any] = {"hash": HashEmbedder}
+def build(name: Optional[str] = None, **kwargs) -> Embedder:
+    """A provider name, `provider/model`, `hash`, or None for the default.
 
+    Every provider resolves through `shared.providers`, so `embed` and
+    `retrieve` reading the same environment cannot disagree about which space
+    a search belongs to.
+    """
+    from ...shared import providers
 
-def build(name: str, **kwargs) -> Embedder:
-    if name in _REGISTRY:
-        return _REGISTRY[name](**kwargs)
-    if name not in _LAZY:
-        raise KeyError(f"unknown embedder {name!r}; known: {', '.join(available())}")
-    module_name, class_name = _LAZY[name].split(":")
-    module = importlib.import_module(f".{module_name}", __package__)
-    cls = getattr(module, class_name)
-    _REGISTRY[name] = cls
-    return cls(**kwargs)
+    chosen, model = providers.choose("embed", name, kwargs.pop("model", None))
+    if chosen == providers.OFFLINE["embed"]:
+        return HashEmbedder(**({"dims": kwargs["dims"]} if kwargs.get("dims") else {}))
+    provider = providers.get(chosen)
+    if provider.protocol == "local":
+        from .local import LocalEmbedder
+        return LocalEmbedder(model, **kwargs)
+    from .remote import RemoteEmbedder
+    return RemoteEmbedder(chosen, model, **kwargs)
 
 
 def available() -> list[str]:
-    return sorted(set(_REGISTRY) | set(_LAZY))
+    from ...shared import providers
+    return providers.names("embed")
 
 
-__all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "available", "build"]
+__all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "PREFIXES",
+           "available", "build", "key_for", "prefixes_for", "query_vector"]

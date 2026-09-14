@@ -158,6 +158,14 @@
       <div class="field" style="flex:1;min-width:130px">
         <label for="s-index">index</label><select id="s-index"></select>
       </div>
+      <div class="field" style="flex:1;min-width:150px">
+        <label for="s-embedder">embedder <span class="hint">the one that built the index</span></label>
+        <select id="s-embedder"></select>
+      </div>
+      <div class="field" style="flex:1;min-width:150px">
+        <label for="s-model">model <span class="hint">blank: provider default</span></label>
+        <input type="text" id="s-model" placeholder="text-embedding-3-small">
+      </div>
       <div class="field" style="width:95px">
         <label for="s-moments">results</label>
         <input type="number" id="s-moments" value="5" min="1" max="50">

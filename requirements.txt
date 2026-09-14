@@ -14,6 +14,15 @@ easyocr==1.7.2             # text          (detector only; nothing is read)
 # batch and pull-based, which would mean a second decode pass.
 scenedetect==0.7.1
 
+# --- models: describe, the llm aggregates, embed and retrieve
+# `openai` is the client for every OpenAI-compatible provider too -- Ollama,
+# LM Studio, Gemini, Mistral, Groq, OpenRouter, Voyage. Anthropic goes through
+# `httpx`, which `openai` already installs.
+openai
+# sentence-transformers    # optional, for the `local` embedder. Without it
+                           # `transformers` pools as the model declares, and
+                           # refuses a model that needs a Dense layer after
+
 # --- api (optional): only `api/` needs these, falconvar runs without them
 fastapi
 uvicorn[standard]

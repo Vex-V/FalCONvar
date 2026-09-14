@@ -77,6 +77,261 @@ curl -s -X POST http://localhost:8000/db/query \
   -d '{"table": "chunks", "limit": 5}'
 ```
 
+## Every route, in and out
+
+`/docs` remains the authority on exhaustive field lists and types -- it is
+generated from the code and cannot drift. What follows is the shape a caller
+actually needs: what to send, what comes back, and which failures are
+*expected* rather than a bug. `?` marks an optional field.
+
+Every error is `{"detail": {...}}` with an `error` string, and a `known` list
+wherever the thing you named has a fixed set of alternatives.
+
+### GET /health
+
+    out   {ok: true, queued: 0}
+
+`queued` is the depth of the one background worker. Liveness plus the only
+number that says whether a submitted job will start now or wait.
+
+### GET /capabilities
+
+    out   {components[], samplers[], prompts[], shapes[], pairings[],
+           policies[], describers[], embedders[], llms[], indexes[], sinks[],
+           transcribers[], diarizers[], tiers[],
+           aggregators: {name: {tier, about}},
+           artifacts:   {name: about},
+           parameters:  {component: [{name, type, default, required}]},
+           defaults:    {policy, sampler, index, tier, sink,
+                         describer, describe_model, llm, llm_model,
+                         embedder, embed_model},
+           models:      {providers: [{name, protocol, about, builtin, local,
+                                      chat, embed, chat_model, embed_model,
+                                      base_url, key_vars[], structured,
+                                      configured, why}],
+                         problems[], file, env: {role: [provider_var, model_var]}},
+           search:      {filters[], structured_fields{}, levels[]}}
+
+The contract a client generates itself from. `parameters` is read off each
+component's signature and `defaults` off `workflow.Options`, so neither can
+drift from what the code takes. `search.structured_fields` lists only the
+fields a shape fixed with `one_of` -- the only ones worth offering as a filter.
+
+The six model defaults are resolved **now** -- the call, then `FALCONVAR_*`
+from `.env`, then `openai` -- rather than read off the dataclass, whose model
+fields are `None` until a run resolves them. `models.providers` says which
+providers can run here: `configured` is a key found, or a provider on this
+machine that needs none; `why` names the variable to set otherwise. It carries
+the *names* of key variables and never a value. A local server is not pinged,
+so `configured` there means "no key needed", not "up". `problems` lists
+`data/providers.json` entries that were dropped, and why.
+
+Note `components` lists all nine including `media`, and `media` is the one the
+run route below refuses: until it has run there is no id to address.
+
+### POST /videos
+
+Multipart, not JSON -- it carries a file.
+
+    in    file (required), run?=true, video_id?, policy?, sampler?,
+          use_video?, use_audio?, tier?, sink?, index?,
+          describer?, describe_model?, embedder?, embed_model?,
+          llm?, llm_model?
+    out   run=true   202 {job: {...}, video_id}
+          run=false  201 {video_id, media: {...Produced}, next, components[]}
+    422   workflow.validate found a contradiction: {"problems": [...]}
+
+`run=false` runs `media` and stops, which is what makes the video addressable;
+it is answered rather than queued because it is a container probe. The id comes
+from the filename, sanitised -- not from the client.
+
+`describer`, `embedder` and `llm` each take a provider or `provider/model`
+(`ollama/gemma3:4b`, `local/BAAI/bge-base-en-v1.5`); blank resolves as
+`/capabilities.defaults` shows. Every role this run will use is checked before
+anything is queued -- an unknown provider, one that cannot do the job
+(`anthropic` serves no vectors), no model, or no key is a 422 naming it, not a
+job that fails after the video is decoded. `describer` is only checked when the
+run reads the picture, `llm` only at `tier=llm`.
+
+### POST /videos/{video_id}/run/{component}
+
+    in    {params: {...}}          whatever that component takes
+    out   202 {job: {id, kind, video_id, state, stage, detail, result, error,
+                     queued_at, started_at, finished_at, elapsed_s, history[]}}
+    404   unknown component (with `known`), or the video was never uploaded
+
+`params` is passed through as keyword arguments and only the component
+validates it, so an unknown parameter name is a `TypeError` inside the job --
+202 first, then a failed job -- and a known parameter the chosen branch does
+not read is silently ignored. `/capabilities.parameters` is the list; the
+document a stage writes records what was actually applied.
+
+### GET /jobs · GET /jobs/{job_id}
+
+    out   /jobs      {jobs: [{...}], queued, note}
+          /jobs/{id} {id, kind, video_id, state, stage, detail, result, error,
+                      queued_at, started_at, finished_at, elapsed_s, history[]}
+    404   no such job -- records die with the process
+
+`state` is `queued | running | done | failed`. **`stage` is what is RUNNING and
+`history` what has FINISHED**: the workflow announces each component twice, once
+by name before it runs, because a stage set only on completion names the
+*previous* component throughout the longest step of a run. `detail` is the last
+`Produced`; on a failure it carries the traceback instead.
+
+A job id is a 12-character hex string, not a video id.
+
+### GET /videos · GET /videos/{video_id}
+
+    out   /videos      {videos: [{video_id, artifacts[], duration_s, has_video,
+                                  has_audio, policy, chunks,
+                                  timeline_fingerprint}]}
+          /videos/{id} {video_id, documents[{name, about, url}],
+                        aggregates[{name, about, url}], frames}
+    404   no such video
+
+Read from disk, not remembered, so a restarted server still lists everything it
+produced. `has_video`/`has_audio` are how a caller knows which stages apply
+before queueing one that cannot run. `documents` and `aggregates` hold **only
+what exists**: `frames` is `null` until a store is written, because a link that
+404s reads as breakage rather than as a stage that never ran.
+
+### GET /videos/{video_id}/artifacts/{name}
+
+    in    name: media | raw_transcript | cuts | timeline | manifest |
+                transcript | descriptions | embedded        ?download=1
+    out   the document, verbatim -- the same JSON the run wrote to disk
+    404   unknown artifact name (with `known`), or that stage has not run
+
+`?download=1` only adds a `Content-Disposition`; the body is identical. Content
+negotiation would be tidier, but a browser cannot set an `Accept` header on a
+plain link.
+
+### GET /videos/{video_id}/aggregates · GET /videos/{video_id}/aggregates/{name}
+
+    out   the list {video_id, aggregates[{name, about, url}]}
+          one      {document, version, video_id, aggregate_id, tier,
+                    inputs_fingerprint, payload, stats}
+    404   this video has no aggregate of that name
+
+`payload` differs per aggregator -- `stats` counts, `chapters` tiles, `ner`
+lists entities. `inputs_fingerprint` hashes the chunk text actually read, so a
+summary of descriptions since rewritten can be *detected* rather than left to a
+reader to notice.
+
+### GET /videos/{video_id}/frames/{index}
+
+    out   image/jpeg
+    404   the manifest does not name that frame
+
+`index` is the reader's count over **every** decoded frame, which is how the
+manifest names it -- not a position among the kept ones, and not a second.
+
+### GET /prompts · GET /prompts/{name}
+
+    out   /prompts      {prompts[{name, builtin, shape, fields[], about,
+                                  instruction}],
+                         shapes{name: {fallback, builtin, fields[], summary}},
+                         field_types[], limits{}, custom_file}
+          /prompts/{n}  the same entry plus {schema, version}
+    404   unknown question (with `known`)
+
+`schema` is the exact strict JSON Schema a call would be given -- exact, not
+indicative, because a call's schema depends on nothing but its question.
+`version` is the hash resume is keyed on.
+
+### POST /prompts
+
+    in    {name, instruction, about?,
+           shape?}                      name a shipped shape, or
+    in    {name, instruction, about?, summary?,
+           fields: {field: {type: "text"|"list", about,
+                            of?: {key: description},   -- list of objects
+                            one_of?: [...]}}}          -- a fixed vocabulary
+    out   201, the same body `GET /prompts/{name}` returns
+    409   the name is a built-in question, or a built-in shape
+    422   {"problems": [...]} -- every fault at once
+
+409 rather than 404 because the request is well-formed and the name exists:
+there is nothing to correct except which name it asks for. `fields` is a
+builder, not JSON Schema -- the call goes out with `strict: true`, and a schema
+the model API refuses would fail after the frames are read.
+
+Adding a question runs nothing, so it is not queued.
+
+### DELETE /prompts/{name}
+
+    out   204, no body
+    404   no custom question of that name
+    409   it is built in
+
+Descriptions already written are untouched. One cost a paid call and records
+the question it was asked, so removing the question does not make the answer
+untrue -- it only stops new runs asking it.
+
+### POST /search
+
+    in    {query,                         required, non-empty
+           video_ids?: [...],             omit for EVERY video
+           video_id?,                     shorthand for a scope of one
+           level?: "moment" | "video",
+           moments?=5, candidates?=20, index?,
+           embedder?, model?,             -- provider or provider/model
+           sampler?, question?, strategy?,        -- the three id filters
+           chunk_ids?: [...], window?=0,          -- a set of chunks
+           after?, before?,                       -- seconds
+           structured?: {field: value}}           -- exact values
+    out   level=moment  {query, level, scope, notes[],
+                         moments: [{video_id, chunk_id, start_ts, end_ts,
+                                    score, samplers[],
+                                    questions {sampler_id: question},
+                                    descriptions {sampler_id: text},
+                                    ranks {sampler_id: {dense, text}},
+                                    structured {sampler_id: {...}},
+                                    notes[]}]}
+          level=video   {query, level, scope,
+                         videos: [{video_id, kind, content, similarity}]}
+    404   nothing indexed for this embedder in this index
+    422   an empty query, an unknown level, an unknown embedder
+
+    503   the embedder's provider has no key, or cannot be reached
+
+An empty result is `moments: []` with top-level `notes`, not an error: "nothing
+matched those filters" and "nothing indexed" are different answers and only one
+is worth re-running `embed` over. The notes are top-level because an empty
+result has no moment to carry them -- they used to ride only on moments, so
+exactly the case they exist for reached the caller as a bare `[]`. The note
+names the embedder key, since searching with an embedder that never indexed
+these videos is empty in the same way.
+
+`score` is a rank fusion, **not a similarity** -- `1/(k+best) + 0.5/(k+second)`
+at k=10. There is no relevance floor, so read `ranks` beside it: measured on
+this corpus a nonsense query scores 0.1136 against a real one's 0.1294, and
+`text: null` is how a reader sees the lexical half was silent.
+
+### GET /db/status · GET /db/tables · POST /db/query
+
+    out   /status  {configured, reachable, schema, counts{table: n}}
+                   or {configured, reachable: false, schema, error}
+          /tables  {schema, tables[{name, about, columns[], heavy[], order[]}],
+                    ops[]}
+    in    /query   {table, filters?[{column, op, value}], order?, desc?,
+                    limit?=50, offset?=0, include_heavy?=false}
+    out   /query   {table, rows[], count, offset, limit, select}
+    404   unknown table (with `known`)
+    422   an unknown operator, or a column Postgres rejects -- its own message
+    503   the database is not reachable
+
+`count` is the size of the **whole** result, not the page: "20 rows" and "20 of
+4,812 rows" are different answers. `select` says which columns were actually
+sent, since `heavy` ones -- a 1536-wide vector, a tsvector, every word
+timestamp in a file -- are withheld unless asked for.
+
+### GET /app/
+
+    out   the web client. `/` redirects here when `web/` exists, to `/docs`
+          when it does not
+
 ## The web client
 
 `web/` is three files a browser reads in order -- `index.html`, `app.js`,

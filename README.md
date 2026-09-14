@@ -197,6 +197,64 @@ cheapest first, so `--tier llm` runs all three tiers.
 `speakers` needs a transcript and `chapters` needs `summary`; an aggregator
 whose input is missing is skipped with the reason rather than failing.
 
+## Models
+
+Three roles call a model. Each is a provider plus an optional model, and unset
+every role is `openai`:
+
+| role | does | flag | `.env` |
+|---|---|---|---|
+| `describe` | frames → structured answers (needs a vision model) | `--describer` | `FALCONVAR_DESCRIBER` · `FALCONVAR_DESCRIBE_MODEL` |
+| `llm` | text → the `--tier llm` aggregates | `--llm` | `FALCONVAR_LLM` · `FALCONVAR_LLM_MODEL` |
+| `embed` | text → vectors, for `embed` and `retrieve` | `--embedder` | `FALCONVAR_EMBEDDER` · `FALCONVAR_EMBED_MODEL` |
+
+A provider name may carry its model after the first slash:
+
+```bash
+python -m falconvar.describe <id> --describer anthropic
+python -m falconvar.describe <id> --describer ollama/gemma3:4b
+python -m falconvar.aggregate <id> --tier llm --llm gemini
+python -m falconvar.rag.embed <id> --embedder local
+python -m falconvar.rag.retrieve "..." <id> --embedder local
+python -m falconvar.workflow samples/x.mp4 --describer ollama/gemma3:4b \
+       --llm ollama/gemma3:4b --embedder local            # nothing leaves the machine
+```
+
+| provider | where | answers | vectors | default models |
+|---|---|---|---|---|
+| `openai` | cloud | ✓ | ✓ | `gpt-5.4-mini` · `text-embedding-3-small` |
+| `anthropic` | cloud | ✓ | — | `claude-haiku-4-5` |
+| `gemini` | cloud | ✓ | ✓ | `gemini-2.5-flash` · `gemini-embedding-001` |
+| `mistral` | cloud | ✓ | ✓ | `mistral-small-latest` · `mistral-embed` |
+| `deepseek` | cloud | text only | — | `deepseek-chat` |
+| `voyage` | cloud | — | ✓ | `voyage-3.5` |
+| `openrouter` · `groq` · `xai` | cloud | ✓ | — | name one |
+| `together` | cloud | ✓ | ✓ | name one |
+| `ollama` | this machine | ✓ | ✓ | `gemma3:4b` · `nomic-embed-text` |
+| `lmstudio` · `llamacpp` | this machine | ✓ | ✓ | name one |
+| `local` | in-process | — | ✓ | `BAAI/bge-small-en-v1.5` |
+
+Keys go in `.env` under each provider's usual name (`ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, …); providers on this machine need none. `<NAME>_BASE_URL`
+moves a built-in, e.g. `OLLAMA_BASE_URL=http://gpu-box:11434/v1`. Any other
+OpenAI-compatible server — vLLM, a gateway — goes in `data/providers.json`,
+which names the key's variable and never holds the key:
+
+```json
+{"providers": {"vllm": {"protocol": "chat", "base_url": "http://localhost:8001/v1",
+                        "chat_model": "Qwen/Qwen2.5-VL-7B-Instruct", "local": true}}}
+```
+
+`GET /capabilities` lists every provider, whether it has a key, and what each
+role resolves to right now.
+
+- **Search with the embedder that built the index.** Vectors are keyed
+  `provider:model:dims`, so a different embedder is a different, empty space.
+- **Switching describer re-describes; switching `--llm` rebuilds the llm
+  aggregates.** Both are part of what counts as current.
+- **Supabase:** re-run `install.sql` before writing vectors that are not 1536
+  wide.
+
 ## The API
 
 21 routes. `python -m uvicorn api.main:app --port 8000`, then `/` for the
@@ -251,14 +309,14 @@ do not, and `GET /videos` reads them from disk.
 ```
 falconvar/
   workflow.py      the whole run, as a list of component calls
-  shared/          paths · documents · sinks · env · llm · db · rows · schemas
+  shared/          paths · documents · sinks · env · providers · llm · db · rows
   media/           1  split
   audio/           2  source · reader · models · backends/
   boundaries/      3+4 scenes · speech · grid
   video/           5  reader · decimate · store · pipeline · samplers/
   cut/             6
   describe/        7  prompts · library · prompts.json · frames · backends/
-  rag/embed/       8  units · embedders · indexes/ · readable
+  rag/embed/       8  units · embedders · remote · local · indexes/ · readable
   rag/retrieve/   10
   aggregate/       9  statistics/ · model/ · llm/
 api/               HTTP: routes, dispatch, one background worker, db reads
@@ -271,7 +329,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-102 Python files, ~11.0k lines.
+104 Python files, ~13.0k lines.
 
 ## State
 
@@ -285,6 +343,7 @@ driving every stage with its own settings: a `scene` grid with a 30 s floor gave
 and 16 searchable units; every Postgres table exact under both keys;
 `recovery.recreate` 76/76 byte-identical.
 
-Not built: a test suite, an import checker, an eval harness, video-level
-embedding, and sampler threshold calibration. `CLAUDE.md` is the reasoning
+Not built: a test suite, an import checker, a corpus big enough for
+`eval/harness.py` to give a result rather than a direction, and sampler
+threshold calibration. `CLAUDE.md` is the reasoning
 behind every decision here, and records what is measured and what is not.

@@ -22,7 +22,7 @@ from falconvar import aggregate, audio, boundaries, cut, describe, media, video
 from falconvar import workflow
 from falconvar.describe import library, prompts
 from falconvar.rag import embed, retrieve
-from falconvar.shared import paths, sinks
+from falconvar.shared import paths, providers, sinks
 from falconvar.shared.documents import Produced
 from falconvar.video import samplers as samplers_mod
 
@@ -201,9 +201,17 @@ def frame_path(video_id: str, index: int) -> Path:
     return path
 
 
-def search(query: str, video_id: Any = None, **params) -> list[dict[str, Any]]:
+def search(query: str, video_id: Any = None, **params) -> dict[str, Any]:
+    """Moments, and the notes about how they were ranked.
+
+    The notes are top-level as well as on each moment. Carried only on the
+    moments, an empty result had nowhere to put them -- so "nothing matched
+    those filters", the one answer an empty result exists to give, reached the
+    caller as a bare `[]`.
+    """
     moments, notes = retrieve.search(query, video_id, **params)
-    return [{**m.as_dict(), "notes": notes} for m in moments]
+    return {"moments": [{**m.as_dict(), "notes": notes} for m in moments],
+            "notes": notes}
 
 
 def search_videos(query: str, **params) -> list[dict[str, Any]]:
@@ -288,6 +296,10 @@ def available() -> dict[str, Any]:
         "policies": sorted(boundaries.POLICIES),
         "describers": describe.available(),
         "embedders": embed.available(),
+        "llms": providers.names("llm"),
+        # Every provider, whether it can run here and why not, and the
+        # variables a default is read from. Names of keys, never keys.
+        "models": providers.catalog(),
         "indexes": embed.indexes.available(),
         "sinks": list(sinks.BACKENDS),
         "transcribers": sorted(audio_models.TRANSCRIBERS),
@@ -308,11 +320,13 @@ def available() -> dict[str, Any]:
         "defaults": {
             "policy": workflow.Options.policy,
             "sampler": workflow.Options.sampler,
-            "describer": workflow.Options.describer,
-            "embedder": workflow.Options.embedder,
             "index": workflow.Options.index,
             "tier": workflow.Options.tier,
             "sink": workflow.Options.sink,
+            # Resolved now rather than read off the dataclass, whose fields
+            # are None until a run resolves them: a form defaulting to None
+            # would show nothing where the real answer is `openai`.
+            **providers.defaults(),
         },
     }
 

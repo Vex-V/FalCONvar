@@ -14,7 +14,7 @@ from typing import Any, Optional, Sequence
 from ...boundaries import load as load_timeline
 from ...shared import paths
 from ..embed import embedders as embedders_mod
-from ..embed.driver import DEFAULT_EMBEDDER, DEFAULT_INDEX
+from ..embed.driver import DEFAULT_INDEX
 from ..embed import indexes as backends
 from .search import Moment, to_moments
 
@@ -74,7 +74,7 @@ def chunks_in(spans: Sequence[tuple[float, float]],
     return [i for i, (start, end) in enumerate(spans) if end > lo and start < hi]
 
 
-def search(query: str, video_id: Any = None, embedder: str = DEFAULT_EMBEDDER,
+def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
            model: Optional[str] = None, moments: int = 5,
            sampler: Optional[str] = None, index_name: str = DEFAULT_INDEX,
            candidates: int = 20,
@@ -101,7 +101,7 @@ def search(query: str, video_id: Any = None, embedder: str = DEFAULT_EMBEDDER,
         raise ValueError("a search needs a query; this one is empty")
 
     scope = scope_of(video_id, video_ids)
-    built = embedders_mod.build(embedder, **({"model": model} if model else {}))
+    built = embedders_mod.build(embedder, model=model)
     # The index is built with one id only so `stored_hashes`/`prune` keep
     # working for the writer; the scope a *search* uses is passed per call.
     index = backends.build(index_name, scope[0] if scope else "", built.key)
@@ -167,7 +167,10 @@ def _search(built, index, index_name: str, query: str,
     if narrowed is not None and not narrowed:
         return [], notes + ["no chunk matches that window"]
 
-    vector = built.embed([query])[0]
+    # The query side: e5, nomic and bge embed a question differently from the
+    # passage it should find, and a query embedded as a document loses recall
+    # with no error anywhere.
+    vector = embedders_mod.query_vector(built, query)
     hits = index.search(vector, query, candidates, sampler, question,
                         strategy, narrowed, structured, scope)
     if getattr(index, "degraded", None):
@@ -182,7 +185,13 @@ def _search(built, index, index_name: str, query: str,
             # "no such video in this index", not "this deployment has never
             # embedded anything" -- and the raise below tells you to run
             # `embed`, which would not help.
-            return [], notes + ["nothing matched those filters"]
+            #
+            # Named with the embedder: a space holds only what was embedded
+            # with that model, so searching with one that never indexed these
+            # videos comes back empty in exactly this way.
+            return [], notes + [f"nothing matched those filters in {built.key} -- "
+                                "if that embedder never indexed these videos, "
+                                "embed them with it first"]
         where = ", ".join(scope) if scope else "any video"
         raise FileNotFoundError(
             f"{where}: nothing indexed for {built.key} in {index_name!r}. "
@@ -225,7 +234,7 @@ def _all_videos() -> list[str]:
         return []
 
 
-def videos(query: str, embedder: str = DEFAULT_EMBEDDER,
+def videos(query: str, embedder: Optional[str] = None,
            model: Optional[str] = None, limit: int = 5
            ) -> list[dict[str, Any]]:
     """Which video is this about. A different question from which moment.
@@ -240,8 +249,11 @@ def videos(query: str, embedder: str = DEFAULT_EMBEDDER,
     """
     from ..embed.indexes.supabase import search_videos
 
-    built = embedders_mod.build(embedder, **({"model": model} if model else {}))
-    vector = built.embed([query])[0]
+    built = embedders_mod.build(embedder, model=model)
+    # The query side: e5, nomic and bge embed a question differently from the
+    # passage it should find, and a query embedded as a document loses recall
+    # with no error anywhere.
+    vector = embedders_mod.query_vector(built, query)
     return search_videos(vector, built.key, limit)
 
 
@@ -252,8 +264,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Search one video's moments.")
     ap.add_argument("query")
     ap.add_argument("video_id")
-    ap.add_argument("--embedder", default=DEFAULT_EMBEDDER,
-                    choices=embedders_mod.available())
+    ap.add_argument("--embedder", default=None,
+                    help="the one that built the index: a provider or "
+                         "provider/model; default FALCONVAR_EMBEDDER, then openai")
     ap.add_argument("--model", default=None)
     ap.add_argument("--moments", type=int, default=5)
     ap.add_argument("--sampler", default=None,

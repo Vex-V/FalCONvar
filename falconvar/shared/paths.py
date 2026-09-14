@@ -58,6 +58,10 @@ UPLOADS = DATA_ROOT / "uploads"
 #: than in the package because a request writes it; the built-ins stay in
 #: `falconvar/describe/prompts.json`, version-controlled and read-only.
 PROMPTS = DATA_ROOT / "prompts.json"
+#: Model endpoints added or overridden per deployment. Hand-edited, and never
+#: holds a key -- it names the variables keys are read from. The built-ins live
+#: in `shared/providers.py`.
+PROVIDERS = DATA_ROOT / "providers.json"
 WEIGHTS = _from_env("FALCONVAR_WEIGHTS", REPO_ROOT / "weights")
 
 #: artifact name -> filename under `data/out/<video-id>/`.

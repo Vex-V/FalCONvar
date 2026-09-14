@@ -168,12 +168,30 @@ function choicesFor(param) {
   const c = CAPS;
   const map = {
     policy: c.policies, describer: c.describers, embedder: c.embedders,
+    llm: c.llms,
     tier: c.tiers, transcriber: c.transcribers, diarizer: c.diarizers,
     store_scope: ["sampled", "decimated"],
     sink: ["file", "supabase", "file,supabase"],
     index_name: [...c.indexes, c.indexes.join(",")],
   };
   return map[param.name] || null;
+}
+
+/* Who can serve a role, which can run here, and what a blank field resolves
+ * to -- all from /capabilities, so an endpoint added to data/providers.json
+ * appears without touching this file. */
+function providerNote(param) {
+  const role = param === "embedder" ? "embed" : "chat";
+  const d = CAPS.defaults || {};
+  const blank = { describer: [d.describer, d.describe_model],
+                  embedder: [d.embedder, d.embed_model],
+                  llm: [d.llm, d.llm_model] }[param] || [];
+  const listed = (((CAPS.models || {}).providers) || []).filter(p => p[role]).map(p => {
+    const model = role === "embed" ? p.embed_model : p.chat_model;
+    return `${p.name}${model ? ` (${model})` : ""}${p.configured ? "" : " ✗"}`;
+  }).join(" · ");
+  return `blank = ${blank.filter(Boolean).join("/")}. The model field picks another; `
+       + `✗ = no key set. ${listed}`;
 }
 
 function renderParams() {
@@ -232,6 +250,9 @@ function renderParams() {
       field.append(el("p", { className: "note", textContent:
         `samplers: ${CAPS.samplers.join(", ")} · questions: ${CAPS.prompts.join(", ")}`
         + " — pair as name:question, or name:[q1,q2] for one pass answering two." }));
+    }
+    if (["describer", "embedder", "llm"].includes(p.name)) {
+      field.append(el("p", { className: "note", textContent: providerNote(p.name) }));
     }
     box.append(field);
   }
@@ -558,6 +579,10 @@ function searchPayload() {
   text("#s-question", "question");
   text("#s-strategy", "strategy");
   text("#s-sampler", "sampler");
+  /* Blank means the server resolves it exactly as `embed` did -- the one
+   * embedder guaranteed to match an index this deployment built by default. */
+  text("#s-embedder", "embedder");
+  text("#s-model", "model");
 
   const chunks = $("#s-chunks").value.trim();
   if (chunks) {
@@ -637,8 +662,11 @@ $("#s-go").onclick = async () => {
     const moments = out.moments || [];
     state.replaceChildren(chip(`${moments.length} moments`, "on"));
     if (!moments.length) {
+      /* The server's own words: "nothing matched" names the embedder, and an
+       * embedder that never indexed these videos is empty in exactly this way. */
+      const said = (out.notes || []).filter(n => !n.startsWith("scope is"));
       box.append(el("p", { className: "note" },
-        "nothing matched those filters")); return;
+        said.length ? said.join(" · ") : "nothing matched those filters")); return;
     }
     const note = (moments[0].notes || []).find(n => n.startsWith("scope is"));
     if (note) box.append(el("p", { className: "note" }, note));
@@ -767,6 +795,11 @@ async function refreshCaps() {
   CAPS = await api("/capabilities");
   $("#s-index").replaceChildren(...CAPS.indexes.map(i =>
     el("option", { value: i, textContent: i })));
+  const d = CAPS.defaults || {};
+  $("#s-embedder").replaceChildren(
+    el("option", { value: "", textContent:
+      `— default (${[d.embedder, d.embed_model].filter(Boolean).join("/")})` }),
+    ...CAPS.embedders.map(e => el("option", { value: e, textContent: e })));
   $("#s-question").replaceChildren(
     el("option", { value: "", textContent: "— any question" }),
     ...CAPS.prompts.map(q => el("option", { value: q, textContent: q })));

@@ -183,7 +183,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("cases", type=Path, nargs="?",
                     default=Path(__file__).with_name("cases.json"))
     ap.add_argument("--index", default="qdrant")
-    ap.add_argument("--embedder", default="openai")
+    ap.add_argument("--embedder", default=None,
+                    help="a provider or provider/model; default as embed resolves it")
+    ap.add_argument("--model", default=None)
     ap.add_argument("--moments", type=int, default=5)
     ap.add_argument("--candidates", type=int, default=20)
     ap.add_argument("--question", default=None, help="run every case filtered")
@@ -221,7 +223,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     def configured(index: str) -> dict[str, Any]:
         config = {"index_name": index, "embedder": args.embedder,
-                  "candidates": args.candidates}
+                  "model": args.model, "candidates": args.candidates}
         if args.question:
             config["question"] = args.question
         if args.strategy:

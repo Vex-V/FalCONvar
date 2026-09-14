@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ...shared.llm import DEFAULT_MODEL, LLMUnavailable, complete
+from ...shared.llm import LLMUnavailable, Model
 from ..base import Context
 from ..rendering import batched, chunk_rows, resolve_span
 from . import BATCH, SYSTEM
@@ -57,9 +57,14 @@ class SummaryAggregator:
     about = "what the whole video is about, in one pass over every chunk"
     depends_on: tuple[str, ...] = ()
 
-    def __init__(self, model: Optional[str] = None, batch: int = BATCH) -> None:
-        self.model = model or DEFAULT_MODEL
+    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None,
+                 batch: int = BATCH) -> None:
+        self.llm = Model(provider, model, role="llm")
         self.batch = batch
+
+    @property
+    def model_key(self) -> str:
+        return self.llm.key
 
     def run(self, context: Context) -> dict[str, Any]:
         rows = chunk_rows(context)
@@ -77,9 +82,9 @@ class SummaryAggregator:
             for group in batched(parts, self.batch):
                 ids = [c for part in group for c in part[0]]
                 body = "\n".join(text for _, text in group)
-                answer = complete(
+                answer = self.llm.complete(
                     f"Summarise this stretch of a video, in order:\n\n{body}",
-                    _FOLD_SCHEMA, self.model, SYSTEM)
+                    _FOLD_SCHEMA, SYSTEM)
                 folded.append((ids, answer["summary"]))
             start, end = 0.0, 0.0
             layers.append({
@@ -93,9 +98,9 @@ class SummaryAggregator:
             level += 1
 
         body = "\n".join(text for _, text in parts)
-        final = complete(
+        final = self.llm.complete(
             f"Summarise this whole video:\n\n{body}",
-            _SUMMARY_SCHEMA, self.model, SYSTEM, max_output_tokens=4000)
+            _SUMMARY_SCHEMA, SYSTEM, max_output_tokens=4000)
         return {
             **final,
             "chunks_read": len(rows),
