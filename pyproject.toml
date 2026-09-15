@@ -23,6 +23,7 @@ dependencies = []
 # editable install that resolves them by `__file__` would stop working the day
 # it becomes a real one.
 "falconvar.video_rag.describe" = ["prompts.json"]
+"falconvar.aggregates" = ["definitions.json"]
 
 [tool.setuptools]
 # Explicit rather than discovered: `docs`, `db` and `data` are not Python, and

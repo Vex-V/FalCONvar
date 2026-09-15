@@ -99,6 +99,23 @@ def delete_stale_chunks(table: str, video_id: str, keep_below: int,
         .eq("video_id", video_id).gte("chunk_id", keep_below).execute())
 
 
+def delete_except(table: str, match: dict[str, Any], column: str,
+                  keep: list[Any], api: Any = None) -> None:
+    """Remove the rows matching `match` whose `column` is not in `keep`.
+
+    After the upserts, for the reason `delete_stale_chunks` is: a document that
+    shrank leaves rows it no longer holds, and deleting first would leave a
+    hole if the upsert failed.
+    """
+    api = api or client()
+    query = api.table(table).delete()
+    for name, value in match.items():
+        query = query.eq(name, value)
+    if keep:
+        query = query.not_.in_(column, list(keep))
+    query.execute()
+
+
 __all__ = ["DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
-           "URL_VARS", "client", "configured", "delete_stale_chunks",
-           "delete_where", "upsert"]
+           "URL_VARS", "client", "configured", "delete_except",
+           "delete_stale_chunks", "delete_where", "upsert"]

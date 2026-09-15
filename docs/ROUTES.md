@@ -55,6 +55,11 @@ adds a row to `service.COMPONENTS` and this route already serves it.
 | GET | `/prompts/{name}` | one question, with the schema a call would get |
 | POST | `/prompts` | add a custom question. **201** |
 | DELETE | `/prompts/{name}` | remove a custom one. **204** |
+| GET | [`/aggregate-definitions`](http://localhost:8000/aggregate-definitions) | every aggregate prompt and link profile, and the input grammar |
+| POST | `/aggregate-prompts` | add a custom aggregate prompt. **201** |
+| DELETE | `/aggregate-prompts/{name}` | remove a custom one. **204** |
+| POST | `/link-profiles` | add a custom link profile. **201** |
+| DELETE | `/link-profiles/{name}` | remove a custom one. **204** |
 | POST | `/search` | scope is a set of videos; `level` picks moment or video |
 | GET | [`/db/status`](http://localhost:8000/db/status) | can this deployment read Postgres, and what is in it |
 | GET | [`/db/tables`](http://localhost:8000/db/tables) | every table, what it holds, its deployed columns |
@@ -99,7 +104,8 @@ number that says whether a submitted job will start now or wait.
     out   {components[], samplers[], prompts[], shapes[], pairings[],
            policies[], describers[], embedders[], llms[], indexes[], sinks[],
            transcribers[], diarizers[], tiers[],
-           aggregators: {name: {tier, about}},
+           aggregators: {name: {tier, about, kind, reads}},  -- kind null for code
+           aggregate_inputs: {default, grammar[{syntax, reads}]},
            artifacts:   {name: about},
            parameters:  {component: [{name, type, default, required}]},
            defaults:    {policy, sampler, index, tier, sink,
@@ -158,7 +164,11 @@ run reads the picture, `llm` only at `tier=llm`.
                      queued_at, started_at, finished_at, elapsed_s, history[]}}
     404   unknown component (with `known`), or the video was never uploaded
 
-`params` is passed through as keyword arguments and only the component
+`aggregate` is the exception: its `inputs` (`{aggregator: selection}`, or
+`name=selection;...`), `only` and `tier` are validated before queueing, so a
+field a question does not have is a 422 naming the fields it does.
+
+Otherwise `params` is passed through as keyword arguments and only the component
 validates it, so an unknown parameter name is a `TypeError` inside the job --
 202 first, then a failed job -- and a known parameter the chosen branch does
 not read is silently ignored. `/capabilities.parameters` is the list; the
@@ -212,10 +222,63 @@ plain link.
                     inputs_fingerprint, payload, stats}
     404   this video has no aggregate of that name
 
+One entry per *answer*: `summary`, `summary~severity` where a run split an
+input, `entities:people`. `url` carries the file's stem -- `entities.people`,
+since a colon cannot be in a Windows filename -- and `{name}` takes that stem.
 `payload` differs per aggregator -- `stats` counts, `chapters` tiles, `ner`
-lists entities. `inputs_fingerprint` hashes the chunk text actually read, so a
-summary of descriptions since rewritten can be *detected* rather than left to a
-reader to notice.
+lists entities. `stats` records who made it (`model`), what it read (`inputs`)
+and the definition's `version`; `inputs_fingerprint` hashes the text that input
+actually read plus that version, so a summary of descriptions since rewritten
+can be *detected* rather than left to a reader to notice.
+
+### GET /aggregate-definitions
+
+    out   {prompts[{id, name, version, kind, about, instruction, fields,
+                    inputs?, key?, builtin}],
+           profiles[{id, name, version, about, field, identity[], story[],
+                     transcript, from, threshold, rule, mutual, check,
+                     min_appearances, max_narratives, instruction, fields,
+                     builtin}],
+           kinds[], checks[], profile_defaults{},
+           inputs{default, grammar[{syntax, reads}]}, problems{}, custom_file}
+
+A prompt runs as its name; a profile as `entities:<name>`. `problems` lists
+custom entries in `data/aggregates.json` that were dropped -- shadowing a
+built-in, or failing their check -- rather than raised, because one typo in a
+hand-edited file taking this route down takes every form built from it too.
+
+### POST /aggregate-prompts · DELETE /aggregate-prompts/{name}
+
+    in    {name, kind: "fold"|"spans"|"items", instruction,
+           fields: {field: {type: "text"|"list", about, of?, one_of?}},
+           about?, inputs?, key?, fold_instruction?}
+    out   201, the entry plus {name, version}      DELETE: 204
+    409   the name is built in
+    422   {"problems": [...]} -- every fault at once
+    404   DELETE: no custom prompt of that name
+
+`fields` is the answer, in describe's builder. A kind writes its own citation
+keys -- `chunk_id`, `first_chunk`, `last_chunk` -- so a definition cannot
+declare them. `inputs` is checked against the question vocabulary when the
+prompt is written, not when a run first meets it.
+
+### POST /link-profiles · DELETE /link-profiles/{name}
+
+    in    {name, field, instruction, fields,
+           identity?: [key], story?: [key], transcript?: false, from?: "*",
+           threshold?, rule?: "max"|"q95"|"q90", mutual?: true,
+           check?: "flag"|"off", min_appearances?: 2, max_narratives?: 12,
+           about?}
+    out   201      DELETE: 204
+    409 · 422 · 404 as for prompts
+
+`identity` names the entry keys linking embeds, and some question's shape must
+have a `field` list carrying them. Without `identity` a profile links whole
+values -- a text field, `summary` or `transcript` -- and must give `threshold`:
+nothing in one answer is provably different from anything else, so no threshold
+can be read off the video. `check: flag` has the account call name observations
+that contradict the rest; they are kept and marked, never dropped. Deleting a
+definition leaves the answers it wrote where they are.
 
 ### GET /videos/{video_id}/frames/{index}
 
@@ -229,7 +292,7 @@ manifest names it -- not a position among the kept ones, and not a second.
 
     out   /prompts      {prompts[{name, builtin, shape, fields[], about,
                                   instruction}],
-                         shapes{name: {fallback, builtin, fields[], summary, identity{}}},
+                         shapes{name: {fallback, builtin, fields[], summary}},
                          field_types[], limits{}, custom_file}
           /prompts/{n}  the same entry plus {schema, version}
     404   unknown question (with `known`)
@@ -245,7 +308,6 @@ indicative, because a call's schema depends on nothing but its question.
     in    {name, instruction, about?, summary?,
            fields: {field: {type: "text"|"list", about,
                             of?: {key: description},   -- list of objects
-                            identity?: [key, ...],     -- keys of `of` that say who
                             one_of?: [...]}}}          -- a fixed vocabulary
     out   201, the same body `GET /prompts/{name}` returns
     409   the name is a built-in question, or a built-in shape
@@ -412,11 +474,10 @@ out with `strict: true` and a raw schema the API refuses would fail after the
 frames are read. `/prompts.shapes` marks each shape `builtin`, and
 `field_types` and `limits` publish what a builder may contain.
 
-`identity` on a list-of-objects field names the keys that identify an entry
-across chunks -- `clothing`, not `action` -- and is what the `entities`
-aggregate links on. It is kept beside the shape, not in it, so declaring or
-changing it re-describes nothing; a shape without it is never linked.
-`/prompts.shapes` publishes each shape's `identity`.
+Which keys identify an entry across chunks -- `clothing`, not `action` -- is
+not a shape's business. A link profile names them (`POST /link-profiles`), so
+the same answers can be linked by different keys without re-describing
+anything.
 
 Built-ins use exactly this vocabulary -- `yolo` is not a special case, it is the
 `people` shape. A custom shape is stored under its question's name, is deleted

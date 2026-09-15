@@ -47,9 +47,12 @@ TABLES: dict[str, str] = {
     "chunk_samplers": "one row per (chunk, sampler RUN), with the frames it kept",
     "descriptions": "one model answer per (chunk, sampler:question)",
     "embeddings": "the text that went into the index, and the vector it became",
-    "aggregates": "video-level answers, one row per aggregator",
+    "aggregates": "video-level answers, one row per (aggregator, input)",
+    "entities": "who is who across chunks: one row per linked entity, with its account",
+    "entity_mentions": "every observation a link profile read, the entity it joined, and any doubt",
     "video_embeddings": "one vector per video, from its summary aggregate",
     "prompts": "what each question said, at the version a run asked it under",
+    "aggregate_definitions": "what each aggregate prompt or link profile said, at the version used",
 }
 
 #: Columns not worth sending unless they are asked for. A 1536-wide vector and
@@ -71,8 +74,11 @@ ORDER: dict[str, tuple[str, ...]] = {
     "descriptions": ("video_id", "chunk_id", "sampler_id"),
     "embeddings": ("video_id", "chunk_id", "sampler_id"),
     "aggregates": ("video_id", "aggregate_id"),
+    "entities": ("video_id", "aggregate_id", "entity_id"),
+    "entity_mentions": ("video_id", "aggregate_id", "chunk_id", "mention_key"),
     # Not keyed by a video at all: name, then newest version first.
     "prompts": ("name",),
+    "aggregate_definitions": ("name",),
 }
 
 #: The PostgREST operators a client may name. An allowlist rather than a

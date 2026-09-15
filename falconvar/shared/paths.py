@@ -58,6 +58,9 @@ UPLOADS = DATA_ROOT / "uploads"
 #: than in the package because a request writes it; the built-ins stay in
 #: `falconvar/video_rag/describe/prompts.json`, version-controlled and read-only.
 PROMPTS = DATA_ROOT / "prompts.json"
+#: Custom aggregate prompts and link profiles, added through the API. The
+#: built-ins live in `falconvar/aggregates/definitions.json`.
+AGGREGATE_DEFINITIONS = DATA_ROOT / "aggregates.json"
 #: Model endpoints added or overridden per deployment. Hand-edited, and never
 #: holds a key -- it names the variables keys are read from. The built-ins live
 #: in `shared/models/providers.py`.
@@ -139,7 +142,8 @@ def videos() -> list[str]:
                   if d.is_dir() and not d.name.startswith(RESERVED_PREFIX))
 
 
-__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "PROMPTS", "RESERVED_PREFIX",
+__all__ = ["REPO_ROOT", "DATA_ROOT", "OUT_ROOT", "PROMPTS", "AGGREGATE_DEFINITIONS",
+           "RESERVED_PREFIX",
            "UPLOADS", "WEIGHTS",
            "ARTIFACTS", "DIRECTORIES", "UnknownArtifact",
            "home", "artifact", "exists", "present", "videos"]

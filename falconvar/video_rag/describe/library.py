@@ -35,12 +35,10 @@ are *not* question names, so the question-level shadow guard does not cover
 them -- and it can never claim `fallback`, because exactly one shape is what
 every unrecognised question resolves to and it is a shipped one.
 
-**Identity is declared beside a shape, never inside it.** Which keys of an
-entry identify it across chunks -- `clothing` and `appearance`, not `action` --
-is what entity linking reads. `version_of` hashes the shape, so a declaration
-inside it would re-describe every answer given in that shape. Built-ins declare
-it in the top-level `identity` map; a custom field spec carries `identity`,
-which `compile_shape` never copies into the shape it builds.
+**Which keys identify an entry is not a shape's business.** It used to be
+declared beside the shapes, for entity linking; a link profile in
+`falconvar/aggregates/definitions.json` owns it now, so the same answers can be
+linked by different keys without touching what was asked.
 """
 
 from __future__ import annotations
@@ -194,6 +192,21 @@ def check_shape(spec: Any) -> list[str]:
         problems.append("a shape needs at least one field; use the `prose` "
                         "shape for a summary-only question")
         return problems
+    return problems + check_fields(fields)
+
+
+def compile_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """`{name: JSON Schema fragment}`, in the order the fields were written."""
+    return {name: _compile_field(f) for name, f in fields.items()}
+
+
+def check_fields(fields: dict[str, Any]) -> list[str]:
+    """Everything wrong with a field builder, as messages.
+
+    Apart from `check_shape` because a describe shape is not the only answer
+    built from fields: an aggregate prompt's is too, with no prose summary.
+    """
+    problems: list[str] = []
     if len(fields) > MAX_FIELDS:
         problems.append(f"{len(fields)} fields; {MAX_FIELDS} max -- a longer "
                         "answer truncates rather than failing")
@@ -224,11 +237,6 @@ def check_shape(spec: Any) -> list[str]:
                 problems.append(f"{where}: {len(one_of)} choices; {MAX_ENUM} max")
             elif not all(isinstance(v, str) and v.strip() for v in one_of):
                 problems.append(f"{where}: `one_of` values must be strings")
-
-        identity = field.get("identity")
-        if identity is not None and not field.get("of"):
-            problems.append(f"{where}: `identity` needs `of` -- it names which "
-                            "keys of each entry identify it across chunks")
 
         nested = field.get("of")
         if nested is None:
@@ -282,8 +290,6 @@ def load(refresh: bool = False) -> dict[str, Any]:
             "shapes": dict(builtin["shapes"]),
             "questions": {name: {**q, "builtin": True}
                           for name, q in builtin["questions"].items()},
-            "identity": {shape: {f: list(keys) for f, keys in fields.items()}
-                         for shape, fields in (builtin.get("identity") or {}).items()},
         }
 
         custom = _read(paths.PROMPTS)
@@ -388,22 +394,6 @@ def instruction_of(name: str) -> str:
                      if (load()["shapes"].get(q.get("shape")) or {}).get("fallback")),
                     None)
     return (fallback or {}).get("instruction", "")
-
-
-def shape_identity(shape: Optional[str]) -> dict[str, list[str]]:
-    """`{field: [keys]}` identifying an entry of this shape across chunks.
-
-    Empty for a shape that declares none, which is then never linked: there is
-    no guessing which keys say who someone is.
-    """
-    return {f: list(keys) for f, keys in
-            (load()["identity"].get(shape or "") or {}).items()}
-
-
-def identity_of(name: str) -> dict[str, list[str]]:
-    """What identifies an entry in this question's answer. See `shape_identity`."""
-    entry = load()["questions"].get(name)
-    return shape_identity(entry.get("shape")) if entry else {}
 
 
 def fields_of(name: str) -> list[str]:

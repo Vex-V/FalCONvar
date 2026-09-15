@@ -68,7 +68,7 @@ store/               those frames as JPEG, named by read index
 transcript.json      what was said, cut to the grid
 descriptions.json    one model answer per (chunk, sampler:question)
 embedded.json        the text that went into the index, without the vectors
-aggregates/*.json    one file per aggregator
+aggregates/*.json    one file per answer: summary.json, entities.people.json
 ```
 
 Vectors go to `data/out/_qdrant/` or to Postgres, not into the video's
@@ -198,25 +198,55 @@ served with a url) and **`supabase`** (pgvector + `ts_rank_cd`).
 
 ## Aggregates
 
-Video-level answers, one file per aggregator. A tier is a ceiling and they run
+Video-level answers, one file per answer. A tier is a ceiling and they run
 cheapest first, so `--tier llm` runs all three tiers.
 
 | tier | aggregators | |
 |---|---|---|
 | `free` | `stats`, `speakers`, `coverage` | arithmetic |
 | `local` | `ner`, `sentiment` | GPU models |
-| `llm` | `summary`, `chapters`, `events`, `entities` | paid calls |
+| `llm` | `summary`, `chapters`, `events`, `entities:people`, `entities:objects`, `entities:text` | paid calls |
 
-`speakers` needs a transcript and `chapters` needs `summary`; an aggregator
-whose input is missing is skipped with the reason rather than failing.
+An aggregator that does not apply — `speakers` on a silent video,
+`entities:people` where nobody was asked about people — is skipped with the
+reason rather than failing.
 
-`entities` links the same person or thing across chunks — by embedding what a
-shape declares as identity (`clothing`, `appearance`) and merging under rules
-read off each video, not by asking a model — then has the model write what each
-one did, with how long they were in shot and who they appeared with. A custom
-shape declares identity on a list field: `{"type": "list", "of": {...},
-"identity": ["actor"]}`. `python -m eval.entities` grades the linking against
-hand labels.
+**What an aggregate reads is an input.** Everything outside the free tier takes
+one, and the default is `transcript+*`: what was said, and every description.
+
+| input | reads |
+|---|---|
+| `transcript` | what was said |
+| `*` | every answer's prose |
+| `activity` · `clip:activity` · `clip:*` | a question wherever asked · one pairing · everything one sampler answered |
+| `clip:hazards[severity,hazards]` | only those fields, as one input |
+| `yolo[people.clothing]` | keys inside a list's entries |
+| `x+y` | sources joined into one input |
+| `x,y` | separate inputs — one answer each |
+
+```bash
+python -m falconvar.aggregates <id> --tier llm --input summary=transcript+clip:activity
+python -m falconvar.aggregates <id> --tier llm --only summary \
+       --input "summary=clip:hazards[severity],clip:hazards[hazards]"  # summary~severity, summary~hazards
+python -m falconvar.aggregates --list                                 # every aggregator, and what it reads
+```
+
+**`summary`, `chapters` and `events` are data, not classes** — one prompt each
+of kind `fold`, `spans` and `items` in `falconvar/aggregates/definitions.json`.
+`POST /aggregate-prompts` adds your own: an instruction, the answer's fields in
+the builder a custom question uses, and optionally the input it reads by
+default. Custom definitions live in `data/aggregates.json`.
+
+**`entities:<profile>` links the same person or thing across chunks.** A link
+profile names a list field and the keys that identify an entry — `people` by
+`appearance` and `clothing` — and linking embeds those and merges under rules
+read off each video, not by asking a model. Each linked entity then gets one
+call for its account, written from the profile's instruction into its fields,
+with how long it was in shot and what it appeared with. With `check: flag` the
+same call names observations that contradict the rest: they stay in the entity,
+marked with the reason, and the account is written without them.
+`POST /link-profiles` adds a profile; `python -m eval.entities` grades the
+linking against hand labels.
 
 ## Models
 
@@ -282,12 +312,20 @@ role resolves to right now.
 
 ## The API
 
-21 routes. `python -m uvicorn api.main:app --port 8000`, then `/` for the
+26 routes. `python -m uvicorn api.main:app --port 8000`, then `/` for the
 client or `/docs` for the schema.
 
 The client is three files under `web/` with no build step. Every parameter
 form is generated from `/capabilities`, so nothing about the pipeline is
-written down twice.
+written down twice. Five pages:
+
+| page | does |
+|---|---|
+| Video RAG | the extraction components one at a time, with what each has written |
+| Aggregates | pick aggregators by tier, override what each reads, run, read the answers; opens once describe or cut has run |
+| Prompts | describe's questions, and the aggregate prompts — copy a built-in like `summary` to make your own |
+| Search | moments or videos, every filter the route takes |
+| Data | this video's aggregate files (what each read, its version) and any Postgres table with filters |
 
 Two ways to run a video, and the choice is about how much you want to tune:
 
@@ -324,6 +362,9 @@ do not, and `GET /videos` reads them from disk.
 - `POST /search` — narrows by pairing (`clip:text`) or by question (`text`,
   across every sampler that asked it)
 - `GET|POST|DELETE /prompts` — built-ins refuse edits with 409
+- `GET /aggregate-definitions` · `POST|DELETE /aggregate-prompts` ·
+  `POST|DELETE /link-profiles` — custom aggregates and link profiles, the same
+  rules; a bad `inputs` on an aggregate run is a 422 before it is queued
 - `GET /db/tables` · `POST /db/query` — the rows a run wrote, filtered, ordered
   and paged under the publishable key, with the size of the whole result
 
@@ -344,7 +385,8 @@ falconvar/
     describe/      7  prompts · library · prompts.json · frames · backends/
     embed/         8  units · embedders · remote · local · indexes/ · readable
     retrieve/         search
-  aggregates/      tier 2: statistics/ · model/ · llm/ · linking · driver.py
+  aggregates/      tier 2: inputs · definitions.json · statistics/ · model/ ·
+                   llm/ (fold · spans · items · entities) · linking · driver.py
 api/               HTTP: routes, dispatch, one background worker, db reads
 web/               the client at /app: one page, no build step
 recovery/          STANDALONE: rebuild a store from a manifest + the video
@@ -355,7 +397,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-113 Python files, ~13.9k lines.
+116 Python files, ~15.6k lines.
 
 ## State
 

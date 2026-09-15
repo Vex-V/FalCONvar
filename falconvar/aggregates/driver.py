@@ -1,11 +1,16 @@
-"""The aggregates driver: what video_rag extracted -> `aggregates/<name>.json`.
+"""The aggregates driver: what video_rag extracted -> `aggregates/<answer>.json`.
 
-Each aggregator writes its own file, so a run that dies partway leaves the
-results it did produce rather than none -- the same reason tiers run cheapest
-first.
+Each answer writes its own file, so a run that dies partway leaves the results
+it did produce rather than none -- the same reason tiers run cheapest first.
+
+**An answer is one aggregator over one input.** `summary` over its default
+input is `summary.json`. `--input summary=clip:hazards[severity],clip:hazards[hazards]`
+is two answers, `summary~severity` and `summary~hazards`. A link profile's id
+carries a colon, `entities:people`, and Windows refuses one in a filename, so on
+disk it is `entities.people.json`.
 
 **Reaches video_rag through its driver, never its components.** Documents,
-identity declarations, an embedder and the whole-video vector all come from
+the question vocabulary, an embedder and the whole-video vector all come from
 `video_rag.driver`, imported inside the functions that need them so importing
 this package loads nothing from the other tier. video_rag, for its part, never
 reads what this writes: the summary is handed to it, not left for it to find.
@@ -13,13 +18,16 @@ reads what this writes: the summary is handed to it, not left for it to find.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from ..shared import paths
-from ..shared.storage import sinks
 from ..shared.contracts.documents import Aggregate, Produced, fingerprint_of
-from . import TIER_OF, available, resolve
-from .base import TIERS, Context, missing, resolve_order
+from ..shared.storage import sinks
+from . import available, build, definitions, expand, kind_of, takes_inputs, tier_of
+from .base import TIERS, Context, missing
+from .inputs import (InputError, answer_id, answer_of_file, check, filename,
+                     labels, parse)
+from .inputs import DEFAULT as DEFAULT_INPUT
 
 
 def context_for(video_id: str) -> Context:
@@ -27,16 +35,8 @@ def context_for(video_id: str) -> Context:
     from ..video_rag import driver as video_rag
 
     found = video_rag.documents(video_id)
-    descriptions = found["descriptions"]
-    identity: dict[str, dict[str, list[str]]] = {}
-    if descriptions is not None:
-        asked = {block.get("question") or sampler_id
-                 for chunk in descriptions.chunks
-                 for sampler_id, block in (chunk.get("samplers") or {}).items()}
-        identity = {q: declared for q in sorted(asked)
-                    if (declared := video_rag.identity_of(q))}
-    return Context(video_id, found["timeline"], found["manifest"], descriptions,
-                   found["transcript"], identity)
+    return Context(video_id, found["timeline"], found["manifest"],
+                   found["descriptions"], found["transcript"])
 
 
 #: Who made an `llm` aggregate that does not say. Before providers existed
@@ -54,116 +54,199 @@ def made_by(document: Aggregate) -> Optional[str]:
     return recorded
 
 
-def validate(tier: str = "free", llm: Optional[str] = None) -> list[str]:
-    """What stops a run before it starts, as messages."""
+def parse_inputs(inputs: Any) -> dict[str, str]:
+    """`{aggregator: selection}`, from a dict or `name=selection;name=selection`.
+
+    The string form is what a CLI flag or a form field hands over. Split on the
+    first `=`, so a label inside the selection survives.
+    """
+    if not inputs:
+        return {}
+    if isinstance(inputs, dict):
+        return {str(k).strip(): str(v).strip() for k, v in inputs.items()}
+    out: dict[str, str] = {}
+    for part in str(inputs).split(";"):
+        if not part.strip():
+            continue
+        name, sep, selection = part.partition("=")
+        if not sep:
+            raise InputError(f"{part.strip()!r}: an input is `aggregator=selection`")
+        out[name.strip()] = selection.strip()
+    return out
+
+
+def default_selection(name: str) -> str:
+    return (DEFAULT_INPUT if kind_of(name) is None
+            else definitions.default_selection(name))
+
+
+def _plan_problems(tier: str, inputs: Any, only: Any) -> list[str]:
+    """Everything wrong with what a run asks for, short of who answers it."""
     if tier not in TIERS:
         return [f"tier must be one of {', '.join(TIERS)}"]
-    if tier != "llm":
-        return []
+    try:
+        selections = parse_inputs(inputs)
+    except InputError as exc:
+        return [str(exc)]
+    known = set(available())
+    wanted = expand(only)
+    problems = [f"unknown aggregator {name!r}; known: {', '.join(available())}"
+                for name in wanted if name not in known]
+    vocabulary = None
+    for name, selection in selections.items():
+        if name not in known:
+            problems.append(f"an input for {name!r}, which is not an aggregator")
+            continue
+        if not takes_inputs(name):
+            problems.append(f"{name} counts what extraction produced; it reads no input")
+            continue
+        if name not in wanted:
+            problems.append(f"an input for {name}, which `only` leaves out")
+        elif TIERS.index(tier_of(name)) > TIERS.index(tier):
+            problems.append(f"an input for {name}, a {tier_of(name)} aggregator; "
+                            f"this run stops at {tier}")
+        try:
+            parsed = parse(selection)
+            labels(parsed)
+        except InputError as exc:
+            problems.append(f"{name}: {exc}")
+            continue
+        if vocabulary is None:
+            from ..video_rag import driver as video_rag
+            vocabulary = video_rag.vocabulary()
+        problems += [f"{name}: {p}" for p in check(parsed, vocabulary)]
+        if kind_of(name) == "link":
+            for one in parsed:
+                try:
+                    definitions.selection(definitions.locate(name)[1], one)
+                except InputError as exc:
+                    problems.append(f"{name}: {exc}")
+    return problems
+
+
+def validate(tier: str = "free", llm: Optional[str] = None, inputs: Any = None,
+             only: Any = None, embedder: Optional[str] = None) -> list[str]:
+    """What stops a run before it starts, as messages."""
+    problems = _plan_problems(tier, inputs, only)
+    if problems or tier != "llm":
+        return problems
     from ..shared.models import providers
-    return providers.problems("llm", llm)
+    problems += providers.problems("llm", llm)
+    if any(kind_of(n) == "link" for n in expand(only)):
+        problems += providers.problems("embed", embedder)
+    return problems
 
 
 def run(video_id: str, tier: str = "free",
-        only: Optional[Sequence[str]] = None,
+        only: Optional[Sequence[str] | str] = None,
         force: bool = False,
         sink: str | Sequence[str] = "file",
         llm: Optional[str] = None,
         embedder: Optional[str] = None,
-        index: Optional[str] = None) -> Produced:
+        index: Optional[str] = None,
+        inputs: Optional[dict[str, str] | str] = None) -> Produced:
     """Run every aggregator up to ``tier``, cheapest first.
 
-    `llm` is who answers the paid tier and `embedder` who embeds for it -- each
-    a provider or `provider/model`, None resolving through
-    `shared.models.providers`. `index` naming `supabase` also stores the
-    summary as the video's vector, which `/search level=video` ranks.
+    `inputs` is `{aggregator: selection}` -- or `name=selection;...` -- and an
+    aggregator not named reads its own default. `llm` is who answers the paid
+    tier and `embedder` who embeds for the link profiles, each a provider or
+    `provider/model`. `index` naming `supabase` also stores the summary as the
+    video's vector, which `/search level=video` ranks.
     """
-    if tier not in TIERS:
-        raise KeyError(f"unknown tier {tier!r}; known: {', '.join(TIERS)}")
+    problems = _plan_problems(tier, inputs, only)
+    if problems:
+        raise ValueError("; ".join(problems))
+    selections = parse_inputs(inputs)
     ceiling = TIERS.index(tier)
-    names = [n for n in (only or available())
-             if TIERS.index(TIER_OF[n]) <= ceiling]
+    names = sorted((n for n in expand(only) if TIERS.index(tier_of(n)) <= ceiling),
+                   key=lambda n: TIERS.index(tier_of(n)))
     context = context_for(video_id)
-    fingerprint = context.inputs_fingerprint()
+    whole = context.inputs_fingerprint()
+    grid = context.timeline.fingerprint()
 
     directory = paths.artifact(video_id, "aggregates")
+    backends = sinks.parse(sink)
     produced: dict[str, str] = {}
     skipped: dict[str, str] = {}
     ran: list[str] = []
     current = 0
     models: set[str] = set()
+    used: dict[str, str] = {}
 
-    for name in resolve_order(names, TIER_OF):
-        # Only the paid tier takes a provider, and only an aggregator that
-        # embeds takes an embedder. The local models name their own
-        # checkpoints, and arithmetic needs neither.
-        cls = resolve(name)
-        if TIER_OF[name] != "llm":
-            aggregator = cls()
-        elif getattr(cls, "embeds", False):
-            aggregator = cls(llm, embedder)
-        else:
-            aggregator = cls(llm)
-        author = getattr(aggregator, "model_key", None)
-        # An aggregator whose answer depends on more than the chunk text --
-        # what the shapes declare as identity -- folds that in, so a changed
-        # declaration rebuilds it rather than reusing a stale answer. The rest
-        # keep the fingerprint they always had.
-        inputs_of = getattr(aggregator, "inputs_of", None)
-        expected = (fingerprint if inputs_of is None else
-                    fingerprint_of({"text": fingerprint, "declared": inputs_of(context)}))
-        why = missing(aggregator, context, ran)
+    for name in names:
+        aggregator = build(name, llm, embedder)
+        why = missing(aggregator, context)
         if why is not None:
             skipped[name] = why
             continue
+        author = getattr(aggregator, "model_key", None)
 
-        path = directory / f"{name}.json"
-
-        # The fingerprint governs whether to RECOMPUTE, not whether to write.
-        # Those are different questions: a run that adds a backend has nothing
-        # to recompute and everything to write, and conflating them means the
-        # new destination silently stays empty while the run reports success.
-        # Exactly the bug `embed` had across two indexes.
-        #
-        # And the model is part of "current". Same text, different model is a
-        # different answer the caller asked for -- reusing the stored one would
-        # report success for a switch that never happened, which is the silent
-        # no-op `describe` keys its resume on the describer to avoid.
-        stored = None
-        if not force and path.exists():
-            candidate = Aggregate.from_dict(sinks.read_json(path))
-            if (candidate.inputs_fingerprint == expected
-                    and made_by(candidate) == author):
-                stored = candidate
-
-        if stored is not None:
-            current += 1
-            document = stored
+        # (answer id, input, what it read, the fingerprint a stored copy needs)
+        answers: list[tuple[str, Any, Any, str]] = []
+        if not takes_inputs(name):
+            answers.append((name, None, None, whole))
         else:
-            payload = aggregator.run(context)
-            document = Aggregate(video_id=video_id, aggregate_id=name,
-                                 tier=aggregator.tier, payload=payload,
-                                 inputs_fingerprint=expected,
-                                 stats={"about": aggregator.about,
-                                        **({"model": author} if author else {})})
-        if author:
-            models.add(author)
+            parsed = parse(selections.get(name) or default_selection(name))
+            for one, label in zip(parsed, labels(parsed)):
+                answer = answer_id(name, label)
+                read = aggregator.read(context, one)
+                if read.empty:
+                    skipped[answer] = read.why_empty
+                    continue
+                # What was read and what it was asked with -- never what was
+                # merely available, so a summary of the transcript is not
+                # rebuilt because a description changed.
+                answers.append((answer, one, read, fingerprint_of({
+                    "timeline": grid, "read": read.fingerprint(),
+                    "version": aggregator.version})))
 
-        # Not `sinks.write`: that resolves one path per artifact name, and each
-        # aggregator writes its own file under `aggregates/`. The file half is
-        # therefore explicit here, and the row half goes through the same
-        # writer every other component uses -- so `--sink supabase` means the
-        # same thing for this component as for the rest.
-        backends = sinks.parse(sink)
-        if "file" in backends and stored is None:
-            produced[name] = str(sinks.write_json(path, document.as_dict()))
-        elif "file" in backends:
-            produced[name] = str(path)
-        if "supabase" in backends:
-            from ..shared.storage import rows
-            rows.WRITERS["aggregate"](video_id, document.as_dict())
-            produced.setdefault(name, "aggregate@supabase")
-        ran.append(name)
+        for answer, one, read, expected in answers:
+            path = directory / filename(answer)
+
+            # The fingerprint governs whether to RECOMPUTE, not whether to
+            # write. A run that adds a backend has nothing to recompute and
+            # everything to write -- exactly the bug `embed` had across two
+            # indexes. And the model is part of "current": same text, different
+            # model is a different answer the caller asked for.
+            stored = None
+            if not force and path.exists():
+                candidate = Aggregate.from_dict(sinks.read_json(path))
+                if (candidate.inputs_fingerprint == expected
+                        and made_by(candidate) == author):
+                    stored = candidate
+
+            if stored is not None:
+                current += 1
+                document = stored
+            else:
+                payload = (aggregator.run(context) if read is None
+                           else aggregator.run(context, read))
+                stats: dict[str, Any] = {"about": aggregator.about,
+                                         **({"model": author} if author else {})}
+                if read is not None:
+                    stats.update(inputs=str(one), version=aggregator.version,
+                                 read_chars=read.chars)
+                document = Aggregate(video_id=video_id, aggregate_id=answer,
+                                     tier=aggregator.tier, payload=payload,
+                                     inputs_fingerprint=expected, stats=stats)
+            if author:
+                models.add(author)
+            if kind_of(name) is not None:
+                used[name] = aggregator.version
+
+            # Not `sinks.write`: that resolves one path per artifact name, and
+            # each answer writes its own file under `aggregates/`. The row half
+            # goes through the same writer every other component uses.
+            if "file" in backends:
+                produced[answer] = str(sinks.write_json(path, document.as_dict())
+                                       if stored is None else path)
+            if "supabase" in backends:
+                from ..shared.storage import rows
+                rows.WRITERS["aggregate"](video_id, document.as_dict())
+                produced.setdefault(answer, "aggregate@supabase")
+            ran.append(answer)
+
+    recorded = _record_definitions(used, backends)
 
     # The whole-video vector, from the summary this run has in hand. It lived in
     # `embed`, which read `summary.json` -- a file that on a first run did not
@@ -176,19 +259,50 @@ def run(video_id: str, tier: str = "free",
 
     return Produced(
         video_id=video_id, component="aggregate",
-        backend=",".join(sinks.parse(sink)),
+        backend=",".join(backends),
         artifacts=produced,
         stats={"tier": tier, "ran": len(ran), "current": current,
                "computed": len(ran) - current, "aggregates": ran,
                "models": sorted(models), "video_units": video_units,
-               "skipped": skipped},
+               "skipped": skipped, **recorded},
         skipped=sorted(skipped),
     )
 
 
+def _record_definitions(used: dict[str, str], backends: Sequence[str]) -> dict[str, Any]:
+    """Provenance for Postgres: what each definition said at the version used.
+
+    Reported, never raised -- the answers already landed, and a missing table
+    must read as a missing table rather than as a run with nothing to record.
+    """
+    if "supabase" not in backends or not used:
+        return {}
+    from ..shared.storage import rows
+    entries = []
+    for name, version in sorted(used.items()):
+        section, definition = definitions.locate(name)
+        entry = definitions.get(section, definition)
+        entries.append({"name": name, "version": version, "kind": kind_of(name),
+                        "definition": {k: v for k, v in entry.items() if k != "builtin"},
+                        "builtin": bool(entry.get("builtin"))})
+    try:
+        return {"definitions_recorded": rows.write_definitions(entries)}
+    except Exception as exc:                              # noqa: BLE001
+        return {"definitions_recorded": 0,
+                "definitions_error": f"{type(exc).__name__}: {exc}"[:300]}
+
+
 def load(video_id: str, name: str) -> Aggregate:
-    path = paths.artifact(video_id, "aggregates") / f"{name}.json"
+    path = paths.artifact(video_id, "aggregates") / filename(name)
     return Aggregate.from_dict(sinks.read_json(path))
+
+
+def answers(video_id: str) -> list[str]:
+    """Every answer this video has on disk, by id."""
+    directory = paths.artifact(video_id, "aggregates")
+    if not directory.exists():
+        return []
+    return [answer_of_file(p.stem) for p in sorted(directory.glob("*.json"))]
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -196,28 +310,46 @@ def main(argv: Optional[list[str]] = None) -> int:
     import json
 
     ap = argparse.ArgumentParser(description="Higher-level answers over what video_rag extracted.")
-    ap.add_argument("video_id")
+    ap.add_argument("video_id", nargs="?")
     ap.add_argument("--tier", default="free", choices=TIERS,
                     help="a cost ceiling; cheaper tiers still run")
-    ap.add_argument("--only", default=None, help="comma-separated aggregator names")
+    ap.add_argument("--only", default=None,
+                    help="comma-separated ids, e.g. summary,entities:people; "
+                         "`entities` means every link profile")
+    ap.add_argument("--input", action="append", default=[], metavar="NAME=SELECTION",
+                    help="repeatable. What one aggregator reads, e.g. "
+                         "summary=transcript+clip:activity or "
+                         "summary=clip:hazards[severity],clip:hazards[hazards]")
     ap.add_argument("--force", action="store_true", help="rebuild what is current")
     ap.add_argument("--sink", default="file", help="file | supabase | both")
     ap.add_argument("--llm", default=None,
                     help="who answers the llm tier: a provider or provider/model; "
                          "default FALCONVAR_LLM, then openai")
     ap.add_argument("--embedder", default=None,
-                    help="who embeds for it: a provider or provider/model; "
-                         "default FALCONVAR_EMBEDDER, then openai")
+                    help="who embeds for the link profiles: a provider or "
+                         "provider/model; default FALCONVAR_EMBEDDER, then openai")
     ap.add_argument("--index", default=None,
                     help="`supabase` also stores the summary as the video's vector")
+    ap.add_argument("--list", action="store_true",
+                    help="every aggregator, its tier and what it reads by default")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    only = ([n.strip() for n in args.only.split(",") if n.strip()]
-            if args.only else None)
+    if args.list:
+        for name in available():
+            kind = kind_of(name) or "code"
+            reads = default_selection(name) if takes_inputs(name) else "-"
+            from . import about
+            print(f"{name:<22} {tier_of(name):<6} {kind:<6} {reads:<16} {about(name)}")
+        for where, found in definitions.load()["problems"].items():
+            print(f"  ignored {where}: {'; '.join(found)}")
+        return 0
+    if not args.video_id:
+        ap.error("video_id is required unless --list")
+
     try:
-        produced = run(args.video_id, args.tier, only, args.force, args.sink,
-                       args.llm, args.embedder, args.index)
+        produced = run(args.video_id, args.tier, args.only, args.force, args.sink,
+                       args.llm, args.embedder, args.index, ";".join(args.input))
     except (KeyError, ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}")
         return 1
@@ -233,7 +365,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     for name in s["aggregates"]:
         print(f"    {name}")
     for name, why in s["skipped"].items():
-        print(f"    {name:<12} -- skipped: {why}")
+        print(f"    {name:<22} -- skipped: {why}")
     if s["video_units"]:
         print(f"  video vector  {s['video_units']}   -> video_embeddings")
     print(f"\naggregates -> {paths.artifact(produced.video_id, 'aggregates')}")

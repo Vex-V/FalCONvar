@@ -1,15 +1,20 @@
 """Tone per chunk, and where it turns.
 
 Signed, so a mean over the video is meaningful: two chunks at 0.9 positive and
-0.9 negative should average to nothing, not to 0.9 confident-about-something."""
+0.9 negative should average to nothing, not to 0.9 confident-about-something.
+
+A chunk is scored over every piece of its text, weighted by length -- never by
+its first 480 characters."""
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
+from ...shared.contracts.documents import fingerprint_of
 from ..base import Context
-from ..rendering import chunk_rows
-from . import DEFAULT_SENTIMENT_MODEL, MAX_CHARS, ModelUnavailable
+from ..inputs import Input, Read, read
+from . import DEFAULT_SENTIMENT_MODEL, MAX_CHARS, ModelUnavailable, pieces, plain
+
 
 class SentimentAggregator:
     """How the tone moves across the video, chunk by chunk."""
@@ -18,9 +23,14 @@ class SentimentAggregator:
     tier = "local"
     about = "tone per chunk, and where it turns"
     depends_on: tuple[str, ...] = ()
+    takes_inputs = True
 
     def __init__(self, model: Optional[str] = None) -> None:
         self.model_name = model or DEFAULT_SENTIMENT_MODEL
+
+    @property
+    def version(self) -> str:
+        return fingerprint_of({"model": self.model_name, "chars": MAX_CHARS})
 
     def _pipeline(self) -> Any:
         from transformers import pipeline
@@ -31,27 +41,26 @@ class SentimentAggregator:
             raise ModelUnavailable(
                 f"could not load {self.model_name!r}: {exc}") from None
 
-    def run(self, context: Context) -> dict[str, Any]:
-        rows = chunk_rows(context)
-        if not rows:
-            return {"per_chunk": [], "chunks_read": 0}
-        classify = self._pipeline()
+    def read(self, context: Context, one: Input) -> Read:
+        return read(context, one)
 
+    def run(self, context: Context, read: Read) -> dict[str, Any]:
+        classify = self._pipeline()
         per_chunk = []
-        for chunk_id, line in rows:
-            result = classify(line[:MAX_CHARS])[0]
-            start, end = context.span_of(chunk_id)
-            # Signed, so a mean over the video is meaningful. Two chunks at
-            # 0.9 positive and 0.9 negative should average to nothing, not to
-            # 0.9 confident-about-something.
-            signed = (result["score"] if result["label"].upper().startswith("POS")
-                      else -result["score"])
-            per_chunk.append({"chunk_id": chunk_id,
-                              "start_ts": round(start, 3),
-                              "end_ts": round(end, 3),
-                              "label": result["label"].lower(),
-                              "score": round(float(result["score"]), 4),
-                              "signed": round(float(signed), 4)})
+        for row in read.rows:
+            parts = pieces(plain(row), MAX_CHARS)
+            results = classify(parts)
+            weights = [len(p) for p in parts]
+            signed = sum(w * (r["score"] if r["label"].upper().startswith("POS")
+                              else -r["score"])
+                         for w, r in zip(weights, results)) / sum(weights)
+            per_chunk.append({"chunk_id": row.chunk_id,
+                              "start_ts": round(row.start, 3),
+                              "end_ts": round(row.end, 3),
+                              "label": "positive" if signed >= 0 else "negative",
+                              "score": round(abs(float(signed)), 4),
+                              "signed": round(float(signed), 4),
+                              "pieces": len(parts)})
 
         signs = [c["signed"] for c in per_chunk]
         turns = [b["chunk_id"] for a, b in zip(per_chunk, per_chunk[1:])
@@ -64,7 +73,7 @@ class SentimentAggregator:
             # Where the tone flips. The interesting moments in a narrative are
             # usually next to one of these.
             "turning_points": turns,
-            "chunks_read": len(rows),
+            "chunks_read": len(read.rows),
             "model": self.model_name,
         }
 

@@ -1,23 +1,35 @@
-/* One page over the API. No build step, no framework, one origin.
+/* The client over the API. No build step, no framework, one origin.
+ *
+ * Five pages, in the order work happens:
+ *
+ *   Video RAG    the extraction components, one at a time
+ *   Aggregates   higher-level answers -- once video_rag has something to read
+ *   Prompts      describe's questions, and what the aggregates ask a model
+ *   Search       moments or videos
+ *   Data         this video's aggregate files, and the rows in Postgres
  *
  * NOTHING ABOUT THE PIPELINE IS WRITTEN DOWN HERE. Every form is generated
  * from `GET /capabilities`: `parameters.<component>` names each setting with
- * its type and default, and the registries supply the legal values. A restated
- * list is a second copy to keep in step, and when it drifts a form offers a
- * parameter the component does not take or hides one it does.
+ * its type and default, the registries supply the legal values, and
+ * `aggregators` lists every aggregate -- code and definitions alike -- with its
+ * tier, kind and default input. A restated list is a second copy to keep in
+ * step, and when it drifts a form offers a parameter the component does not
+ * take or hides one it does.
  *
  * A blank field is OMITTED rather than sent as null, so the component's own
  * default applies and this page holds no second copy of it.
  *
- * The one widget written by hand is the custom-shape builder, because a field
- * is a name, a type, a description and optionally a nested map -- and a text
- * box does not say so.
+ * The widgets written by hand are the field builder -- a field is a name, a
+ * type, a description and optionally a nested map, and a text box does not say
+ * so -- and the answer viewer, which reads any payload generically: prose as
+ * prose, lists of records as tables, the rest as key and value.
  */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, props = {}, kids = []) => {
   const node = Object.assign(document.createElement(tag), props);
   for (const kid of [].concat(kids)) {
+    if (kid === null || kid === undefined) continue;
     node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   }
   return node;
@@ -47,23 +59,34 @@ const postJSON = (path, payload) => api(path, {
 
 const show = (node, text) => { node.textContent = text; };
 const chip = (text, cls = "") => el("span", { className: `chip ${cls}` }, text);
+const errorText = err => typeof err.detail === "object"
+  ? JSON.stringify(err.detail, null, 2) : err.message;
 
 let CAPS = null;      // GET /capabilities
 let VIDEO = null;     // the selected video_id
-let DETAIL = null;    // GET /videos/{id}, for has_audio / has_video
-let PICKED = null;    // the component whose form is showing
+let DETAIL = null;    // this video's row from GET /videos: artifacts, streams
+let PICKED = null;    // the video_rag component whose form is showing
+let PAGE = "rag";     // the page showing
 
-/* ------------------------------------------------------------------ tabs */
+/* ----------------------------------------------------------------- pages */
 
+const OPEN = {
+  aggregates: () => { renderAggregatePage(); loadAnswers(); },
+  prompts: () => { loadPrompts(); loadAggregatePrompts(); },
+  data: () => { loadAggregateFiles(); loadDbStatus(); },
+};
+
+function openPage(name) {
+  PAGE = name;
+  for (const button of document.querySelectorAll("#tabs button")) {
+    const on = button.dataset.tab === name;
+    button.setAttribute("aria-selected", String(on));
+    $(`#tab-${button.dataset.tab}`).hidden = !on;
+  }
+  (OPEN[name] || (() => {}))();
+}
 for (const button of document.querySelectorAll("#tabs button")) {
-  button.onclick = () => {
-    for (const other of document.querySelectorAll("#tabs button")) {
-      other.setAttribute("aria-selected", String(other === button));
-      $(`#tab-${other.dataset.tab}`).hidden = other !== button;
-    }
-    if (button.dataset.tab === "data") loadDbStatus();
-    if (button.dataset.tab === "prompts") loadPrompts();
-  };
+  button.onclick = () => openPage(button.dataset.tab);
 }
 
 /* --------------------------------------------------------------- videos */
@@ -76,21 +99,20 @@ async function loadVideos(keep) {
   select.append(el("option", { value: "__upload__", textContent: "+ upload a file..." }));
   if (keep && videos.some(v => v.video_id === keep)) select.value = keep;
   VIDEO = select.value === "__upload__" ? null : select.value;
-  await loadVideoDetail(videos);
+  loadVideoDetail(videos);
   renderScope(videos.filter(v => v.artifacts.includes("embedded")));
   renderSteps();
+  (OPEN[PAGE] || (() => {}))();
 }
 
-async function loadVideoDetail(videos) {
+function loadVideoDetail(videos) {
   const facts = $("#video-facts");
-  if (!VIDEO) { facts.textContent = ""; DETAIL = null; return; }
-  const found = (videos || []).find(v => v.video_id === VIDEO);
-  DETAIL = found || null;
-  if (!found) { facts.textContent = ""; return; }
-  const bits = [`${(found.duration_s || 0).toFixed(1)}s`];
-  bits.push(found.has_video ? "video" : "no video");
-  bits.push(found.has_audio ? "audio" : "no audio");
-  if (found.chunks) bits.push(`${found.chunks} chunks · ${found.policy}`);
+  DETAIL = VIDEO ? (videos || []).find(v => v.video_id === VIDEO) || null : null;
+  if (!DETAIL) { facts.textContent = ""; return; }
+  const bits = [`${(DETAIL.duration_s || 0).toFixed(1)}s`];
+  bits.push(DETAIL.has_video ? "video" : "no video");
+  bits.push(DETAIL.has_audio ? "audio" : "no audio");
+  if (DETAIL.chunks) bits.push(`${DETAIL.chunks} chunks · ${DETAIL.policy}`);
   facts.textContent = bits.join(" · ");
 }
 
@@ -113,6 +135,7 @@ async function upload() {
     form.append("file", file);
     form.append("run", "false");
     form.append("sink", $("#video").dataset.sink || "file,supabase");
+    openPage("rag");
     show($("#output"), `uploading ${file.name} ...`);
     try {
       const out = await api("/videos", { method: "POST", body: form });
@@ -126,12 +149,33 @@ async function upload() {
   input.click();
 }
 
-/* ------------------------------------------------------------ components */
+/* `stage` is what is RUNNING; `history` is what has finished. The workflow
+ * announces a component twice for exactly this reason, so a poller does not
+ * read the previous component's name through the longest stage of a run. */
+async function pollJob(id, state, output, onDone) {
+  for (;;) {
+    const job = await api(`/jobs/${id}`);
+    state.replaceChildren(
+      chip(job.state, job.state === "failed" ? "bad" : "on"),
+      el("span", { className: "hint", textContent:
+        ` ${job.stage || ""} ${job.elapsed_s != null ? job.elapsed_s + "s" : ""}` }));
+    show(output, JSON.stringify(job.error ? {
+      state: job.state, error: job.error, traceback: (job.detail || {}).traceback,
+    } : {
+      state: job.state, stage: job.stage, elapsed_s: job.elapsed_s, detail: job.detail,
+    }, null, 2));
+    if (job.state === "done") { if (onDone) await onDone(job); return; }
+    if (job.state === "failed") return;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+/* ----------------------------------------------------- page 1: video rag */
 
 /* Which stages this file cannot support, decided AFTER `media` has read it.
  * Whether a file carries a soundtrack is a property of the file, not of the
- * request, so a stage needing a stream it has none of is marked skipped with
- * the reason rather than queued to fail. */
+ * request, so a stage needing a stream it has none of is marked n/a with the
+ * reason rather than queued to fail. */
 function unusable(name) {
   if (!DETAIL) return null;
   if (!DETAIL.has_audio && (name === "audio" || name === "cut"))
@@ -141,18 +185,26 @@ function unusable(name) {
   return null;
 }
 
+/* Aggregates have their own page: they read what these wrote, never the video. */
+const ragComponents = () => (CAPS.components || []).filter(c => c !== "aggregate");
+
 function renderSteps() {
+  if (!CAPS) return;
   const list = $("#steps");
   list.replaceChildren();
-  (CAPS.components || []).forEach((name, i) => {
+  const present = new Set((DETAIL && DETAIL.artifacts) || []);
+  const wrote = { media: "media", audio: "raw_transcript", "boundaries.evidence": "cuts",
+                  boundaries: "timeline", video: "manifest", cut: "transcript",
+                  describe: "descriptions", embed: "embedded" };
+  ragComponents().forEach((name, i) => {
     const why = unusable(name);
-    const isMedia = name === "media";
     const button = el("button", { type: "button" }, [
       el("span", { className: "n", textContent: String(i + 1) }),
       el("span", { textContent: name }),
     ]);
-    if (isMedia) button.append(el("span", { className: "mark", textContent: "upload" }));
-    else if (why) button.append(el("span", { className: "mark", textContent: "n/a" }));
+    const mark = name === "media" ? "upload" : why ? "n/a"
+      : present.has(wrote[name]) ? "done" : "";
+    if (mark) button.append(el("span", { className: "mark", textContent: mark }));
     button.setAttribute("aria-selected", String(name === PICKED));
     button.onclick = () => { PICKED = name; renderSteps(); renderParams(); };
     list.append(el("li", {}, button));
@@ -160,7 +212,8 @@ function renderSteps() {
   const why = PICKED && unusable(PICKED);
   $("#plan-note").textContent = why
     ? `${PICKED}: skipped — ${why}`
-    : "Order is yours on this path. workflow.py is the reference.";
+    : "Order is yours on this path; workflow.py is the reference. "
+      + "When describe or cut has run, the Aggregates page opens up.";
 }
 
 /* Legal values, from the registries rather than from a list here. */
@@ -185,7 +238,7 @@ function providerNote(param) {
     const model = role === "embed" ? p.embed_model : p.chat_model;
     return `${p.name}${model ? ` (${model})` : ""}${p.configured ? "" : " ✗"}`;
   }).join(" · ");
-  return `a provider, or provider/model. blank = ${(CAPS.defaults || {})[param]}; `
+  return `${param}: a provider, or provider/model. blank = ${(CAPS.defaults || {})[param]}; `
        + `✗ = no key set. ${listed}`;
 }
 
@@ -231,7 +284,6 @@ function renderParams() {
       input = el("select", { id });
       input.append(el("option", { value: "", textContent: "— default" }));
       for (const c of choices) input.append(el("option", { value: c, textContent: c }));
-      if (p.required && p.default === null) input.value = "";
     } else if (p.type === "int" || p.type === "float") {
       input = el("input", { type: "number", id, step: p.type === "float" ? "any" : "1",
                             placeholder: p.default === null ? "" : String(p.default) });
@@ -290,38 +342,15 @@ $("#run").onclick = async () => {
   try {
     const { job } = await postJSON(
       `/videos/${encodeURIComponent(VIDEO)}/run/${PICKED}`, { params });
-    await pollJob(job.id, state);
+    await pollJob(job.id, state, $("#output"), showArtifacts);
   } catch (err) {
     state.replaceChildren(chip(`http ${err.status || "error"}`, "bad"));
-    show($("#output"), typeof err.detail === "object"
-      ? JSON.stringify(err.detail, null, 2) : err.message);
+    show($("#output"), errorText(err));
   } finally {
     $("#run").disabled = false;
     loadVideos(VIDEO);
   }
 };
-
-/* `stage` is what is RUNNING; `history` is what has finished. The workflow
- * announces a component twice for exactly this reason, so a poller does not
- * read the previous component's name through the longest stage of a run. */
-async function pollJob(id, state) {
-  for (;;) {
-    const job = await api(`/jobs/${id}`);
-    state.replaceChildren(
-      chip(job.state, job.state === "failed" ? "bad" : "on"),
-      el("span", { className: "hint", textContent:
-        ` ${job.stage || ""} ${job.elapsed_s != null ? job.elapsed_s + "s" : ""}` }));
-    show($("#output"), JSON.stringify(job.error ? {
-      state: job.state, error: job.error, traceback: (job.detail || {}).traceback,
-    } : {
-      state: job.state, stage: job.stage, elapsed_s: job.elapsed_s,
-      detail: job.detail,
-    }, null, 2));
-    if (job.state === "done") { await showArtifacts(); return; }
-    if (job.state === "failed") return;
-    await new Promise(r => setTimeout(r, 1000));
-  }
-}
 
 /* Only the artifacts that exist are offered. A link that 404s reads as
  * breakage rather than as a stage that never ran. */
@@ -337,15 +366,6 @@ async function showArtifacts() {
       row.append(el("button", { className: "small", textContent: d.name, title: d.about,
         onclick: async () => show($("#output"),
           JSON.stringify(await api(d.url), null, 2).slice(0, 200000)) }));
-    }
-    box.append(row);
-  }
-  if (detail.aggregates.length) {
-    box.append(el("h3", {}, "Aggregates"));
-    const row = el("div", { className: "row" });
-    for (const a of detail.aggregates) {
-      row.append(el("button", { className: "small", textContent: a.name, title: a.about,
-        onclick: async () => show($("#output"), JSON.stringify(await api(a.url), null, 2)) }));
     }
     box.append(row);
   }
@@ -380,7 +400,256 @@ async function showFrames() {
   if (!frames.length) strip.replaceChildren("no frames in this manifest");
 }
 
-/* -------------------------------------------------------------- prompts */
+/* ---------------------------------------------------- page 2: aggregates */
+
+/* Aggregates read what video_rag wrote -- descriptions, a transcript -- and
+ * never the video, so until one of those exists there is nothing to ask. */
+function extractedFor() {
+  const present = new Set((DETAIL && DETAIL.artifacts) || []);
+  return ["descriptions", "transcript"].filter(a => present.has(a));
+}
+
+const definitionOf = answer => answer.split("~")[0];
+const tierRank = tier => (CAPS.tiers || []).indexOf(tier);
+
+/* Selections survive a re-render: switching video must not wipe what was ticked. */
+const PICKS = { chosen: null, inputs: {} };
+
+function renderAggregatePage() {
+  if (!CAPS) return;
+  const gate = $("#a-gate");
+  const have = extractedFor();
+  if (!VIDEO) {
+    gate.hidden = false;
+    gate.textContent = "Pick a video.";
+  } else if (!have.length) {
+    gate.hidden = false;
+    gate.textContent = `${VIDEO} has nothing to aggregate yet. Aggregates read what video_rag `
+      + "wrote — run describe (the picture) or cut (the soundtrack) on the Video RAG page first.";
+  } else {
+    gate.hidden = true;
+  }
+  $("#a-run").disabled = !VIDEO || !have.length;
+
+  const aggregators = CAPS.aggregators || {};
+  if (PICKS.chosen === null) {
+    PICKS.chosen = new Set(Object.keys(aggregators).filter(n => aggregators[n].tier === "free"));
+  }
+
+  const table = el("table", { className: "pick" });
+  table.append(el("thead", {}, el("tr", {}, [
+    el("th", {}, ""), el("th", {}, "aggregator"), el("th", {}, "kind"),
+    el("th", {}, "reads"),
+  ])));
+  const body = el("tbody");
+  for (const tier of CAPS.tiers || []) {
+    const names = Object.keys(aggregators).filter(n => aggregators[n].tier === tier);
+    if (!names.length) continue;
+    const cost = { free: "arithmetic", local: "GPU models", llm: "paid calls" }[tier] || "";
+    body.append(el("tr", { className: "tier" }, el("td", { colSpan: 4 },
+      `${tier} — ${cost}`)));
+    for (const name of names) {
+      const a = aggregators[name];
+      const box = el("input", { type: "checkbox", checked: PICKS.chosen.has(name) });
+      box.onchange = () => {
+        if (box.checked) PICKS.chosen.add(name); else PICKS.chosen.delete(name);
+      };
+      let reads;
+      if (a.reads === null) {
+        reads = el("span", { className: "hint", textContent: "everything extraction wrote" });
+      } else {
+        reads = el("input", { type: "text", placeholder: a.reads,
+                              value: PICKS.inputs[name] || "" });
+        reads.oninput = () => { PICKS.inputs[name] = reads.value; };
+        reads.title = "blank = the default shown; see “What an input may say”";
+      }
+      body.append(el("tr", {}, [
+        el("td", {}, box),
+        el("td", { className: "wrap" }, [name, el("div", { className: "hint",
+          style: "margin:0", textContent: a.about })]),
+        el("td", {}, a.kind || "code"),
+        el("td", {}, reads),
+      ]));
+    }
+  }
+  table.append(body);
+  $("#a-list").replaceChildren(table, el("p", { className: "note", textContent:
+    "Tick what to run; the run's tier is the dearest one ticked. A blank input reads the "
+    + "default; comma-separated inputs make one answer each, stored as name~label." }));
+
+  const grammar = (CAPS.aggregate_inputs || {}).grammar || [];
+  const g = el("table");
+  g.append(el("tbody", {}, grammar.map(x =>
+    el("tr", {}, [el("td", {}, el("code", {}, x.syntax)), el("td", {}, x.reads)]))));
+  $("#a-grammar-body").replaceChildren(g);
+
+  const sink = $("#a-sink");
+  if (!sink.children.length) {
+    sink.append(...["file", "supabase", "file,supabase"].map(s =>
+      el("option", { value: s, textContent: s })));
+    $("#a-index").append(el("option", { value: "", textContent: "— no video vector" }),
+      ...CAPS.indexes.map(i => el("option", { value: i, textContent: i })));
+  }
+  $("#a-llm").placeholder = (CAPS.defaults || {}).llm || "";
+  $("#a-embedder").placeholder = (CAPS.defaults || {}).embedder || "";
+  $("#a-providers").textContent = `${providerNote("llm")}\n${providerNote("embedder")}`;
+}
+
+$("#a-run").onclick = async () => {
+  const state = $("#a-state");
+  const output = $("#a-output");
+  const only = [...PICKS.chosen].filter(n => (CAPS.aggregators || {})[n]);
+  if (!only.length) { state.replaceChildren(chip("tick at least one", "bad")); return; }
+
+  const tier = only.map(n => CAPS.aggregators[n].tier)
+    .sort((a, b) => tierRank(b) - tierRank(a))[0];
+  const params = { tier, only, sink: $("#a-sink").value };
+  const inputs = {};
+  for (const name of only) {
+    const text = (PICKS.inputs[name] || "").trim();
+    if (text) inputs[name] = text;
+  }
+  if (Object.keys(inputs).length) params.inputs = inputs;
+  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"], ["#a-index", "index"]]) {
+    const v = $(id).value.trim();
+    if (v) params[key] = v;
+  }
+  if ($("#a-force").checked) params.force = true;
+
+  output.hidden = false;
+  show(output, JSON.stringify({ component: "aggregate", params }, null, 2));
+  state.replaceChildren(chip("submitting", "on"));
+  $("#a-run").disabled = true;
+  try {
+    const { job } = await postJSON(
+      `/videos/${encodeURIComponent(VIDEO)}/run/aggregate`, { params });
+    await pollJob(job.id, state, output, loadAnswers);
+  } catch (err) {
+    /* A typo in an input is a 422 before anything is queued, naming what the
+     * question does have. */
+    state.replaceChildren(chip(`http ${err.status || "error"}`, "bad"));
+    show(output, errorText(err));
+  } finally {
+    $("#a-run").disabled = false;
+  }
+};
+
+let VIEWING = null;
+
+async function loadAnswers() {
+  const box = $("#a-answers");
+  if (!VIDEO) { box.replaceChildren(); $("#a-view").replaceChildren(); return; }
+  const detail = await api(`/videos/${encodeURIComponent(VIDEO)}`);
+  const answers = detail.aggregates || [];
+  if (!answers.length) {
+    box.replaceChildren(el("p", { className: "note", textContent: "No answers yet." }));
+    $("#a-view").replaceChildren();
+    return;
+  }
+  const row = el("div", { className: "answers" });
+  for (const a of answers) {
+    const button = el("button", { className: "small", textContent: a.name, title: a.about });
+    button.setAttribute("aria-selected", String(a.name === VIEWING));
+    button.onclick = () => { VIEWING = a.name; loadAnswers(); };
+    row.append(button);
+  }
+  box.replaceChildren(row);
+  const picked = answers.find(a => a.name === VIEWING) || answers[0];
+  VIEWING = picked.name;
+  for (const b of row.children) b.setAttribute("aria-selected", String(b.textContent === VIEWING));
+  await viewAnswer(picked);
+}
+
+async function viewAnswer(a) {
+  const view = $("#a-view");
+  view.replaceChildren("loading...");
+  const doc = await api(a.url);
+  const stats = doc.stats || {};
+  const meta = el("div", { className: "meta" }, [
+    chip(doc.tier),
+    stats.model ? chip(stats.model) : null,
+    stats.inputs ? chip(`reads ${stats.inputs}`) : null,
+    stats.version ? chip(`v ${stats.version}`) : null,
+    stats.read_chars ? chip(`${stats.read_chars} chars`) : null,
+  ]);
+  view.replaceChildren(
+    el("h3", { style: "margin-top:0" }, doc.aggregate_id),
+    el("p", { className: "note", style: "margin-top:0" }, stats.about || a.about || ""),
+    meta,
+    renderPayload(doc.payload || {}),
+    el("details", {}, [el("summary", {}, "raw JSON"),
+      el("pre", { className: "out" }, JSON.stringify(doc, null, 2))]));
+}
+
+/* Any payload, generically: long text as prose, lists of records as tables,
+ * nested records collapsed, the rest as key and value. Nothing here knows
+ * which aggregator wrote it, so a custom prompt's answer reads like a built-in's. */
+function renderPayload(payload) {
+  const box = el("div");
+  const scalars = [];
+  const later = [];
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === "string" && value.length > 90) {
+      box.append(el("h3", {}, key), el("p", { className: "prose" }, value));
+    } else if (Array.isArray(value) && value.length && typeof value[0] === "object" && value[0] !== null) {
+      later.push([key, value]);
+    } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      later.push([key, value]);
+    } else {
+      scalars.push([key, value]);
+    }
+  }
+  if (scalars.length) {
+    const t = el("table", { className: "kv" });
+    t.append(el("tbody", {}, scalars.map(([k, v]) => el("tr", {}, [
+      el("th", {}, k),
+      el("td", { className: "wrap" }, Array.isArray(v) ? (v.length ? v.join(" · ") : "—")
+        : v === null ? "—" : String(v)),
+    ]))));
+    box.append(t);
+  }
+  for (const [key, value] of later) {
+    if (Array.isArray(value)) {
+      const d = el("details", { open: key !== "layers" && value.length <= 60 });
+      d.append(el("summary", {}, `${key} (${value.length})`), recordTable(value));
+      box.append(d);
+    } else {
+      const d = el("details");
+      d.append(el("summary", {}, key), el("pre", { className: "out" }, JSON.stringify(value, null, 2)));
+      box.append(d);
+    }
+  }
+  return box;
+}
+
+function cell(key, value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number" && /(_ts|_s)$/.test(key)) return `${value.toFixed(1)}s`;
+  if (key === "chunk_ids" && Array.isArray(value)) {
+    return value.length > 1 && value[value.length - 1] - value[0] === value.length - 1
+      ? `${value[0]}–${value[value.length - 1]}` : value.join(",");
+  }
+  if (Array.isArray(value) && value.every(v => typeof v !== "object")) return value.join(" · ");
+  if (typeof value === "object") {
+    const text = JSON.stringify(value);
+    return text.length > 300 ? text.slice(0, 300) + "…" : text;
+  }
+  return String(value);
+}
+
+function recordTable(rows) {
+  const cols = [];
+  for (const row of rows.slice(0, 50)) {
+    for (const key of Object.keys(row)) if (!cols.includes(key)) cols.push(key);
+  }
+  const t = el("table");
+  t.append(el("thead", {}, el("tr", {}, cols.map(c => el("th", {}, c)))));
+  t.append(el("tbody", {}, rows.slice(0, 500).map(row =>
+    el("tr", {}, cols.map(c => el("td", { className: "wrap" }, cell(c, row[c])))))));
+  return el("div", { className: "scroll" }, t);
+}
+
+/* ------------------------------------------------------- page 3: prompts */
 
 async function loadPrompts() {
   const data = await api("/prompts");
@@ -430,32 +699,39 @@ for (const radio of document.querySelectorAll('input[name="p-mode"]')) {
     const custom = radio.value === "custom" && radio.checked;
     $("#p-shape-wrap").hidden = custom;
     $("#p-custom-wrap").hidden = !custom;
-    if (custom && !$("#p-fields").children.length) addFieldRow();
+    if (custom && !$("#p-fields").children.length) addFieldRow("#p-fields");
   };
 }
 
-function addFieldRow() {
+/* One builder for both forms: a question's shape and an aggregate's answer are
+ * the same builder on the server, so they are the same widget here. */
+function addFieldRow(container, name = "", spec = {}) {
   const row = el("div", { className: "fieldrow" });
-  const name = el("input", { type: "text", placeholder: "hazards" });
+  const key = el("input", { type: "text", placeholder: "hazards", value: name });
   const type = el("select");
   type.append(el("option", { value: "list", textContent: "list" }),
               el("option", { value: "text", textContent: "text" }));
-  const about = el("input", { type: "text", placeholder: "what to put in it" });
-  const extra = el("input", { type: "text", placeholder: "of: key: desc, ... | one_of: a, b" });
+  type.value = spec.type || "list";
+  const about = el("input", { type: "text", placeholder: "what to put in it",
+                              value: spec.about || "" });
+  const extra = el("input", { type: "text", placeholder: "of: key: desc, ... | one_of: a, b",
+    value: spec.of ? Object.entries(spec.of).map(([k, d]) => `${k}: ${d}`).join(", ")
+         : spec.one_of ? spec.one_of.join(", ") : "" });
   const drop = el("button", { className: "small", textContent: "×", type: "button",
     onclick: () => row.remove() });
-  row.append(name, type, about, extra, drop);
+  row.append(key, type, about, extra, drop);
   row.dataset.row = "1";
-  $("#p-fields").append(row);
+  $(container).append(row);
 }
-$("#p-add-field").onclick = addFieldRow;
+$("#p-add-field").onclick = () => addFieldRow("#p-fields");
+$("#ap-add-field").onclick = () => addFieldRow("#ap-fields");
 
 /* The builder, not raw JSON Schema. The call goes out with `strict: true`,
- * whose subset is narrow -- a schema the API refuses would fail after the
- * frames are read, with the request about to be paid for. */
-function collectFields() {
+ * whose subset is narrow -- a schema the API refuses would fail with the
+ * request about to be paid for. */
+function collectFields(container) {
   const fields = {};
-  for (const row of document.querySelectorAll("#p-fields [data-row]")) {
+  for (const row of document.querySelectorAll(`${container} [data-row]`)) {
     const [name, type, about, extra] = row.children;
     const key = name.value.trim();
     if (!key) continue;
@@ -487,7 +763,7 @@ $("#p-save").onclick = async () => {
     about: $("#p-about").value.trim(),
   };
   if (custom) {
-    payload.fields = collectFields();
+    payload.fields = collectFields("#p-fields");
     payload.summary = $("#p-summary").value;
   } else {
     payload.shape = $("#p-shape").value;
@@ -504,12 +780,148 @@ $("#p-save").onclick = async () => {
   } catch (err) {
     state.replaceChildren(chip(`http ${err.status}`, "bad"));
     out.hidden = false;
-    show(out, typeof err.detail === "object"
-      ? JSON.stringify(err.detail, null, 2) : err.message);
+    show(out, errorText(err));
   }
 };
 
-/* --------------------------------------------------------------- search */
+/* Aggregate prompts: the same shape of page. A kind is how a prompt is asked --
+ * the kinds are the only code -- and everything the model is told is the entry. */
+let DEFINITIONS = null;
+
+const KIND_NOTES = {
+  fold: "Batches the chunks, summarises each batch, then summarises the summaries. "
+      + "The answer is your fields, once, for the whole video.",
+  spans: "Contiguous ranges covering the video, each citing its first and last chunk. "
+       + "Each span carries your fields; the list is stored under the list key.",
+  items: "Discrete things, each citing the chunk it happened in. Each item carries your "
+       + "fields; the list is stored under the list key.",
+};
+
+async function loadAggregatePrompts() {
+  const data = DEFINITIONS = await api("/aggregate-definitions");
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, [
+    el("th", {}, "name"), el("th", {}, "kind"), el("th", {}, "reads"),
+    el("th", {}, "fields"), el("th", {}, ""),
+  ])));
+  const body = el("tbody");
+  for (const p of data.prompts) {
+    const actions = el("div", { className: "row", style: "gap:4px;flex-wrap:nowrap" }, [
+      el("button", { className: "small", textContent: "copy", title: "start a new prompt from this one",
+        onclick: () => fillAggregateForm(p) }),
+      el("button", { className: "small", textContent: "delete", disabled: p.builtin,
+        title: p.builtin ? "built-ins ship in the package — 409" : "",
+        onclick: async () => {
+          if (!confirm(`Delete "${p.name}"? Answers it already wrote are untouched.`)) return;
+          try { await api(`/aggregate-prompts/${p.name}`, { method: "DELETE" }); }
+          catch (err) { alert(`${err.status}: ${err.message}`); }
+          loadAggregatePrompts(); refreshCaps();
+        } }),
+    ]);
+    body.append(el("tr", {}, [
+      el("td", { className: "wrap" }, [p.name, p.builtin ? "" : " *",
+        el("div", { className: "hint", style: "margin:0", textContent: p.about || "" })]),
+      el("td", {}, p.kind),
+      el("td", {}, el("code", {}, p.inputs || data.inputs.default)),
+      el("td", { className: "wrap" }, Object.keys(p.fields || {}).join(", ")),
+      el("td", {}, actions),
+    ]));
+  }
+  table.append(body);
+  const problems = Object.entries(data.problems || {});
+  $("#ap-list").replaceChildren(...[table,
+    el("p", { className: "note", textContent:
+      `* custom, in ${data.custom_file}. Link profiles are not edited here.` }),
+    problems.length ? el("pre", { className: "out err" },
+      problems.map(([k, v]) => `${k}: ${v.join("; ")}`).join("\n")) : null,
+  ].filter(Boolean));
+
+  const template = $("#ap-template");
+  const keep = template.value;
+  template.replaceChildren(el("option", { value: "", textContent: "— blank" }),
+    ...data.prompts.map(p => el("option", { value: p.name,
+      textContent: `${p.name} (${p.kind}${p.builtin ? "" : ", custom"})` })));
+  template.value = keep;
+  template.onchange = () => {
+    const p = data.prompts.find(x => x.name === template.value);
+    fillAggregateForm(p || null);
+  };
+
+  const kind = $("#ap-kind");
+  if (!kind.children.length) {
+    kind.append(...data.kinds.map(k => el("option", { value: k, textContent: k })));
+    kind.onchange = kindChanged;
+    kindChanged();
+  }
+  $("#ap-inputs").placeholder = `blank = ${data.inputs.default}`;
+  if (!$("#ap-fields").children.length) addFieldRow("#ap-fields");
+}
+
+function kindChanged() {
+  const kind = $("#ap-kind").value;
+  $("#ap-kind-note").textContent = KIND_NOTES[kind] || "";
+  $("#ap-fold-wrap").hidden = kind !== "fold";
+  $("#ap-key-wrap").hidden = kind === "fold";
+  $("#ap-fields-hint").textContent = kind === "fold" ? "the whole answer"
+    : kind === "spans" ? "per span; first_chunk and last_chunk are added"
+    : "per item; chunk_id is added";
+}
+
+/* Copying a built-in is how one is "edited": built-ins cannot be replaced, so
+ * the copy is named apart and runs beside the original. */
+function fillAggregateForm(p) {
+  $("#ap-fields").replaceChildren();
+  if (!p) {
+    for (const id of ["#ap-name", "#ap-instruction", "#ap-fold", "#ap-inputs", "#ap-key", "#ap-about"]) $(id).value = "";
+    addFieldRow("#ap-fields");
+    kindChanged();
+    return;
+  }
+  $("#ap-template").value = p.name;
+  $("#ap-name").value = p.builtin ? `my_${p.name}` : p.name;
+  $("#ap-kind").value = p.kind;
+  $("#ap-instruction").value = p.instruction || "";
+  $("#ap-fold").value = p.fold_instruction || "";
+  $("#ap-inputs").value = p.inputs || "";
+  $("#ap-key").value = p.key || "";
+  $("#ap-about").value = p.about || "";
+  for (const [name, spec] of Object.entries(p.fields || {})) addFieldRow("#ap-fields", name, spec);
+  kindChanged();
+}
+
+$("#ap-save").onclick = async () => {
+  const kind = $("#ap-kind").value;
+  const payload = {
+    name: $("#ap-name").value.trim(),
+    kind,
+    instruction: $("#ap-instruction").value.trim(),
+    about: $("#ap-about").value.trim(),
+    fields: collectFields("#ap-fields"),
+  };
+  const optional = { inputs: "#ap-inputs",
+                     key: kind === "fold" ? null : "#ap-key",
+                     fold_instruction: kind === "fold" ? "#ap-fold" : null };
+  for (const [key, id] of Object.entries(optional)) {
+    if (id && $(id).value.trim()) payload[key] = $(id).value.trim();
+  }
+  const state = $("#ap-state");
+  const out = $("#ap-out");
+  state.replaceChildren(chip("saving", "on"));
+  try {
+    const made = await postJSON("/aggregate-prompts", payload);
+    state.replaceChildren(chip("201 created", "on"));
+    out.hidden = false;
+    show(out, JSON.stringify(made, null, 2));
+    await refreshCaps();
+    loadAggregatePrompts();
+  } catch (err) {
+    state.replaceChildren(chip(`http ${err.status}`, "bad"));
+    out.hidden = false;
+    show(out, errorText(err));
+  }
+};
+
+/* -------------------------------------------------------- page 4: search */
 
 /* Every structured field the shapes gave a vocabulary to. A free-text field is
  * filterable in the mechanical sense and useless in practice -- one video
@@ -522,7 +934,7 @@ function renderStructuredFilters() {
   const names = Object.keys(fields).sort();
   if (!names.length) {
     box.append(el("p", { className: "note", textContent:
-      "no shape fixes a vocabulary yet \u2014 add one_of to a custom question" }));
+      "no shape fixes a vocabulary yet — add one_of to a custom question" }));
     return;
   }
   for (const name of names) {
@@ -530,7 +942,7 @@ function renderStructuredFilters() {
     wrap.append(el("label", { htmlFor: `sf-${name}`, textContent: name }));
     const select = el("select", { id: `sf-${name}` });
     select.dataset.field = name;
-    select.append(el("option", { value: "", textContent: "\u2014 any" }));
+    select.append(el("option", { value: "", textContent: "— any" }));
     for (const v of fields[name]) select.append(el("option", { value: v, textContent: v }));
     wrap.append(select);
     box.append(wrap);
@@ -673,7 +1085,7 @@ $("#s-go").onclick = async () => {
       el("button", { className: "small", textContent:
         `search within these ${found.length} chunks`,
         onclick: () => { $("#s-chunks").value = found.join(","); $("#s-go").click(); } }),
-      el("button", { className: "small", textContent: "\u2026and their neighbours",
+      el("button", { className: "small", textContent: "…and their neighbours",
         onclick: () => { $("#s-chunks").value = found.join(",");
                          $("#s-window").value = "1"; $("#s-go").click(); } }),
     ]));
@@ -683,16 +1095,16 @@ $("#s-go").onclick = async () => {
       card.append(el("div", { className: "row" }, [
         /* The video is named on every moment: with a scope of several, a chunk
          * id alone does not identify anything. */
-        chip(`${m.video_id} \u00b7 chunk ${m.chunk_id}`),
+        chip(`${m.video_id} · chunk ${m.chunk_id}`),
         el("span", { className: "hint", textContent:
-          `${m.start_ts.toFixed(1)}\u2013${m.end_ts.toFixed(1)}s \u00b7 score ${m.score.toFixed(4)} \u00b7 ${m.samplers.length} account(s)` }),
+          `${m.start_ts.toFixed(1)}–${m.end_ts.toFixed(1)}s · score ${m.score.toFixed(4)} · ${m.samplers.length} account(s)` }),
       ]));
       for (const [sid, text] of Object.entries(m.descriptions)) {
         const r = (m.ranks || {})[sid] || {};
         card.append(el("h3", {}, [
           sid,
           el("span", { className: "hint", textContent:
-            `  dense ${r.dense ?? "\u2013"} \u00b7 text ${r.text ?? "\u2013"}` }),
+            `  dense ${r.dense ?? "–"} · text ${r.text ?? "–"}` }),
         ]));
         card.append(el("p", { className: "note", textContent: text }));
         const st = (m.structured || {})[sid];
@@ -705,60 +1117,143 @@ $("#s-go").onclick = async () => {
     }
   } catch (err) {
     state.replaceChildren(chip(`http ${err.status || "err"}`, "bad"));
-    box.append(el("pre", { className: "out err" },
-      typeof err.detail === "object" ? JSON.stringify(err.detail, null, 2) : err.message));
+    box.append(el("pre", { className: "out err" }, errorText(err)));
   }
 };
 
-/* ----------------------------------------------------------------- data */
+/* ---------------------------------------------------------- page 5: data */
+
+/* The file half: every answer this video has on disk, with what it read and
+ * who wrote it. Files are the primary store; Postgres is the second copy. */
+async function loadAggregateFiles() {
+  const box = $("#d-files");
+  if (!VIDEO) { box.replaceChildren(el("p", { className: "note", textContent: "Pick a video." })); return; }
+  const detail = await api(`/videos/${encodeURIComponent(VIDEO)}`);
+  const answers = detail.aggregates || [];
+  if (!answers.length) {
+    box.replaceChildren(el("p", { className: "note", textContent: "No aggregates written yet." }));
+    return;
+  }
+  const docs = await Promise.all(answers.map(a => api(a.url).then(doc => [a, doc])));
+  const t = el("table");
+  t.append(el("thead", {}, el("tr", {}, ["answer", "tier", "kind", "reads", "model",
+    "version", "fingerprint", ""].map(h => el("th", {}, h)))));
+  t.append(el("tbody", {}, docs.map(([a, doc]) => {
+    const s = doc.stats || {};
+    /* An answer can outlive its definition: a deleted custom prompt leaves its
+     * files, and so does an id the aggregators no longer use. */
+    const known = (CAPS.aggregators || {})[definitionOf(a.name)];
+    const kind = known ? known.kind || "code" : "no longer defined";
+    return el("tr", {}, [
+      el("td", { className: "wrap" }, a.name),
+      el("td", {}, doc.tier),
+      el("td", { className: "wrap" }, kind),
+      el("td", { className: "wrap" }, s.inputs || "—"),
+      el("td", { className: "wrap" }, s.model || "—"),
+      el("td", {}, s.version || "—"),
+      el("td", {}, (doc.inputs_fingerprint || "").slice(0, 10)),
+      el("td", {}, el("button", { className: "small", textContent: "view",
+        onclick: () => { const v = $("#d-file-view"); v.hidden = false;
+                         show(v, JSON.stringify(doc, null, 2)); } })),
+    ]);
+  })));
+  box.replaceChildren(t);
+}
+
+let TABLES = [];
+let OPS = [];
+
+/* Quick filters for the tables an aggregate run fills. Each is an ordinary
+ * filter row, so it can be edited before querying. */
+const PRESETS = {
+  aggregates: [["aggregate_id", "eq", "summary"], ["tier", "eq", "llm"]],
+  entities: [["aggregate_id", "eq", "entities:people"], ["appearances", "gte", "2"]],
+  entity_mentions: [["chunk_id", "eq", "0"], ["doubt", "is", "not.null"]],
+  aggregate_definitions: [["kind", "eq", "fold"], ["name", "eq", "summary"]],
+};
 
 async function loadDbStatus() {
   const box = $("#db-status");
   box.replaceChildren("checking...");
-  const s = await api("/db/status");
+  let s;
+  try { s = await api("/db/status"); }
+  catch (err) { box.replaceChildren(el("pre", { className: "out err" }, errorText(err))); return; }
   if (!s.reachable) {
     box.replaceChildren(el("pre", { className: "out err" },
       `not reachable\nschema ${s.schema}\n${s.error || ""}`));
-    return;
+  } else {
+    const table = el("table");
+    table.append(el("thead", {}, el("tr", {}, [el("th", {}, "table"), el("th", {}, "rows")])));
+    table.append(el("tbody", {}, Object.entries(s.counts).map(([name, n]) =>
+      el("tr", {}, [el("td", {}, name), el("td", {}, String(n))]))));
+    box.replaceChildren(el("div", { className: "row" },
+      [chip(`schema ${s.schema}`), el("span", { className: "hint",
+        textContent: " read under the publishable key — what a reader with the read grants sees" })]),
+      el("div", { className: "scroll", style: "margin-top:8px" }, table));
   }
-  const table = el("table");
-  table.append(el("thead", {}, el("tr", {}, [el("th", {}, "table"), el("th", {}, "rows")])));
-  const body = el("tbody");
-  for (const [name, n] of Object.entries(s.counts)) {
-    body.append(el("tr", {}, [el("td", {}, name), el("td", {}, String(n))]));
-  }
-  table.append(body);
-  box.replaceChildren(el("div", { className: "row" },
-    [chip(`schema ${s.schema}`), el("span", { className: "hint",
-      textContent: " read under the publishable key — what a reader with the read grants sees" })]),
-    el("div", { className: "scroll", style: "margin-top:8px" }, table));
 
-  const { tables } = await api("/db/tables");
+  const listed = await api("/db/tables");
+  TABLES = listed.tables;
+  OPS = listed.ops;
   const select = $("#d-table");
   const keep = select.value;
-  select.replaceChildren(...tables.map(t =>
+  select.replaceChildren(...TABLES.map(t =>
     el("option", { value: t.name, textContent: t.name, title: t.about })));
   if (keep) select.value = keep;
-  select.onchange = () => {
-    const t = tables.find(x => x.name === select.value);
-    $("#d-about").textContent = t ? t.about : "";
-  };
-  select.onchange();
+  select.onchange = tableChanged;
+  tableChanged();
 }
+
+function tableChanged() {
+  const t = TABLES.find(x => x.name === $("#d-table").value);
+  $("#d-about").textContent = t ? `${t.about}${t.order.length ? ` · ordered by ${t.order.join(", ")}` : ""}` : "";
+  $("#d-columns").replaceChildren(...((t && t.columns) || []).map(c => el("option", { value: c })));
+  $("#d-filters").replaceChildren();
+  const presets = PRESETS[t && t.name] || [];
+  $("#d-presets").replaceChildren(...presets.map(([c, op, v]) =>
+    el("button", { className: "small", type: "button", textContent: `${c} ${op} ${v}`,
+      onclick: () => addFilterRow(c, op, v) })));
+}
+
+function addFilterRow(column = "", op = "eq", value = "") {
+  const row = el("div", { className: "filterrow" });
+  const col = el("input", { type: "text", placeholder: "column", value: column });
+  col.setAttribute("list", "d-columns");
+  const opSelect = el("select");
+  opSelect.append(...(OPS.length ? OPS : ["eq"]).map(o => el("option", { value: o, textContent: o })));
+  opSelect.value = op;
+  const val = el("input", { type: "text", placeholder: "value; comma-separated for in", value });
+  const drop = el("button", { className: "small", textContent: "×", type: "button",
+    onclick: () => row.remove() });
+  row.append(col, opSelect, val, drop);
+  row.dataset.filter = "1";
+  $("#d-filters").append(row);
+}
+$("#d-add-filter").onclick = () => addFilterRow();
 
 $("#d-go").onclick = async () => {
   const box = $("#d-results");
   box.replaceChildren("querying...");
   const table = $("#d-table").value;
+  const meta = TABLES.find(x => x.name === table);
   const payload = {
     table,
     limit: parseInt($("#d-limit").value, 10) || 25,
     include_heavy: $("#d-heavy").checked,
     filters: [],
   };
-  /* `prompts` is the one table not keyed by a video -- it is keyed by
-   * (name, version) -- so a video filter would 42703 it. */
-  if ($("#d-thisvideo").checked && VIDEO && table !== "prompts") {
+  if ($("#d-order").value.trim()) payload.order = $("#d-order").value.trim();
+  for (const row of document.querySelectorAll("#d-filters [data-filter]")) {
+    const [col, op, val] = row.children;
+    if (col.value.trim()) payload.filters.push({ column: col.value.trim(), op: op.value, value: val.value });
+  }
+  /* `prompts` and `aggregate_definitions` are keyed by (name, version), not by
+   * a video, so a video filter would 42703 them. The deployed column list says
+   * which tables have one; the names cover a deployment it could not read. */
+  const keyed = meta && meta.columns && meta.columns.length
+    ? meta.columns.includes("video_id")
+    : !["prompts", "aggregate_definitions"].includes(table);
+  if ($("#d-thisvideo").checked && VIDEO && keyed) {
     payload.filters.push({ column: "video_id", op: "eq", value: VIDEO });
   }
   try {
@@ -766,23 +1261,17 @@ $("#d-go").onclick = async () => {
     const cols = out.rows.length ? Object.keys(out.rows[0]) : [];
     const t = el("table");
     t.append(el("thead", {}, el("tr", {}, cols.map(c => el("th", {}, c)))));
-    const body = el("tbody");
-    for (const row of out.rows) {
-      body.append(el("tr", {}, cols.map(c => {
-        const v = row[c];
-        const text = v === null ? "—"
-          : typeof v === "object" ? JSON.stringify(v) : String(v);
-        return el("td", { className: "wrap" }, text.length > 400 ? text.slice(0, 400) + "…" : text);
-      })));
-    }
-    t.append(body);
+    t.append(el("tbody", {}, out.rows.map(row => el("tr", {}, cols.map(c => {
+      const v = row[c];
+      const text = v === null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v);
+      return el("td", { className: "wrap" }, text.length > 400 ? text.slice(0, 400) + "…" : text);
+    })))));
     box.replaceChildren(
       el("p", { className: "note", textContent:
         `${out.rows.length} of ${out.count} rows · select: ${out.select}` }),
       el("div", { className: "scroll" }, t));
   } catch (err) {
-    box.replaceChildren(el("pre", { className: "out err" },
-      typeof err.detail === "object" ? JSON.stringify(err.detail, null, 2) : err.message));
+    box.replaceChildren(el("pre", { className: "out err" }, errorText(err)));
   }
 };
 
@@ -804,13 +1293,14 @@ async function refreshCaps() {
   renderStructuredFilters();
   if (PICKED) renderParams();
   renderSteps();
+  if (PAGE === "aggregates") renderAggregatePage();
 }
 
 (async function boot() {
   try {
     await refreshCaps();
     await loadVideos();
-    PICKED = CAPS.components.find(c => c !== "media") || null;
+    PICKED = ragComponents().find(c => c !== "media") || null;
     renderSteps();
     renderParams();
   } catch (err) {

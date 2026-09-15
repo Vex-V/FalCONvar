@@ -1,0 +1,90 @@
+{
+  "document": "aggregate_definitions",
+  "version": 1,
+  "system": "You summarise video content for a retrieval index. Report only what the supplied descriptions say. Do not speculate about intent or identity. Every chunk id you cite must be one that appears in the input.",
+  "kinds": {
+    "fold": {
+      "fold_instruction": "Summarise this stretch of a video, in order:",
+      "fold_about": "What this stretch of the video covers, in at least 80 words, in order."
+    },
+    "spans": {
+      "cite": "The spans must be contiguous and cover every chunk. Give each span's first and last chunk id, taken from the input.",
+      "cite_parts": "The spans must be contiguous and cover every part. Give each span's first and last part id, taken from the input."
+    },
+    "items": {
+      "cite": "Each must cite the chunk id it happened in, taken from the input."
+    },
+    "link": {
+      "check": "These observations were grouped automatically and may include a different subject. In `doubts`, list the number of every observation that contradicts the others -- a garment of a different colour, a child where the others describe an adult -- with the reason. A detail present in one observation and absent from another is NOT a contradiction. If nothing contradicts, return an empty list. Write every other field from the observations you did not list."
+    }
+  },
+  "prompts": {
+    "summary": {
+      "kind": "fold",
+      "about": "what the whole video is about, in one pass over every chunk",
+      "instruction": "Summarise this whole video:",
+      "fields": {
+        "summary": {"type": "text", "about": "What the whole video is about, in at least 150 words. The other fields index this summary rather than replacing it, so do not shorten it because they exist."},
+        "topics": {"type": "list", "about": "Recurring subjects, as short phrases."},
+        "setting": {"type": "text", "about": "Where this takes place, in one line."},
+        "notable": {"type": "list", "about": "Things a viewer would remember."}
+      }
+    },
+    "chapters": {
+      "kind": "spans",
+      "about": "a table of contents: contiguous chapters over the whole video",
+      "key": "chapters",
+      "instruction": "Divide this video into chapters.",
+      "fields": {
+        "title": {"type": "text", "about": "A short title for the chapter."},
+        "summary": {"type": "text", "about": "What happens in this chapter."}
+      }
+    },
+    "events": {
+      "kind": "items",
+      "about": "discrete things that happened, each pinned to a chunk",
+      "key": "events",
+      "instruction": "List the discrete events in this video.",
+      "fields": {
+        "what": {"type": "text", "about": "What happened, in one line."},
+        "kind": {"type": "text", "about": "What kind of event this is.", "one_of": ["action", "arrival", "change", "speech"]}
+      }
+    }
+  },
+  "profiles": {
+    "people": {
+      "about": "the same person across chunks, and what each did",
+      "field": "people",
+      "identity": ["appearance", "clothing"],
+      "story": ["role", "action"],
+      "instruction": "Below are numbered observations of what appears to be the same person, from segments of one video, in time order.\n\nWrite a single account of what they did across the video, a one-line description of how to recognise them, and their apparent role.\n\nOnly use what is below. If the observations differ, prefer what appears most often and do not invent a reason for the difference. Never give a name.",
+      "fields": {
+        "description": {"type": "text", "about": "How to recognise this person, in one line."},
+        "narrative": {"type": "text", "about": "What they did across the video, in order."},
+        "role": {"type": "text", "about": "Their apparent role, e.g. customer, staff."}
+      }
+    },
+    "objects": {
+      "about": "the same object across chunks, and how it was used",
+      "field": "objects",
+      "identity": ["object", "appearance"],
+      "story": ["context"],
+      "instruction": "Below are numbered observations of what appears to be the same object, from segments of one video, in time order.\n\nWrite a one-line description of how to recognise it and an account of where it was and how it was used across the video.\n\nOnly use what is below.",
+      "fields": {
+        "description": {"type": "text", "about": "How to recognise this object, in one line."},
+        "narrative": {"type": "text", "about": "Where it was and how it was used, in order."}
+      }
+    },
+    "text": {
+      "about": "the same piece of on-screen text across chunks, and where it appears",
+      "field": "visible_text",
+      "identity": ["text"],
+      "story": ["context"],
+      "instruction": "Below are numbered readings of what appears to be the same piece of text, from segments of one video, in time order.\n\nGive the text as it most often reads, and an account of where and when it appears.\n\nOnly use what is below.",
+      "fields": {
+        "text": {"type": "text", "about": "The text, as it most often reads."},
+        "narrative": {"type": "text", "about": "Where and when it appears, in order."}
+      }
+    }
+  }
+}

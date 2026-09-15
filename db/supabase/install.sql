@@ -197,12 +197,47 @@ create index if not exists embeddings_structured
 -- ===========================================================================
 create table if not exists falconvar.aggregates (
   video_id     text not null references falconvar.videos on delete cascade,
-  aggregate_id text not null,
+  aggregate_id text not null,             -- summary · summary~severity · entities:people
   tier         text not null,             -- free | local | llm
   payload      jsonb not null,
   inputs_fingerprint text not null,
+  stats        jsonb not null default '{}'::jsonb,   -- who made it: `model`
+  inputs       text,                      -- the selection read; null if it reads none
+  version      text,                      -- the definition's hash when it was asked
   built_at     timestamptz not null default now(),
   primary key (video_id, aggregate_id)
+);
+
+-- A link profile's answer as rows: "who is in chunk 6", "where does e003
+-- appear". Keyed by the answer, since one profile can answer several inputs.
+-- Nothing cascades from the grid: the accounts cost paid calls.
+create table if not exists falconvar.entities (
+  video_id     text not null references falconvar.videos on delete cascade,
+  aggregate_id text not null,             -- entities:people
+  entity_id    text not null,             -- e000
+  profile      text,
+  field        text,
+  label        text,
+  appearances  int not null default 0,
+  chunk_ids    int[] not null default '{}',
+  start_ts     numeric,
+  end_ts       numeric,
+  observed_s   numeric,
+  account      jsonb,                     -- the profile's fields; null if not narrated
+  doubts       jsonb not null default '[]'::jsonb,
+  primary key (video_id, aggregate_id, entity_id)
+);
+
+create table if not exists falconvar.entity_mentions (
+  video_id     text not null references falconvar.videos on delete cascade,
+  aggregate_id text not null,
+  mention_key  text not null,             -- c3/yolo/people/1
+  entity_id    text not null,
+  chunk_id     int not null,
+  sampler_id   text not null,
+  entry        jsonb not null default '{}'::jsonb,
+  doubt        text,                      -- why the account left it out; null if undisputed
+  primary key (video_id, aggregate_id, mention_key)
 );
 
 create table if not exists falconvar.video_embeddings (
@@ -235,6 +270,19 @@ create table if not exists falconvar.prompts (
   primary key (name, version)
 );
 
+-- The same, for aggregates: what a prompt or link profile said at the version
+-- an answer records in `aggregates.version`. `data/aggregates.json` and the
+-- built-ins stay authoritative; nothing reads this back, nothing is deleted.
+create table if not exists falconvar.aggregate_definitions (
+  name        text not null,          -- summary · entities:people
+  version     text not null,
+  kind        text not null,          -- fold | spans | items | link
+  definition  jsonb not null,
+  builtin     boolean not null default false,
+  first_seen  timestamptz not null default now(),
+  primary key (name, version)
+);
+
 -- ===========================================================================
 -- 10 · bringing an existing database to the shape above.
 --
@@ -256,6 +304,12 @@ drop index if exists falconvar.chunks_start;
 drop index if exists falconvar.chunk_samplers_run;
 drop index if exists falconvar.descriptions_chunk;
 drop index if exists falconvar.prompts_name;
+
+-- Who made an answer, what it read and under which definition. `stats` was
+-- written to the file and never to the row.
+alter table falconvar.aggregates add column if not exists stats   jsonb not null default '{}'::jsonb;
+alter table falconvar.aggregates add column if not exists inputs  text;
+alter table falconvar.aggregates add column if not exists version text;
 
 -- ===========================================================================
 -- 11 · the hybrid search, in the database.
@@ -373,7 +427,8 @@ begin
   foreach t in array array[
     'videos','timelines','chunks','cuts','transcripts','transcript_chunks',
     'manifests','chunk_samplers','descriptions','embeddings','aggregates',
-    'video_embeddings','prompts'
+    'entities','entity_mentions','video_embeddings','prompts',
+    'aggregate_definitions'
   ] loop
     execute format('alter table falconvar.%I enable row level security', t);
     execute format('drop policy if exists "public read" on falconvar.%I', t);
@@ -394,5 +449,5 @@ grant execute on function falconvar.search_embeddings(
 --
 --   select count(*) from falconvar.videos;          -- 0 is fine; an error is not
 --
--- And from the client: python -m falconvar.rag.retrieve "..." <id> --index supabase
+-- And from the client: python -m falconvar.video_rag.retrieve "..." <id> --index supabase
 -- ===========================================================================

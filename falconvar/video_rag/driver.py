@@ -240,10 +240,43 @@ def documents(video_id: str) -> dict[str, Any]:
     return found
 
 
-def identity_of(question: str) -> dict[str, list[str]]:
-    """`{field: [keys]}` identifying an entry of this question's answer."""
+def vocabulary() -> dict[str, Any]:
+    """What an aggregate's input may name: every sampler, and every question
+    with its fields -- `{field: [entry keys]}` for a list of objects, `None`
+    for anything else."""
     from .describe import library
-    return library.identity_of(question)
+    from .video import samplers as _samplers
+
+    def fields(question: str) -> dict[str, Optional[list[str]]]:
+        out: dict[str, Optional[list[str]]] = {}
+        for name, spec in (library.shape_of(question).get("fields") or {}).items():
+            items = spec.get("items") if isinstance(spec, dict) else None
+            nested = items.get("properties") if isinstance(items, dict) else None
+            out[name] = list(nested) if nested else None
+        return out
+
+    return {"samplers": _samplers.available(),
+            "questions": {q: fields(q) for q in library.questions()}}
+
+
+def render(summary: str, structured: dict[str, Any]) -> str:
+    """An answer as text, exactly as the search index renders it."""
+    from .embed.units import render as render_unit
+    return render_unit(summary, structured)
+
+
+def answer_schema(fields: dict[str, Any]) -> dict[str, Any]:
+    """Describe's field builder, compiled: `{name: JSON Schema fragment}`."""
+    from .describe import library
+    return library.compile_fields(fields)
+
+
+def field_problems(fields: Any) -> list[str]:
+    """Everything wrong with a field builder, as messages."""
+    from .describe import library
+    if not isinstance(fields, dict) or not fields:
+        return ["`fields` must be a non-empty {name: {type, about}} map"]
+    return library.check_fields(fields)
 
 
 def embedder(spec: Optional[str] = None) -> Any:
@@ -352,6 +385,7 @@ def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> i
     return 0
 
 
-__all__ = ["COMPONENTS", "DEFAULT_INDEX", "Options", "Run", "documents", "embedder",
-           "identity_of", "index_video_summary", "main", "process", "report",
-           "search", "validate", "videos"]
+__all__ = ["COMPONENTS", "DEFAULT_INDEX", "Options", "Run", "answer_schema",
+           "documents", "embedder", "field_problems", "index_video_summary",
+           "main", "process", "render", "report", "search", "validate",
+           "videos", "vocabulary"]

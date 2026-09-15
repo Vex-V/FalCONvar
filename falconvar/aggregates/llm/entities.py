@@ -1,8 +1,19 @@
-"""The same person or thing across chunks, and what each did.
+"""The `link` kind: the same person or thing across chunks, and an account of each.
 
-Identity is decided by `aggregate.linking` -- embeddings under rules, no model.
-The model is asked only afterwards, once per linked entity, to write what that
-entity did across the video; those calls run concurrently.
+A link profile says which field, which keys identify an entry of it, and what
+to write. Identity is decided by `linking` -- embeddings under rules, no model.
+The model is asked only afterwards, once per linked entity and concurrently, to
+write the profile's account from that entity's observations. This is v0's
+flow, cluster then narrate, with v0's fixed threshold replaced by the rules.
+
+**The check flags; it never drops.** With `check: flag` the same call names
+observations that contradict the rest. They stay in the entity, marked with the
+reason, and the account is written from the others. Measured as a filter that
+removed them, the check caught the known bad merge (dark puffy coat against a
+cream coat) but also rejected true matches, treating a detail absent from one
+observation as a contradiction: F1 fell 0.03 to 0.13, and the same prompt
+rejected three observations on one run and four on the next. Flagged, a doubt
+cannot corrupt the account and cannot cost a true link either.
 
 Also answered here, because they fall out of the linking for free: how long
 each entity was in shot, and which entities were in shot together.
@@ -14,91 +25,50 @@ import asyncio
 from itertools import combinations
 from typing import Any, Optional
 
-from ...shared.contracts.documents import fingerprint_of
-from ...shared.models.llm import Model
-from ..base import Context
-from ..linking import link, mentions_of
+from .. import definitions, inputs
+from ..linking import Mentions, link, mentions_of
 from ..rendering import resolve_span
-
-_NARRATIVE_SCHEMA = {
-    "name": "entity_narrative",
-    "schema": {
-        "type": "object", "additionalProperties": False,
-        "required": ["description", "narrative", "role"],
-        "properties": {
-            "description": {"type": "string",
-                            "description": "How to recognise this one, in one line."},
-            "narrative": {"type": "string",
-                          "description": "What they did across the video, in order."},
-            "role": {"type": "string",
-                     "description": "Their apparent role, e.g. customer, staff."},
-        },
-    },
-}
-
-_NARRATIVE_PROMPT = """\
-Below are separate observations of what appears to be the same subject, from \
-consecutive segments of one video, in time order.
-
-Write a single account of what they did across the video, a one-line \
-description of how to recognise them, and their apparent role.
-
-Only use what is below. If the observations conflict, prefer what appears most \
-often and do not invent a reason for the difference. Never give a name.
-
-{observations}"""
+from . import DefinitionRunner, listing, schema
 
 
-class EntitiesAggregator:
-    name = "entities"
-    tier = "llm"
-    about = "the same person or thing across chunks, and what each did"
-    depends_on: tuple[str, ...] = ()
+class EntitiesAggregator(DefinitionRunner):
     #: Takes an embedder as well as an llm; the driver passes both.
     embeds = True
 
-    def __init__(self, llm: Optional[str] = None, embedder: Optional[str] = None,
-                 rule: str = "max", mutual: bool = True,
-                 min_appearances: int = 2, max_narratives: int = 12) -> None:
-        # The embedder is resolved exactly as video_rag's `embed` resolves one,
-        # and reached through its driver -- the other tier, never a component.
-        # Imported here so `--tier free` never loads a client.
+    def __init__(self, definition_id: str, llm: Optional[str] = None,
+                 embedder: Optional[str] = None) -> None:
+        super().__init__(definition_id, llm)
+        # Resolved exactly as video_rag's `embed` resolves one, and reached
+        # through its driver -- the other tier, never a component.
         from ...video_rag import driver as video_rag
-        self.llm = Model(llm, role="llm")
         self.embedder = video_rag.embedder(embedder)
-        self.rule, self.mutual = rule, mutual
-        self.min_appearances = min_appearances
-        self.max_narratives = max_narratives
 
     @property
     def model_key(self) -> str:
-        """Everything that decides the answer besides the text: who writes the
-        narratives, which space identity is measured in, and the rules."""
-        return (f"{self.llm.key}|{self.embedder.key}|{self.rule}/"
-                f"{'mutual' if self.mutual else 'any'}")
+        """Who writes the accounts, and which space identity is measured in.
+        The rules are the profile's, and its version covers them."""
+        return (f"{self.llm.key}|{self.embedder.key}|{self.entry['rule']}/"
+                f"{'mutual' if self.entry['mutual'] else 'any'}")
 
-    def inputs_of(self, context: Context) -> Any:
-        """What identifies a subject is declared by the shapes, and changing
-        that declaration changes the answer without changing any text."""
-        return context.identity
+    def read(self, context: Any, one: inputs.Input) -> Mentions:
+        chosen = definitions.selection(self.definition, one)
+        return Mentions(chosen, mentions_of(context, chosen))
 
-    def run(self, context: Context) -> dict[str, Any]:
-        return asyncio.run(self._run(context))
-
-    async def _run(self, context: Context) -> dict[str, Any]:
-        mentions = ([] if context.descriptions is None else
-                    mentions_of(context.descriptions,
-                                lambda q: context.identity.get(q, {})))
-        linking = {"embedder": self.embedder.key, "rule": self.rule,
-                   "mutual": self.mutual}
+    async def _run(self, context: Any, read: Mentions) -> dict[str, Any]:
+        entry, mentions = self.entry, read.items
+        linking = {"embedder": self.embedder.key, "rule": entry["rule"],
+                   "mutual": entry["mutual"], "field": read.selection.field,
+                   "keys": list(read.selection.keys)}
+        base = {"profile": self.definition, "check": entry["check"],
+                "mentions": len(mentions)}
         if len(mentions) < 2:
-            return {"entities": [], "count": 0, "linked": 0,
-                    "mentions": len(mentions), "together": [], "linking": linking,
-                    "note": ("no question asked here declares identity fields"
-                             if not mentions else "one mention; nothing to link")}
+            return {**base, "entities": [], "count": 0, "linked": 0, "narrated": 0,
+                    "doubted": 0, "together": [], "linking": linking,
+                    "note": "one mention; nothing to link"}
 
         vectors = self.embedder.embed([m.signature for m in mentions])
-        linked = link(mentions, vectors, self.rule, self.mutual)
+        linked = link(mentions, vectors, entry["rule"], entry["mutual"],
+                      entry.get("threshold"))
 
         entities = []
         for group in linked.groups:
@@ -121,13 +91,12 @@ class EntitiesAggregator:
         for number, entity in enumerate(entities):
             entity["entity_id"] = f"e{number:03d}"
 
-        narrate = [e for e in entities
-                   if e["appearances"] >= self.min_appearances][:self.max_narratives]
-        stories = await asyncio.gather(*(self._narrate(context, e) for e in narrate))
-        for entity, story in zip(narrate, stories):
-            entity.update(story)
+        present = [e for e in entities if e["appearances"] >= entry["min_appearances"]]
+        narrate = present[:entry["max_narratives"]]
+        accounts = await asyncio.gather(*(self._narrate(context, e, read) for e in narrate))
+        for entity, account in zip(narrate, accounts):
+            entity.update(account)
 
-        present = [e for e in entities if e["appearances"] >= self.min_appearances]
         together = sorted((
             {"a": a["entity_id"], "b": b["entity_id"], "chunk_ids": shared,
              "count": len(shared)}
@@ -136,27 +105,66 @@ class EntitiesAggregator:
             key=lambda p: (-p["count"], p["a"], p["b"]))
 
         return {
+            **base,
             "entities": entities,
             "count": len(entities),
             "linked": len(present),
-            "mentions": len(mentions),
             "narrated": len(narrate),
+            "doubted": sum(len(e.get("doubts") or []) for e in entities),
             "together": together[:50],
             "linking": {**linking, "threshold": linked.threshold,
                         "calibration_pairs": linked.calibration_pairs,
-                        "candidate_pairs": linked.candidate_pairs,
-                        "identity": fingerprint_of(context.identity)},
+                        "candidate_pairs": linked.candidate_pairs},
         }
 
-    async def _narrate(self, context: Context, entity: dict[str, Any]) -> dict[str, Any]:
+    async def _narrate(self, context: Any, entity: dict[str, Any],
+                       read: Mentions) -> dict[str, Any]:
+        entry = self.entry
+        keys = list(read.selection.keys)
+        shown = keys + [k for k in entry["story"] if k not in keys]
         lines = []
-        for mention in entity["mentions"]:
+        for number, mention in enumerate(entity["mentions"], 1):
             start, end = context.span_of(mention["chunk_id"])
-            said = " | ".join(f"{k}: {v}" for k, v in sorted(mention.items())
-                              if k not in ("key", "chunk_id", "sampler_id"))
-            lines.append(f"[{start:.0f}-{end:.0f}s] {said}")
-        return await self.llm.complete(
-            _NARRATIVE_PROMPT.format(observations="\n".join(lines)), _NARRATIVE_SCHEMA)
+            names = shown or sorted(k for k in mention
+                                    if k not in ("key", "chunk_id", "sampler_id"))
+            said = " | ".join(f"{k}: {mention[k]}" for k in names
+                              if str(mention.get(k) or "").strip())
+            lines.append(f"({number}) [{start:.0f}-{end:.0f}s] {said}")
+        prompt = entry["instruction"]
+        flag = entry["check"] == "flag"
+        if flag:
+            prompt += "\n\n" + definitions.kind_text("link")["check"]
+        prompt += "\n\n" + "\n".join(lines)
+        if entry["transcript"] and context.transcript is not None:
+            spoken = [f"[{context.span_of(c)[0]:.0f}-{context.span_of(c)[1]:.0f}s] {said}"
+                      for c in entity["chunk_ids"]
+                      if (said := (context.transcript.text_of(c) or "").strip())]
+            if spoken:
+                prompt += "\n\nWhat was said during those segments:\n" + "\n".join(spoken)
+
+        properties = self.properties()
+        if flag:
+            # First, so the model decides what does not belong before it writes.
+            properties = {**listing("doubts", {"observation": {"type": "integer"},
+                                               "reason": {"type": "string"}}),
+                          **properties}
+        answer = await self.llm.complete(prompt, schema(self.name, properties),
+                                         definitions.system())
+
+        doubts = []
+        for doubt in (answer.get("doubts") or []) if flag else []:
+            number = doubt.get("observation")
+            if isinstance(number, int) and 1 <= number <= len(entity["mentions"]):
+                mention = entity["mentions"][number - 1]
+                if "doubt" not in mention:
+                    mention["doubt"] = doubt.get("reason", "")
+                    doubts.append({"key": mention["key"], "reason": mention["doubt"]})
+        account = {f: answer.get(f) for f in entry["fields"]}
+        if doubts and len(doubts) == len(entity["mentions"]):
+            # Every observation disputed: there is nothing undisputed to write
+            # from, and an account of nobody is worse than none.
+            account = {f: None for f in entry["fields"]}
+        return {"account": account, "doubts": doubts}
 
 
 __all__ = ["EntitiesAggregator"]

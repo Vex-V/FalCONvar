@@ -181,13 +181,12 @@ def exports(video_id: str) -> dict[str, Any]:
     documents = [{"name": name, "about": about,
                   "url": f"/videos/{video_id}/artifacts/{name}"}
                  for name, about in ARTIFACTS.items() if name in present]
-    listed = []
-    directory = paths.artifact(video_id, "aggregates")
-    if directory.exists():
-        listed = [{"name": p.stem,
-                   "about": aggregates.ABOUT.get(p.stem, ""),
-                   "url": f"/videos/{video_id}/aggregates/{p.stem}"}
-                  for p in sorted(directory.glob("*.json"))]
+    # The URL carries the file's stem, `entities.people`: a colon in a path
+    # segment is legal but reads as a scheme to half the clients that see it.
+    from falconvar.aggregates.inputs import filename
+    listed = [{"name": answer, "about": aggregates.about(answer),
+               "url": f"/videos/{video_id}/aggregates/{filename(answer)[:-5]}"}
+              for answer in aggregates.driver.answers(video_id)]
     return {"video_id": video_id, "documents": documents,
             "aggregates": listed,
             "frames": f"/videos/{video_id}/frames/{{index}}"
@@ -306,9 +305,16 @@ def available() -> dict[str, Any]:
         "sinks": list(sinks.BACKENDS),
         "transcribers": sorted(audio_models.TRANSCRIBERS),
         "diarizers": sorted(audio_models.DIARIZERS),
-        "aggregators": {name: {"tier": aggregates.TIER_OF[name],
-                               "about": aggregates.about(name)}
+        # Read now rather than at import: a definition added through the API
+        # is runnable at once, and so is offered at once.
+        "aggregators": {name: {"tier": aggregates.tier_of(name),
+                               "about": aggregates.about(name),
+                               "kind": aggregates.kind_of(name),
+                               "reads": (aggregates.driver.default_selection(name)
+                                         if aggregates.takes_inputs(name) else None)}
                         for name in aggregates.available()},
+        "aggregate_inputs": {"default": aggregates.inputs.DEFAULT,
+                             "grammar": INPUT_GRAMMAR},
         "tiers": list(aggregates.TIERS),
         "artifacts": dict(ARTIFACTS),
         # What a search may narrow by, and which structured values are a
@@ -358,8 +364,7 @@ def prompt_list() -> dict[str, Any]:
         "shapes": {name: {"fallback": bool(shape.get("fallback")),
                           "builtin": name in builtin,
                           "fields": sorted(shape.get("fields") or {}),
-                          "summary": shape.get("summary"),
-                          "identity": library.shape_identity(name)}
+                          "summary": shape.get("summary")}
                    for name, shape in sorted(library.shapes().items())},
         "field_types": list(library.FIELD_TYPES),
         "limits": {"fields": library.MAX_FIELDS,
@@ -404,7 +409,63 @@ def prompt_remove(name: str) -> None:
     library.remove(name)
 
 
-__all__ = ["ARTIFACTS", "COMPONENTS", "UPLOADS", "artifact", "available",
+# -------------------------------------------------------- aggregate definitions
+
+#: What an aggregate's input may say. Published so a form can explain the
+#: field rather than restate the parser.
+INPUT_GRAMMAR: list[dict[str, str]] = [
+    {"syntax": "transcript", "reads": "what was said"},
+    {"syntax": "*", "reads": "every answer's prose"},
+    {"syntax": "activity", "reads": "one question, wherever it was asked"},
+    {"syntax": "clip:activity", "reads": "one pairing"},
+    {"syntax": "clip:*", "reads": "everything one sampler answered"},
+    {"syntax": "clip:hazards[severity,hazards]", "reads": "only those fields, as ONE input"},
+    {"syntax": "clip:activity[summary,actors]", "reads": "the prose and a field"},
+    {"syntax": "yolo[people.clothing]", "reads": "keys inside a list's entries"},
+    {"syntax": "x+y", "reads": "sources joined into one input"},
+    {"syntax": "x,y", "reads": "separate inputs: one answer each, stored as <id>~<label>"},
+    {"syntax": "sev=clip:hazards[severity]", "reads": "an input with a label"},
+]
+
+
+def definition_list() -> dict[str, Any]:
+    """Every aggregate prompt and link profile, and what an input may say."""
+    from falconvar.aggregates import definitions, inputs
+
+    loaded = definitions.load()
+
+    def listed(section: str) -> list[dict[str, Any]]:
+        prefix = "" if section == "prompts" else definitions.PROFILE_PREFIX
+        return [{"id": prefix + name, "name": name,
+                 "version": definitions.version_of(section, name), **entry}
+                for name, entry in sorted(loaded[section].items())]
+
+    return {
+        "prompts": listed("prompts"),
+        "profiles": listed("profiles"),
+        "kinds": list(definitions.KINDS),
+        "checks": list(definitions.CHECKS),
+        "profile_defaults": dict(definitions.PROFILE_DEFAULTS),
+        "inputs": {"default": inputs.DEFAULT, "grammar": INPUT_GRAMMAR},
+        "problems": loaded["problems"],
+        "custom_file": str(paths.AGGREGATE_DEFINITIONS),
+    }
+
+
+def definition_add(section: str, name: str, entry: dict[str, Any]) -> dict[str, Any]:
+    """Add or replace a custom prompt or profile. Built-ins are refused."""
+    from falconvar.aggregates import definitions
+    added = definitions.add(section, name, entry)
+    return {"name": name, "version": definitions.version_of(section, name), **added}
+
+
+def definition_remove(section: str, name: str) -> None:
+    from falconvar.aggregates import definitions
+    definitions.remove(section, name)
+
+
+__all__ = ["ARTIFACTS", "COMPONENTS", "INPUT_GRAMMAR", "UPLOADS", "artifact",
+           "available", "definition_add", "definition_list", "definition_remove",
            "parameters", "register",
            "exports", "frame_path", "prompt_add", "prompt_get", "prompt_list",
            "prompt_remove", "run_component", "run_workflow", "search",

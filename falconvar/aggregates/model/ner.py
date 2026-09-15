@@ -6,12 +6,15 @@ detections per frame and a matched one 5.1."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
 from collections import Counter
+from typing import Any, Optional
 
+from ...shared.contracts.documents import fingerprint_of
 from ..base import Context
-from ..rendering import chunk_rows
-from . import DEFAULT_LABELS, DEFAULT_NER_MODEL, ModelUnavailable
+from ..inputs import Input, Read, read
+from . import (DEFAULT_LABELS, DEFAULT_NER_MODEL, NER_CHARS, ModelUnavailable,
+               pieces, plain)
+
 
 class NERAggregator:
     """Named entities across the video, with the chunks they appear in."""
@@ -20,6 +23,7 @@ class NERAggregator:
     tier = "local"
     about = "named entities, and which chunks each appears in"
     depends_on: tuple[str, ...] = ()
+    takes_inputs = True
 
     def __init__(self, model: Optional[str] = None,
                  labels: tuple[str, ...] = DEFAULT_LABELS,
@@ -27,6 +31,11 @@ class NERAggregator:
         self.model_name = model or DEFAULT_NER_MODEL
         self.labels = list(labels)
         self.threshold = threshold
+
+    @property
+    def version(self) -> str:
+        return fingerprint_of({"model": self.model_name, "labels": self.labels,
+                               "threshold": self.threshold, "chars": NER_CHARS})
 
     def _model(self) -> Any:
         from gliner import GLiNER
@@ -36,34 +45,37 @@ class NERAggregator:
             raise ModelUnavailable(
                 f"could not load {self.model_name!r}: {exc}") from None
 
-    def run(self, context: Context) -> dict[str, Any]:
-        rows = chunk_rows(context)
-        if not rows:
-            return {"entities": [], "count": 0, "chunks_read": 0}
+    def read(self, context: Context, one: Input) -> Read:
+        return read(context, one)
+
+    def run(self, context: Context, read: Read) -> dict[str, Any]:
         model = self._model()
 
-        # text -> {label, chunks}. Grouped by surface form, because "which
+        # (text, label) -> chunks. Grouped by surface form, because "which
         # chunks does this name appear in" is the question an aggregate can
         # answer that retrieval cannot.
         found: dict[tuple[str, str], set[int]] = {}
-        for chunk_id, line in rows:
-            for entity in model.predict_entities(line, self.labels,
-                                                 threshold=self.threshold):
-                key = (entity["text"].strip(), entity["label"])
-                if key[0]:
-                    found.setdefault(key, set()).add(chunk_id)
+        cut = 0
+        for row in read.rows:
+            parts = pieces(plain(row), NER_CHARS)
+            cut += len(parts)
+            for part in parts:
+                for entity in model.predict_entities(part, self.labels,
+                                                     threshold=self.threshold):
+                    key = (entity["text"].strip(), entity["label"])
+                    if key[0]:
+                        found.setdefault(key, set()).add(row.chunk_id)
 
-        entities = [
-            {"text": text, "label": label,
-             "chunk_ids": sorted(chunks), "mentions": len(chunks)}
-            for (text, label), chunks in found.items()
-        ]
+        entities = [{"text": text, "label": label,
+                     "chunk_ids": sorted(chunks), "mentions": len(chunks)}
+                    for (text, label), chunks in found.items()]
         entities.sort(key=lambda e: (-e["mentions"], e["text"].lower()))
         return {
             "entities": entities,
             "count": len(entities),
             "by_label": dict(Counter(e["label"] for e in entities)),
-            "chunks_read": len(rows),
+            "chunks_read": len(read.rows),
+            "pieces": cut,
             "model": self.model_name,
             "labels": self.labels,
         }

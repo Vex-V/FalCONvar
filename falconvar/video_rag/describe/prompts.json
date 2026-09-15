@@ -12,11 +12,6 @@
       "description": "What is happening here, in 4 to 5 sentences of plain prose. No preamble, no lists, no labels -- just the description."
     }
   },
-  "identity": {
-    "people": {"people": ["appearance", "clothing"]},
-    "objects": {"objects": ["object", "appearance"]},
-    "text": {"visible_text": ["text"]}
-  },
   "shapes": {
     "scene": {
       "summary": "standard",
@@ -89,7 +84,17 @@
               "appearance",
               "clothing",
               "role",
-              "action"
+              "action",
+              "gender",
+              "age_group",
+              "hair_color",
+              "hair_style",
+              "top_color",
+              "top_type",
+              "bottom_color",
+              "bottom_type",
+              "accessories",
+              "distinguishing"
             ],
             "properties": {
               "appearance": {
@@ -107,6 +112,58 @@
               "action": {
                 "type": "string",
                 "description": "What this person does across these frames, including movement."
+              },
+              "gender": {
+                "type": "string",
+                "enum": ["male", "female", "unclear"],
+                "description": "Apparent gender presentation; unclear if it cannot be seen."
+              },
+              "age_group": {
+                "type": "string",
+                "enum": ["child", "teen", "young_adult", "adult", "older_adult", "unclear"],
+                "description": "Apparent age group."
+              },
+              "hair_color": {
+                "type": "string",
+                "enum": ["black", "brown", "blonde", "red", "grey", "white", "bald", "covered", "unclear"],
+                "description": "The nearest of these; covered if a hat or hood hides it."
+              },
+              "hair_style": {
+                "type": "string",
+                "enum": ["short", "long", "ponytail", "bun", "curly", "shaved", "covered", "unclear"],
+                "description": "The nearest of these."
+              },
+              "top_color": {
+                "type": "string",
+                "enum": ["black", "white", "grey", "beige", "brown", "red", "pink", "orange", "yellow", "green", "blue", "dark_blue", "light_blue", "purple", "multicolour", "unclear"],
+                "description": "Main colour of the outermost upper garment. Navy is dark_blue, cream and ivory are beige, maroon and burgundy are red."
+              },
+              "top_type": {
+                "type": "string",
+                "enum": ["t_shirt", "shirt", "sweater", "hoodie", "jacket", "puffer", "coat", "dress", "vest", "uniform", "unclear"],
+                "description": "The outermost upper garment."
+              },
+              "bottom_color": {
+                "type": "string",
+                "enum": ["black", "white", "grey", "beige", "brown", "red", "pink", "orange", "yellow", "green", "blue", "dark_blue", "light_blue", "purple", "multicolour", "unclear"],
+                "description": "Main colour of the lower garment; khaki is beige, denim is blue."
+              },
+              "bottom_type": {
+                "type": "string",
+                "enum": ["trousers", "jeans", "leggings", "shorts", "skirt", "dress", "unclear"],
+                "description": "The lower garment."
+              },
+              "accessories": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["glasses", "hat", "cap", "beanie", "hood_up", "scarf", "backpack", "shoulder_bag", "handbag", "tote_bag", "shopping_bag", "basket", "box", "stroller", "lanyard", "headphones", "gloves"]
+                },
+                "description": "Every one of these that is visible; empty if none."
+              },
+              "distinguishing": {
+                "type": "string",
+                "description": "Anything rare that would single this person out -- a bow, a logo, a patterned garment, a beard. Empty if nothing."
               }
             }
           }
@@ -190,7 +247,7 @@
     },
     "yolo": {
       "shape": "people",
-      "instruction": "These {n} frames span {span} and were kept because the people in shot changed -- their number, position, or arrangement. Give one entry per distinct person, and track each across the frames rather than listing them again per frame. Appearance and clothing are what make a person findable again, so be specific about both. Never guess at a name, an age or an identity."
+      "instruction": "These {n} frames span {span} and were kept because the people in shot changed -- their number, position, or arrangement. Give one entry per distinct person, and track each across the frames rather than listing them again per frame. Appearance and clothing are what make a person findable again, so be specific about both. Then give the same person's attributes from the fixed values: pick the nearest value rather than inventing one, and say unclear when it cannot be seen. Never guess at a name or an identity."
     },
     "objects": {
       "shape": "objects",
