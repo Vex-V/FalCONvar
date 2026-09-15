@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from . import paths
+from .. import paths
 
 BACKENDS = ("file", "supabase")
 

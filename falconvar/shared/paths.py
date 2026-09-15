@@ -60,7 +60,7 @@ UPLOADS = DATA_ROOT / "uploads"
 PROMPTS = DATA_ROOT / "prompts.json"
 #: Model endpoints added or overridden per deployment. Hand-edited, and never
 #: holds a key -- it names the variables keys are read from. The built-ins live
-#: in `shared/providers.py`.
+#: in `shared/models/providers.py`.
 PROVIDERS = DATA_ROOT / "providers.json"
 WEIGHTS = _from_env("FALCONVAR_WEIGHTS", REPO_ROOT / "weights")
 

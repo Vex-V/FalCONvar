@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 from . import aggregate, audio, boundaries, cut, describe, media, video
 from .rag import embed
 from .shared import paths
-from .shared.documents import Produced
+from .shared.contracts.documents import Produced
 
 #: Every component, in the order it can run.
 COMPONENTS = ("media", "audio", "boundaries.evidence", "boundaries",
@@ -45,16 +45,12 @@ class Options:
     use_video: bool = True
     use_audio: bool = True
     sampler: str = "uniform"                 # what to look at
-    # Who answers. None resolves through `shared.providers` when the stage runs
-    # -- the call, then FALCONVAR_* from .env, then openai -- rather than being
-    # captured at import, before .env has been read. A name may carry its
-    # model: `ollama/gemma3:4b`.
+    # Who answers: a provider or `provider/model`. None resolves through
+    # `shared.models.providers` when the stage runs -- FALCONVAR_* from .env, then
+    # openai -- rather than being captured at import, before .env is read.
     describer: Optional[str] = None          # frames -> answers
-    describe_model: Optional[str] = None
     embedder: Optional[str] = None           # text -> vectors
-    embed_model: Optional[str] = None
     llm: Optional[str] = None                # the `llm` aggregate tier
-    llm_model: Optional[str] = None
     tier: str = "free"                                   # a cost ceiling
     sink: str = "file"                       # where documents go
     index: str = embed.DEFAULT_INDEX         # where vectors go
@@ -130,14 +126,14 @@ def validate(options: Options) -> list[str]:
     # typo -- a missing ANTHROPIC_API_KEY discovered by `describe` arrives
     # after the whole video has been decoded. Whether a local server is up is
     # not asked: that would make validation a network call.
-    from .shared import providers
-    wanted = [("embed", options.embedder, options.embed_model)]
+    from .shared.models import providers
+    wanted = [("embed", options.embedder)]
     if options.use_video:
-        wanted.append(("describe", options.describer, options.describe_model))
+        wanted.append(("describe", options.describer))
     if options.tier == "llm":
-        wanted.append(("llm", options.llm, options.llm_model))
-    for role, name, model in wanted:
-        problems += providers.problems(role, name, model)
+        wanted.append(("llm", options.llm))
+    for role, spec in wanted:
+        problems += providers.problems(role, spec)
     return problems
 
 
@@ -222,18 +218,16 @@ def process(options: Options,
     # 7 · one answer per (chunk, sampler)
     if use_video:
         starting("describe")
-        step(describe.run(video_id, options.describer, options.describe_model,
-                          sink=options.sink))
+        step(describe.run(video_id, options.describer, sink=options.sink))
 
     # 8 · vectors, from both modalities
     starting("embed")
-    step(embed.run(video_id, options.embedder, options.embed_model,
-                   index_name=options.index))
+    step(embed.run(video_id, options.embedder, index_name=options.index))
 
     # 9 · video-level structure
     starting("aggregate")
     step(aggregate.run(video_id, options.tier, sink=options.sink,
-                       llm=options.llm, model=options.llm_model))
+                       llm=options.llm))
 
     return run
 
@@ -257,14 +251,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--describer", default=None,
                     help="a provider or provider/model, e.g. ollama/gemma3:4b; "
                          "default FALCONVAR_DESCRIBER, then openai")
-    ap.add_argument("--describe-model", default=None)
     ap.add_argument("--embedder", default=None,
                     help="a provider or provider/model, e.g. local; "
                          "default FALCONVAR_EMBEDDER, then openai")
-    ap.add_argument("--embed-model", default=None)
     ap.add_argument("--llm", default=None,
-                    help="who answers --tier llm; default FALCONVAR_LLM, then openai")
-    ap.add_argument("--llm-model", default=None)
+                    help="who answers --tier llm: a provider or provider/model; "
+                         "default FALCONVAR_LLM, then openai")
     ap.add_argument("--tier", default="free", choices=aggregate.TIERS)
     ap.add_argument("--sink", default="file",
                     help="where documents go: file | supabase | both")
@@ -278,8 +270,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         source=args.source, video_id=args.video_id, policy=args.policy,
         use_video=not args.no_video, use_audio=not args.no_audio,
         sampler=args.sampler, describer=args.describer,
-        describe_model=args.describe_model, embedder=args.embedder,
-        embed_model=args.embed_model, llm=args.llm, llm_model=args.llm_model,
+        embedder=args.embedder, llm=args.llm,
         tier=args.tier, sink=args.sink, index=args.index)
 
     problems = validate(options)

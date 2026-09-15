@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..shared.documents import RawTranscript, Timeline
+from ..shared.contracts.documents import RawTranscript, Timeline
 
 
 def _midpoint(word: dict[str, Any]) -> float:

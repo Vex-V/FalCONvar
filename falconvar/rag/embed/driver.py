@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from ...shared import paths, sinks
-from ...shared.documents import Produced
+from ...shared import paths
+from ...shared.storage import sinks
+from ...shared.contracts.documents import Produced
 from . import embedders as embedders_mod
 from . import readable
 from . import units as units_mod
@@ -28,7 +29,8 @@ def _embed_video(video_id: str, built, names: Sequence[str]) -> int:
     """
     if "supabase" not in names:
         return 0
-    from ...shared import paths, sinks
+    from ...shared import paths
+    from ...shared.storage import sinks
     from .indexes.supabase import write_video_unit
 
     path = paths.artifact(video_id, "aggregates") / "summary.json"
@@ -61,7 +63,6 @@ DEFAULT_INDEX = "qdrant"
 
 
 def run(video_id: str, embedder: Optional[str] = None,
-        model: Optional[str] = None,
         batch: int = 64,
         index_name: str | Sequence[str] = DEFAULT_INDEX,
         sink: str | Sequence[str] = "file") -> Produced:
@@ -72,10 +73,10 @@ def run(video_id: str, embedder: Optional[str] = None,
     API calls rather than two.
 
     `embedder` is a provider or `provider/model`; None resolves through
-    `shared.providers` -- FALCONVAR_EMBEDDER, then openai -- exactly as
+    `shared.models.providers` -- FALCONVAR_EMBEDDER, then openai -- exactly as
     `retrieve` resolves it, so the two cannot disagree about the space.
     """
-    built = embedders_mod.build(embedder, model=model)
+    built = embedders_mod.build(embedder)
     names = ([n.strip() for n in index_name.split(",") if n.strip()]
              if isinstance(index_name, str) else list(index_name))
     indexes = [(n, backends.build(n, video_id, built.key)) for n in names]
@@ -159,7 +160,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--embedder", default=None,
                     help="a provider or provider/model; default FALCONVAR_EMBEDDER, "
                          f"then openai. Known: {', '.join(embedders_mod.available())}")
-    ap.add_argument("--model", default=None)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--index", default=DEFAULT_INDEX, dest="index_name",
                     help=f"comma-separated; known: "
@@ -168,8 +168,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        produced = run(args.video_id, args.embedder, args.model, args.batch,
-                       args.index_name)
+        produced = run(args.video_id, args.embedder, args.batch, args.index_name)
     except (KeyError, ValueError, FileNotFoundError,
             embedders_mod.EmbedderUnavailable) as exc:
         print(f"error: {exc}")

@@ -1,14 +1,20 @@
-# Core -- everything the pipeline needs to read video and run the uniform sampler.
+# Everything here is required. Heavy packages are imported where they are used,
+# so `import falconvar` stays light -- but nothing falls back without them.
+
+# Core -- reading video and the uniform sampler.
 av==18.1.0                 # decode + exact PTS/time_base; OpenCV cannot expose either
 opencv-python==5.0.0.93    # colour conversion, resize, JPEG encode, container rotation
 numpy==2.4.4
+python-dotenv              # .env
+jsonschema                 # schemas.validate(deep=True)
 
-# Model-backed samplers. Imported lazily, so these are only needed for the
-# sampler that uses them.
-torch==2.13.0              # clip, yolo, objects, text
-transformers==5.15.0       # clip, yolo   (CLIP image tower)
+# Model-backed samplers and the local models.
+torch==2.13.0              # clip, yolo, objects, text, the local embedder
+transformers==5.15.0       # clip, yolo (CLIP image tower), sentiment
 ultralytics==8.4.120       # yolo, objects (YOLO / YOLO-World)
 easyocr==1.7.2             # text          (detector only; nothing is read)
+gliner                     # the ner aggregate
+sentence-transformers      # the `local` embedder
 
 # Scene chunking. Only the detector algorithm is used -- its SceneManager is
 # batch and pull-based, which would mean a second decode pass.
@@ -19,15 +25,16 @@ scenedetect==0.7.1
 # LM Studio, Gemini, Mistral, Groq, OpenRouter, Voyage. Anthropic goes through
 # `httpx`, which `openai` already installs.
 openai
-# sentence-transformers    # optional, for the `local` embedder. Without it
-                           # `transformers` pools as the model declares, and
-                           # refuses a model that needs a Dense layer after
 
-# --- api (optional): only `api/` needs these, falconvar runs without them
+# --- where documents and vectors go
+qdrant-client
+supabase
+
+# --- api
 fastapi
 uvicorn[standard]
 python-multipart
 
-# --- audio (optional): only falconvar/audio needs these
+# --- audio
 faster-whisper
 pyannote.audio

@@ -52,7 +52,7 @@ def spans_of(video_id: str) -> list[tuple[float, float]]:
     try:
         return load_timeline(video_id).spans
     except FileNotFoundError:
-        from ...shared import db
+        from ...shared.storage import db
         rows = (db.client(write=False).table("chunks")
                 .select("chunk_id,start_ts,end_ts")
                 .eq("video_id", video_id).order("chunk_id").execute().data or [])
@@ -75,7 +75,7 @@ def chunks_in(spans: Sequence[tuple[float, float]],
 
 
 def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
-           model: Optional[str] = None, moments: int = 5,
+           moments: int = 5,
            sampler: Optional[str] = None, index_name: str = DEFAULT_INDEX,
            candidates: int = 20,
            question: Optional[str] = None,
@@ -101,7 +101,7 @@ def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
         raise ValueError("a search needs a query; this one is empty")
 
     scope = scope_of(video_id, video_ids)
-    built = embedders_mod.build(embedder, model=model)
+    built = embedders_mod.build(embedder)
     # The index is built with one id only so `stored_hashes`/`prune` keep
     # working for the writer; the scope a *search* uses is passed per call.
     index = backends.build(index_name, scope[0] if scope else "", built.key)
@@ -173,8 +173,6 @@ def _search(built, index, index_name: str, query: str,
     vector = embedders_mod.query_vector(built, query)
     hits = index.search(vector, query, candidates, sampler, question,
                         strategy, narrowed, structured, scope)
-    if getattr(index, "degraded", None):
-        notes.append(index.degraded)
     if not hits:
         if any(f is not None for f in (sampler, question, strategy,
                                        narrowed, structured, scope)):
@@ -226,7 +224,7 @@ def _all_videos() -> list[str]:
     if found:
         return found
     try:
-        from ...shared import db
+        from ...shared.storage import db
         rows = (db.client(write=False).table("timelines")
                 .select("video_id").execute().data or [])
         return [r["video_id"] for r in rows]
@@ -234,8 +232,7 @@ def _all_videos() -> list[str]:
         return []
 
 
-def videos(query: str, embedder: Optional[str] = None,
-           model: Optional[str] = None, limit: int = 5
+def videos(query: str, embedder: Optional[str] = None, limit: int = 5
            ) -> list[dict[str, Any]]:
     """Which video is this about. A different question from which moment.
 
@@ -249,7 +246,7 @@ def videos(query: str, embedder: Optional[str] = None,
     """
     from ..embed.indexes.supabase import search_videos
 
-    built = embedders_mod.build(embedder, model=model)
+    built = embedders_mod.build(embedder)
     # The query side: e5, nomic and bge embed a question differently from the
     # passage it should find, and a query embedded as a document loses recall
     # with no error anywhere.
@@ -267,7 +264,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--embedder", default=None,
                     help="the one that built the index: a provider or "
                          "provider/model; default FALCONVAR_EMBEDDER, then openai")
-    ap.add_argument("--model", default=None)
     ap.add_argument("--moments", type=int, default=5)
     ap.add_argument("--sampler", default=None,
                     help="narrow to one pairing, e.g. `clip:text`")
@@ -302,7 +298,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         found, notes = search(args.query, args.video_id, args.embedder,
-                              args.model, args.moments, args.sampler,
+                              args.moments, args.sampler,
                               args.index_name, args.candidates,
                               question=args.question, strategy=args.strategy,
                               chunk_ids=chunk_ids, window=args.window,

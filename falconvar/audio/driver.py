@@ -12,8 +12,9 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from ..media import load as load_media
-from ..shared import env, paths, sinks
-from ..shared.documents import Produced, RawTranscript
+from ..shared import env, paths
+from ..shared.storage import sinks
+from ..shared.contracts.documents import Produced, RawTranscript
 from . import models
 from .reader import listen
 from .source import NoAudio

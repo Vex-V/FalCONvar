@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ...shared.documents import Descriptions, Transcript, fingerprint_of
+from ...shared.contracts.documents import Descriptions, Transcript, fingerprint_of
 
 
 def render(summary: str, structured: dict[str, Any]) -> str:

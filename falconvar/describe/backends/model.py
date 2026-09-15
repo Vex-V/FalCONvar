@@ -3,7 +3,7 @@
 A ``Describer``, so the reader neither knows nor cares which provider answers
 or whether the call crosses a network. Everything it needs arrives in
 ``describe(images, context)``; which provider, and how that provider is asked
-for a shape, is `shared/llm.py`'s business.
+for a shape, is `shared/models/llm.py`'s business.
 
 The frames are already JPEG in hand -- ``FrameStore.read_bytes`` hands them
 over exactly as ingest wrote them -- so the stored bytes are sent as they are.
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared import llm, providers
+from ...shared.models import llm, providers
 from .. import prompts
 from ..base import DescriberUnavailable, Description
 from ..frames import LoadedFrame
@@ -41,16 +41,21 @@ DEFAULT_MAX_TOKENS = 2000
 class ModelDescriber:
     """Describes one (chunk, sampler) pair with a single call."""
 
-    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None,
+    def __init__(self, spec: Optional[str] = None,
                  max_output_tokens: int = DEFAULT_MAX_TOKENS,
                  client: Any = None) -> None:
         try:
-            self.llm = llm.Model(provider, model, role="describe", client=client)
+            self.llm = llm.Model(spec, role="describe", client=client)
         except providers.ProviderError as exc:
             raise DescriberUnavailable(str(exc)) from None
         self.name = self.llm.name
         self.model = self.llm.model
         self.max_output_tokens = max_output_tokens
+
+    @property
+    def concurrency(self) -> int:
+        """Runs in flight at once: the provider's cap on calls."""
+        return self.llm.concurrency
 
     # -- request assembly, kept separate so it is testable without a network -
     def parts_for(self, images: Sequence[LoadedFrame],
@@ -66,8 +71,8 @@ class ModelDescriber:
             parts.append(llm.image(frame.jpeg))
         return parts
 
-    def describe(self, images: Sequence[LoadedFrame],
-                 context: dict[str, Any]) -> Description:
+    async def describe(self, images: Sequence[LoadedFrame],
+                       context: dict[str, Any]) -> Description:
         where = f"chunk {context['chunk_id']} / {context['sampler']}"
         if not images:
             # The pipeline guarantees every chunk keeps at least one frame, so
@@ -78,7 +83,7 @@ class ModelDescriber:
             # The question's own schema, not a shared one: a call about people
             # has no field to put the room in, so it cannot spend tokens
             # repeating what the scene question already said.
-            payload = self.llm.generate(
+            payload = await self.llm.generate(
                 self.parts_for(images, context),
                 {"name": f"description_{question}",
                  "schema": prompts.schema_for(question)},

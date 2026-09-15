@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
-from ...shared.llm import LLMUnavailable, Model
+from ...shared.models.llm import LLMUnavailable, Model
 from ..base import Context
 from ..rendering import chunk_rows, resolve_span
 from . import SYSTEM
@@ -37,9 +38,8 @@ class EventsAggregator:
     about = "discrete things that happened, each pinned to a chunk"
     depends_on: tuple[str, ...] = ()
 
-    def __init__(self, provider: Optional[str] = None,
-                 model: Optional[str] = None) -> None:
-        self.llm = Model(provider, model, role="llm")
+    def __init__(self, llm: Optional[str] = None) -> None:
+        self.llm = Model(llm, role="llm")
 
     @property
     def model_key(self) -> str:
@@ -50,10 +50,10 @@ class EventsAggregator:
         if not rows:
             raise LLMUnavailable("nothing to find events in")
         body = "\n".join(line for _, line in rows)
-        answer = self.llm.complete(
+        answer = asyncio.run(self.llm.complete(
             "List the discrete events in this video. Each must cite the chunk "
             "id it happened in, taken from the input:\n\n" + body,
-            _EVENTS_SCHEMA, SYSTEM)
+            _EVENTS_SCHEMA, SYSTEM))
 
         events = []
         for event in answer["events"]:

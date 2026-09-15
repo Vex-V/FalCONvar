@@ -22,7 +22,7 @@ from typing import Optional
 
 import av
 
-from ..shared.documents import AudioStream, Media, VideoStream
+from ..shared.contracts.documents import AudioStream, Media, VideoStream
 
 
 class UnusableMedia(RuntimeError):

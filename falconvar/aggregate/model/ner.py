@@ -29,11 +29,7 @@ class NERAggregator:
         self.threshold = threshold
 
     def _model(self) -> Any:
-        try:
-            from gliner import GLiNER
-        except ImportError as exc:                       # pragma: no cover
-            raise ModelUnavailable(
-                "gliner is not installed: pip install gliner") from exc
+        from gliner import GLiNER
         try:
             return GLiNER.from_pretrained(self.model_name)
         except Exception as exc:                         # noqa: BLE001

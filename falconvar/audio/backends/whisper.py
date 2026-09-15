@@ -47,13 +47,8 @@ class WhisperTranscriber:
         # PATH. The failure is otherwise a missing-DLL error on a machine where
         # the DLL is present.
         cuda.enable()
-        try:
-            import torch
-            from faster_whisper import WhisperModel
-        except ImportError as exc:                       # pragma: no cover
-            raise ModelUnavailable(
-                "faster-whisper is not installed: pip install faster-whisper"
-            ) from exc
+        import torch
+        from faster_whisper import WhisperModel
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.compute_type = compute_type or DEFAULT_COMPUTE.get(self.device, "int8")

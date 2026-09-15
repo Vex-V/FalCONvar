@@ -103,13 +103,12 @@ number that says whether a submitted job will start now or wait.
            artifacts:   {name: about},
            parameters:  {component: [{name, type, default, required}]},
            defaults:    {policy, sampler, index, tier, sink,
-                         describer, describe_model, llm, llm_model,
-                         embedder, embed_model},
+                         describer, llm, embedder},    -- each provider/model
            models:      {providers: [{name, protocol, about, builtin, local,
                                       chat, embed, chat_model, embed_model,
                                       base_url, key_vars[], structured,
-                                      configured, why}],
-                         problems[], file, env: {role: [provider_var, model_var]}},
+                                      concurrency, configured, why}],
+                         problems[], file, env: {role: variable}},
            search:      {filters[], structured_fields{}, levels[]}}
 
 The contract a client generates itself from. `parameters` is read off each
@@ -117,9 +116,9 @@ component's signature and `defaults` off `workflow.Options`, so neither can
 drift from what the code takes. `search.structured_fields` lists only the
 fields a shape fixed with `one_of` -- the only ones worth offering as a filter.
 
-The six model defaults are resolved **now** -- the call, then `FALCONVAR_*`
-from `.env`, then `openai` -- rather than read off the dataclass, whose model
-fields are `None` until a run resolves them. `models.providers` says which
+The three model defaults are resolved **now** -- `FALCONVAR_*` from `.env`,
+then `openai` -- and given as `provider/model`, rather than read off the
+dataclass, whose model fields are `None` until a run resolves them. `models.providers` says which
 providers can run here: `configured` is a key found, or a provider on this
 machine that needs none; `why` names the variable to set otherwise. It carries
 the *names* of key variables and never a value. A local server is not pinged,
@@ -135,8 +134,7 @@ Multipart, not JSON -- it carries a file.
 
     in    file (required), run?=true, video_id?, policy?, sampler?,
           use_video?, use_audio?, tier?, sink?, index?,
-          describer?, describe_model?, embedder?, embed_model?,
-          llm?, llm_model?
+          describer?, embedder?, llm?
     out   run=true   202 {job: {...}, video_id}
           run=false  201 {video_id, media: {...Produced}, next, components[]}
     422   workflow.validate found a contradiction: {"problems": [...]}
@@ -276,7 +274,7 @@ untrue -- it only stops new runs asking it.
            video_id?,                     shorthand for a scope of one
            level?: "moment" | "video",
            moments?=5, candidates?=20, index?,
-           embedder?, model?,             -- provider or provider/model
+           embedder?,                     -- provider or provider/model
            sampler?, question?, strategy?,        -- the three id filters
            chunk_ids?: [...], window?=0,          -- a set of chunks
            after?, before?,                       -- seconds
@@ -293,8 +291,8 @@ untrue -- it only stops new runs asking it.
                          videos: [{video_id, kind, content, similarity}]}
     404   nothing indexed for this embedder in this index
     422   an empty query, an unknown level, an unknown embedder
-
-    503   the embedder's provider has no key, or cannot be reached
+    503   the embedder's provider has no key or cannot be reached, or
+          index=supabase and the search_embeddings RPC is missing
 
 An empty result is `moments: []` with top-level `notes`, not an error: "nothing
 matched those filters" and "nothing indexed" are different answers and only one

@@ -5,6 +5,12 @@ function of its question alone, so two questions that share a field both answer
 it and both answers are kept under their own sampler id. Nothing is reconciled
 and nothing is dropped.
 
+**So the calls run concurrently.** Every call is planned first, in manifest
+order, and its slot in the document reserved; then one task per (chunk, sampler
+run) reads that run's frames once and asks its questions. `describer.concurrency`
+caps the runs in flight, which bounds the frames held in memory as well as the
+calls. The document comes out in manifest order however the calls finish.
+
 **Resume is keyed on the manifest, the describer, and the prompts.** A stored
 description counts as done only if all three match. Without the describer
 check, running with the stub and then switching to a real one skips every pair
@@ -21,12 +27,13 @@ pair against its own question.
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
-from ..shared.documents import Descriptions, Manifest, Timeline
+from ..shared.contracts.documents import Descriptions, Manifest, Timeline
 from . import prompts
-from .base import Describer, Description
+from .base import Describer
 from .frames import FrameSource
 
 
@@ -84,9 +91,7 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
              source: FrameSource,
              samplers: Optional[Sequence[str]] = None,
              existing: Optional[Descriptions] = None,
-             limit: Optional[int] = None,
-             on_described: Optional[Callable[[int, str, Description], None]] = None
-             ) -> Descriptions:
+             limit: Optional[int] = None) -> Descriptions:
     """Describe every (chunk, sampler) the manifest names."""
     # Every question this manifest asks, resolved before the first call so the
     # model block is complete whether or not a chunk is reached.
@@ -96,25 +101,24 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
     done = _resumable(existing, manifest, model)
     kept: dict[int, dict[str, Any]] = (
         {c["chunk_id"]: c for c in existing.chunks} if existing is not None else {})
+    by_id = {s["id"]: s for s in manifest.config.get("samplers", [])}
 
+    # -- plan: every call, in manifest order -----------------------------------
     chunks: list[dict[str, Any]] = []
-    described = skipped = 0
-
+    runs: list[tuple[int, str, str, dict[str, Any], list[tuple[str, str]],
+                     dict[str, Any]]] = []
+    planned = skipped = 0
     for chunk in manifest.chunks:
         chunk_id = chunk["chunk_id"]
-        start_ts, end_ts = timeline.bounds_of(chunk_id)
-        by_id = {s["id"]: s for s in manifest.config.get("samplers", [])}
-
-        out = {"chunk_id": chunk_id, "samplers": {}}
+        out: dict[str, Any] = {"chunk_id": chunk_id, "samplers": {}}
         previous = kept.get(chunk_id, {}).get("samplers", {})
 
         # One run of a sampler, one set of frames, one call per question asked
-        # about them. The frames are read once however many questions there are.
+        # about them.
         for run_id in chunk.get("samplers", {}):
             config = by_id.get(run_id, {})
             name = config.get("name") or run_id
-            images = None
-
+            asked: list[tuple[str, str]] = []
             for question in prompts.questions_of(config, run_id):
                 sampler_id = prompts.answer_id(name, question)
                 if samplers is not None and sampler_id not in samplers:
@@ -123,14 +127,35 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
                     out["samplers"][sampler_id] = previous[sampler_id]
                     skipped += 1
                     continue
-                if limit is not None and described >= limit:
+                if limit is not None and planned >= limit:
                     continue
+                # Reserved now, so the answer lands in manifest order.
+                out["samplers"][sampler_id] = None
+                asked.append((sampler_id, question))
+                planned += 1
+            if asked:
+                runs.append((chunk_id, run_id, name, config, asked, out))
 
-                if images is None:
-                    images = source.images_for(chunk_id, run_id)
-                if not images:
-                    break
+        # No chunk-level rollup. It flattened every sampler's answer into one
+        # record, which forced a rule for who wins a shared key -- and there is
+        # no non-arbitrary one, because the user asked both questions. Nothing
+        # read it: units, both index writers and every aggregator work from the
+        # per-sampler blocks below.
+        chunks.append(out)
 
+    # -- run: concurrently, each run's frames read once ------------------------
+    async def run(chunk_id: int, run_id: str, name: str, config: dict[str, Any],
+                  asked: list[tuple[str, str]], out: dict[str, Any],
+                  gate: asyncio.Semaphore) -> None:
+        async with gate:
+            images = source.images_for(chunk_id, run_id)
+            if not images:
+                for sampler_id, _ in asked:
+                    del out["samplers"][sampler_id]
+                return
+            start_ts, end_ts = timeline.bounds_of(chunk_id)
+
+            async def ask(sampler_id: str, question: str) -> None:
                 context = {
                     "video_id": manifest.video_id,
                     "chunk_id": chunk_id,
@@ -141,8 +166,7 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
                     "sampler_config": config,
                 }
                 call_started = time.perf_counter()
-                answer = describer.describe(images, context)
-                described += 1
+                answer = await describer.describe(images, context)
                 out["samplers"][sampler_id] = {
                     # Both halves, written out rather than left to be parsed
                     # back off the id: `clip` means question == strategy, so a
@@ -155,16 +179,17 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
                     "structured": answer.fields,
                     "elapsed_s": round(time.perf_counter() - call_started, 3),
                 }
-                if on_described is not None:
-                    on_described(chunk_id, sampler_id, answer)
 
-        # No chunk-level rollup. It flattened every sampler's answer into one
-        # record, which forced a rule for who wins a shared key -- and there is
-        # no non-arbitrary one, because the user asked both questions. Nothing
-        # read it: units, both index writers and every aggregator work from the
-        # per-sampler blocks below.
-        chunks.append(out)
+            await asyncio.gather(*(ask(s, q) for s, q in asked))
 
+    async def run_all() -> None:
+        gate = asyncio.Semaphore(max(1, describer.concurrency))
+        await asyncio.gather(*(run(*r, gate) for r in runs))
+
+    if runs:
+        asyncio.run(run_all())
+
+    described = sum(len(c["samplers"]) for c in chunks) - skipped
     return Descriptions(
         video_id=manifest.video_id,
         timeline_fingerprint=manifest.timeline_fingerprint,

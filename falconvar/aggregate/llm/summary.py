@@ -7,9 +7,10 @@ resolved from the grid."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
-from ...shared.llm import LLMUnavailable, Model
+from ...shared.models.llm import LLMUnavailable, Model
 from ..base import Context
 from ..rendering import batched, chunk_rows, resolve_span
 from . import BATCH, SYSTEM
@@ -57,9 +58,8 @@ class SummaryAggregator:
     about = "what the whole video is about, in one pass over every chunk"
     depends_on: tuple[str, ...] = ()
 
-    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None,
-                 batch: int = BATCH) -> None:
-        self.llm = Model(provider, model, role="llm")
+    def __init__(self, llm: Optional[str] = None, batch: int = BATCH) -> None:
+        self.llm = Model(llm, role="llm")
         self.batch = batch
 
     @property
@@ -67,6 +67,9 @@ class SummaryAggregator:
         return self.llm.key
 
     def run(self, context: Context) -> dict[str, Any]:
+        return asyncio.run(self._run(context))
+
+    async def _run(self, context: Context) -> dict[str, Any]:
         rows = chunk_rows(context)
         if not rows:
             raise LLMUnavailable("nothing to summarise: no chunk has any text")
@@ -78,15 +81,17 @@ class SummaryAggregator:
         parts = [([cid], line) for cid, line in rows]
 
         while len(parts) > self.batch:
-            folded: list[tuple[list[int], str]] = []
-            for group in batched(parts, self.batch):
-                ids = [c for part in group for c in part[0]]
-                body = "\n".join(text for _, text in group)
-                answer = self.llm.complete(
-                    f"Summarise this stretch of a video, in order:\n\n{body}",
+            # The folds of one layer are independent, so they are asked at
+            # once; the next layer waits for all of them.
+            groups = list(batched(parts, self.batch))
+            answers = await asyncio.gather(*(
+                self.llm.complete(
+                    "Summarise this stretch of a video, in order:\n\n"
+                    + "\n".join(text for _, text in group),
                     _FOLD_SCHEMA, SYSTEM)
-                folded.append((ids, answer["summary"]))
-            start, end = 0.0, 0.0
+                for group in groups))
+            folded = [([c for part in group for c in part[0]], answer["summary"])
+                      for group, answer in zip(groups, answers)]
             layers.append({
                 "level": level,
                 "parts": [{"chunk_ids": ids, "summary": text,
@@ -98,7 +103,7 @@ class SummaryAggregator:
             level += 1
 
         body = "\n".join(text for _, text in parts)
-        final = self.llm.complete(
+        final = await self.llm.complete(
             f"Summarise this whole video:\n\n{body}",
             _SUMMARY_SCHEMA, SYSTEM, max_output_tokens=4000)
         return {

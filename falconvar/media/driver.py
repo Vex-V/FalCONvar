@@ -10,8 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
-from ..shared import paths, sinks
-from ..shared.documents import Media, Produced
+from ..shared import paths
+from ..shared.storage import sinks
+from ..shared.contracts.documents import Media, Produced
 from .split import UnusableMedia, split
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from ..shared.documents import RawTranscript
+from ..shared.contracts.documents import RawTranscript
 from . import source
 from .models import Diarization, Diarizer, Transcriber, Transcript
 

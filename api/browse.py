@@ -30,7 +30,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from falconvar.shared import db
+from falconvar.shared.storage import db
 
 router = APIRouter(prefix="/db", tags=["database"])
 
