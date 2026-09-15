@@ -11,7 +11,7 @@ from typing import Optional, Sequence
 
 from ..shared import paths
 from ..shared.storage import sinks
-from ..shared.contracts.documents import Aggregate, Produced
+from ..shared.contracts.documents import Aggregate, Produced, fingerprint_of
 from . import TIER_OF, available, resolve
 from .base import TIERS, Context, missing, resolve_order
 
@@ -31,7 +31,14 @@ def context_for(video_id: str) -> Context:
     if paths.exists(video_id, "transcript"):
         from ..cut import load as load_transcript
         transcript = load_transcript(video_id)
-    return Context(video_id, timeline, manifest, descriptions, transcript)
+    identity: dict[str, dict[str, list[str]]] = {}
+    if descriptions is not None:
+        from ..describe import library
+        asked = {block.get("question") or sampler_id
+                 for chunk in descriptions.chunks
+                 for sampler_id, block in (chunk.get("samplers") or {}).items()}
+        identity = {q: found for q in sorted(asked) if (found := library.identity_of(q))}
+    return Context(video_id, timeline, manifest, descriptions, transcript, identity)
 
 
 #: Who made an `llm` aggregate that does not say. Before providers existed
@@ -80,6 +87,13 @@ def run(video_id: str, tier: str = "free",
         aggregator = (resolve(name)(llm) if TIER_OF[name] == "llm"
                       else resolve(name)())
         author = getattr(aggregator, "model_key", None)
+        # An aggregator whose answer depends on more than the chunk text --
+        # what the shapes declare as identity -- folds that in, so a changed
+        # declaration rebuilds it rather than reusing a stale answer. The rest
+        # keep the fingerprint they always had.
+        inputs_of = getattr(aggregator, "inputs_of", None)
+        expected = (fingerprint if inputs_of is None else
+                    fingerprint_of({"text": fingerprint, "declared": inputs_of(context)}))
         why = missing(aggregator, context, ran)
         if why is not None:
             skipped[name] = why
@@ -100,7 +114,7 @@ def run(video_id: str, tier: str = "free",
         stored = None
         if not force and path.exists():
             candidate = Aggregate.from_dict(sinks.read_json(path))
-            if (candidate.inputs_fingerprint == fingerprint
+            if (candidate.inputs_fingerprint == expected
                     and made_by(candidate) == author):
                 stored = candidate
 
@@ -111,7 +125,7 @@ def run(video_id: str, tier: str = "free",
             payload = aggregator.run(context)
             document = Aggregate(video_id=video_id, aggregate_id=name,
                                  tier=aggregator.tier, payload=payload,
-                                 inputs_fingerprint=fingerprint,
+                                 inputs_fingerprint=expected,
                                  stats={"about": aggregator.about,
                                         **({"model": author} if author else {})})
         if author:

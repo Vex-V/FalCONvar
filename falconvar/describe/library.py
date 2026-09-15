@@ -34,6 +34,13 @@ not take a shipped shape's name -- `people` and `prose` are shape names that
 are *not* question names, so the question-level shadow guard does not cover
 them -- and it can never claim `fallback`, because exactly one shape is what
 every unrecognised question resolves to and it is a shipped one.
+
+**Identity is declared beside a shape, never inside it.** Which keys of an
+entry identify it across chunks -- `clothing` and `appearance`, not `action` --
+is what entity linking reads. `version_of` hashes the shape, so a declaration
+inside it would re-describe every answer given in that shape. Built-ins declare
+it in the top-level `identity` map; a custom field spec carries `identity`,
+which `compile_shape` never copies into the shape it builds.
 """
 
 from __future__ import annotations
@@ -218,6 +225,11 @@ def check_shape(spec: Any) -> list[str]:
             elif not all(isinstance(v, str) and v.strip() for v in one_of):
                 problems.append(f"{where}: `one_of` values must be strings")
 
+        identity = field.get("identity")
+        if identity is not None and not field.get("of"):
+            problems.append(f"{where}: `identity` needs `of` -- it names which "
+                            "keys of each entry identify it across chunks")
+
         nested = field.get("of")
         if nested is None:
             continue
@@ -239,6 +251,10 @@ def check_shape(spec: Any) -> list[str]:
                                 f"{FIELD_NAME.pattern}")
             if not str(description or "").strip():
                 problems.append(f"{where}: key {key!r} needs a description")
+        if identity is not None and not (isinstance(identity, list) and identity
+                                         and all(k in nested for k in identity)):
+            problems.append(f"{where}: `identity` must be a non-empty list of "
+                            f"keys from `of` ({', '.join(nested)})")
     return problems
 
 
@@ -266,6 +282,8 @@ def load(refresh: bool = False) -> dict[str, Any]:
             "shapes": dict(builtin["shapes"]),
             "questions": {name: {**q, "builtin": True}
                           for name, q in builtin["questions"].items()},
+            "identity": {shape: {f: list(keys) for f, keys in fields.items()}
+                         for shape, fields in (builtin.get("identity") or {}).items()},
         }
 
         custom = _read(paths.PROMPTS)
@@ -286,6 +304,11 @@ def load(refresh: bool = False) -> dict[str, Any]:
                 continue
             try:
                 merged["shapes"][name] = compile_shape(spec)
+                declared = {f: list(s["identity"])
+                            for f, s in (spec.get("fields") or {}).items()
+                            if isinstance(s, dict) and s.get("identity")}
+                if declared:
+                    merged["identity"][name] = declared
             except Exception:                              # noqa: BLE001
                 # A hand-edited shape that will not compile is dropped, and the
                 # question falls back to the general shape exactly as an
@@ -365,6 +388,22 @@ def instruction_of(name: str) -> str:
                      if (load()["shapes"].get(q.get("shape")) or {}).get("fallback")),
                     None)
     return (fallback or {}).get("instruction", "")
+
+
+def shape_identity(shape: Optional[str]) -> dict[str, list[str]]:
+    """`{field: [keys]}` identifying an entry of this shape across chunks.
+
+    Empty for a shape that declares none, which is then never linked: there is
+    no guessing which keys say who someone is.
+    """
+    return {f: list(keys) for f, keys in
+            (load()["identity"].get(shape or "") or {}).items()}
+
+
+def identity_of(name: str) -> dict[str, list[str]]:
+    """What identifies an entry in this question's answer. See `shape_identity`."""
+    entry = load()["questions"].get(name)
+    return shape_identity(entry.get("shape")) if entry else {}
 
 
 def fields_of(name: str) -> list[str]:
