@@ -491,8 +491,9 @@ them a score is uninterpretable: measured on this corpus, a nonsense query
 scores 0.1136 against a real one's 0.1294. There is no relevance floor, so the
 ranks are the signal.
 
-**`level=video` is Postgres only** -- that is where `embed` writes the
-summaries, from the `summary` aggregate. 4/4 correct on the test corpus.
+**`level=video` is Postgres only** -- that is where `aggregates` stores each
+video's summary as its vector, when a run's `index` names `supabase`. 4/4
+correct on the test corpus.
 
 **`/search` names its embedder.** It must be the one that built the index: a
 mismatch across widths fails loudly, but two models of the same width return a

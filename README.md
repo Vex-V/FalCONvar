@@ -22,26 +22,39 @@ and is also how a schema change is applied — re-run the whole thing.
 
 ```bash
 python -m falconvar.workflow samples/video.mp4 --policy vad --sampler clip,yolo:overview
-python -m falconvar.rag.retrieve "the moment the reactor exploded" video
+python -m falconvar.video_rag.retrieve "the moment the reactor exploded" video
 python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
 ```
 
 ## The pipeline
 
-Nine components. Each reads files and writes files, and none imports another.
-Every one has the signature `run(video_id, ...) -> Produced`.
+Two tiers, each a driver over the components in its folder, and `workflow`
+runs one then the other:
 
-| # | component | reads | writes |
-|---|---|---|---|
-| 1 | `media` | the media file | `media.json` |
-| 2 | `audio` | `media.json` | `transcript.raw.json` |
-| 3 | `boundaries.evidence` | `media.json` *or* `transcript.raw.json` | `cuts.json` |
-| 4 | `boundaries` | `media.json` + `cuts.json` | **`timeline.json`** |
-| 5 | `video` | `media.json` + `timeline.json` | `manifest.json`, `store/` |
-| 6 | `cut` | `transcript.raw.json` + `timeline.json` | `transcript.json` |
-| 7 | `describe` | `manifest.json` + `store/` | `descriptions.json` |
-| 8 | `embed` | `descriptions.json` + `transcript.json` | vectors, `embedded.json` |
-| 9 | `aggregate` | everything above | `aggregates/*.json` |
+- **`video_rag`** extracts, and is a complete RAG engine on its own: the picture
+  and the soundtrack onto one chunk grid, described, embedded, searchable.
+- **`aggregates`** answers higher-level questions over what video_rag extracted
+  — counts, speakers, summaries, chapters, entities — and never reads the video.
+
+Every component reads files and writes files, none imports another, and every
+one has the signature `run(video_id, ...) -> Produced`.
+
+| # | tier | component | reads | writes |
+|---|---|---|---|---|
+| 1 | video_rag | `media` | the media file | `media.json` |
+| 2 | video_rag | `audio` | `media.json` | `transcript.raw.json` |
+| 3 | video_rag | `boundaries.evidence` | `media.json` *or* `transcript.raw.json` | `cuts.json` |
+| 4 | video_rag | `boundaries` | `media.json` + `cuts.json` | **`timeline.json`** |
+| 5 | video_rag | `video` | `media.json` + `timeline.json` | `manifest.json`, `store/` |
+| 6 | video_rag | `cut` | `transcript.raw.json` + `timeline.json` | `transcript.json` |
+| 7 | video_rag | `describe` | `manifest.json` + `store/` | `descriptions.json` |
+| 8 | video_rag | `embed` | `descriptions.json` + `transcript.json` | vectors, `embedded.json` |
+| 9 | aggregates | `aggregate` | everything above | `aggregates/*.json`, the video's vector |
+
+```bash
+python -m falconvar.video_rag samples/x.mp4 --sampler clip       # tier 1 only
+python -m falconvar.aggregates <id> --tier llm --index supabase  # tier 2 over it
+```
 
 Everything a run writes lands in `data/out/<video-id>/`:
 
@@ -83,18 +96,18 @@ length is merged into the one before it. A floor above the ceiling is refused.
 Per-stage tuning lives on these, not on `workflow`.
 
 ```bash
-python -m falconvar.media samples/x.mp4
-python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
-python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
-python -m falconvar.boundaries <id> --calibrate            # what each threshold costs
-python -m falconvar.boundaries <id> --retune 45            # re-threshold, runs no model
-python -m falconvar.boundaries <id> --policy scene --min-chunk 30 --max-chunk 60
-python -m falconvar.video <id> --sampler "clip:[text,scene]" --per-second 1
-python -m falconvar.video <id> --sampler uniform:text --every-frames 5
-python -m falconvar.cut <id>
-python -m falconvar.describe <id> --describer openai --limit 5     # costs money
-python -m falconvar.rag.embed <id> --index qdrant,supabase
-python -m falconvar.aggregate <id> --tier llm
+python -m falconvar.video_rag.media samples/x.mp4
+python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
+python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.video_rag.boundaries <id> --calibrate            # what each threshold costs
+python -m falconvar.video_rag.boundaries <id> --retune 45            # re-threshold, runs no model
+python -m falconvar.video_rag.boundaries <id> --policy scene --min-chunk 30 --max-chunk 60
+python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]" --per-second 1
+python -m falconvar.video_rag.video <id> --sampler uniform:text --every-frames 5
+python -m falconvar.video_rag.cut <id>
+python -m falconvar.video_rag.describe <id> --describer openai --limit 5     # costs money
+python -m falconvar.video_rag.embed <id> --index qdrant,supabase
+python -m falconvar.aggregates <id> --tier llm
 ```
 
 `--sink file,supabase` writes the document to both, on every stage that writes
@@ -136,7 +149,7 @@ Rate limits are applied before a sampler runs: `--min-interval` in seconds and
 A question is an instruction plus a **shape**, and the shape carries the
 response schema. The shipped shapes are `scene`, `people`, `objects`, `text` and
 `prose`; `yolo` is the `people` shape, `overview` is `prose`. Built-in questions
-live in `falconvar/describe/prompts.json`; anything you add lands in
+live in `falconvar/video_rag/describe/prompts.json`; anything you add lands in
 `data/prompts.json` and may not shadow a built-in.
 
 ```bash
@@ -158,13 +171,13 @@ Descriptions and transcript chunks both become units in one index, keyed
 `sampler_id = transcript`, so it filters exactly like any visual pairing.
 
 ```bash
-python -m falconvar.rag.retrieve "..." <id>
-python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
-python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
-python -m falconvar.rag.retrieve "..." <id> --strategy clip       # one sampler's output
-python -m falconvar.rag.retrieve "..." <id> --chunks 4,6 --window 1   # drill-down
-python -m falconvar.rag.retrieve "..." <id> --after 90 --before 130   # a time window
-python -m falconvar.rag.retrieve "..." <id> --where severity=severe   # a fixed vocabulary
+python -m falconvar.video_rag.retrieve "..." <id>
+python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
+python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
+python -m falconvar.video_rag.retrieve "..." <id> --strategy clip       # one sampler's output
+python -m falconvar.video_rag.retrieve "..." <id> --chunks 4,6 --window 1   # drill-down
+python -m falconvar.video_rag.retrieve "..." <id> --after 90 --before 130   # a time window
+python -m falconvar.video_rag.retrieve "..." <id> --where severity=severe   # a fixed vocabulary
 ```
 
 A time window is resolved to chunk ids through the grid, so a span is stored in
@@ -219,11 +232,11 @@ Three roles call a model. Each takes one string — a provider, or
 The model goes after the first slash:
 
 ```bash
-python -m falconvar.describe <id> --describer anthropic
-python -m falconvar.describe <id> --describer ollama/gemma3:4b
-python -m falconvar.aggregate <id> --tier llm --llm gemini
-python -m falconvar.rag.embed <id> --embedder local
-python -m falconvar.rag.retrieve "..." <id> --embedder local
+python -m falconvar.video_rag.describe <id> --describer anthropic
+python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b
+python -m falconvar.aggregates <id> --tier llm --llm gemini
+python -m falconvar.video_rag.embed <id> --embedder local
+python -m falconvar.video_rag.retrieve "..." <id> --embedder local
 python -m falconvar.workflow samples/x.mp4 --describer ollama/gemma3:4b \
        --llm ollama/gemma3:4b --embedder local            # nothing leaves the machine
 ```
@@ -320,17 +333,18 @@ do not, and `GET /videos` reads them from disk.
 
 ```
 falconvar/
-  workflow.py      the whole run, as a list of component calls
+  workflow.py      the whole run: video_rag's driver, then aggregates'
   shared/          paths · env · contracts/ · storage/ · models/
-  media/           1  split
-  audio/           2  source · reader · models · backends/
-  boundaries/      3+4 scenes · speech · grid
-  video/           5  reader · decimate · store · pipeline · samplers/
-  cut/             6
-  describe/        7  prompts · library · prompts.json · frames · backends/
-  rag/embed/       8  units · embedders · remote · local · indexes/ · readable
-  rag/retrieve/   10
-  aggregate/       9  statistics/ · model/ · llm/ · linking
+  video_rag/       tier 1: extraction and search · driver.py
+    media/         1  split
+    audio/         2  source · reader · models · backends/
+    boundaries/    3+4 scenes · speech · grid
+    video/         5  reader · decimate · store · pipeline · samplers/
+    cut/           6
+    describe/      7  prompts · library · prompts.json · frames · backends/
+    embed/         8  units · embedders · remote · local · indexes/ · readable
+    retrieve/         search
+  aggregates/      tier 2: statistics/ · model/ · llm/ · linking · driver.py
 api/               HTTP: routes, dispatch, one background worker, db reads
 web/               the client at /app: one page, no build step
 recovery/          STANDALONE: rebuild a store from a manifest + the video
@@ -341,7 +355,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-111 Python files, ~13.7k lines.
+113 Python files, ~13.9k lines.
 
 ## State
 

@@ -1,10 +1,15 @@
-"""FalCONvar -- video RAG ingestion.
+"""FalCONvar -- video in, searchable moments and higher-level answers out.
 
-A video goes in; both the picture and the soundtrack are read onto one chunk
-grid, and a searchable index of moments comes out.
+Two tiers, each with one driver over the components in its folder:
 
-Nine components, each `run(video_id, ...) -> Produced`, exchanging files rather
-than objects: `media`, `audio`, `boundaries`, `video`, `cut`, `describe`,
-`embed`, `aggregate`, and `retrieve` over what they built. `workflow.py` calls
-them in the order the chosen grid policy implies.
+    video_rag/   extraction and search. The picture and the soundtrack read onto
+                 one chunk grid, described, embedded, and queryable -- a
+                 complete RAG engine on its own.
+    aggregates/  answers over what video_rag extracted: counts, speakers,
+                 summaries, chapters, events, entities. Never reads the video.
+    shared/      what both tiers need: paths, env, document contracts, storage,
+                 model providers.
+
+`workflow.py` runs video_rag's driver, then aggregates'. Components exchange
+files rather than objects, and every one is `run(video_id, ...) -> Produced`.
 """

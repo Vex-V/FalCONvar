@@ -12,28 +12,32 @@ measurements and the traps live here.
 
 ```
 falconvar/
-  workflow.py      the whole run, as a list of component calls
-  shared/          paths · env         everything below imports these
+  workflow.py      the whole run: video_rag's driver, then aggregates'
+  shared/          paths · env         both tiers import these
     contracts/     documents · schemas   what components hand each other
     storage/       sinks · db · rows     where a document goes
     models/        providers · llm       who answers a model call
                    paths and documents import nothing
-  media/         1 split: what streams the file carries
-  audio/         2 source · reader · models
-    backends/      whisper · pyannote · cuda
-  boundaries/   3+4 scenes (picture) · speech (soundtrack) · grid
-  video/         5 reader · decimate · store · pipeline
-    samplers/      base · uniform · scene · people · objects · ocr
-      perception/  detectors · descriptors · embedders. Every model weight
-                   lives below this line and none above it.
-  cut/           6 the transcript, onto the grid
-  describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
-    prompts.json   BUILT-IN questions and shapes; shipped, read-only
-    backends/      stub · model (every provider, through shared/models/llm)
-  rag/embed/     8 units · embedders · remote · local · readable
-    indexes/       qdrant · supabase
-  rag/retrieve/ 10 search
-  aggregate/     9 base · rendering · linking (who is who, no model)
+  video_rag/       TIER 1: the video in, a searchable index out, and the search
+    driver.py        extraction as component calls · search · what aggregates may ask
+    media/         1 split: what streams the file carries
+    audio/         2 source · reader · models
+      backends/      whisper · pyannote · cuda
+    boundaries/   3+4 scenes (picture) · speech (soundtrack) · grid
+    video/         5 reader · decimate · store · pipeline
+      samplers/      base · uniform · scene · people · objects · ocr
+        perception/  detectors · descriptors · embedders. Every model weight
+                     lives below this line and none above it.
+    cut/           6 the transcript, onto the grid
+    describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
+      prompts.json   BUILT-IN questions and shapes; shipped, read-only
+      backends/      stub · model (every provider, through shared/models/llm)
+    embed/         8 units · embedders · remote · local · readable
+      indexes/       qdrant · supabase
+    retrieve/        search: a query to ranked moments
+  aggregates/      TIER 2: answers over what video_rag extracted; never the video
+    driver.py        aggregators up to a tier · the video's summary vector
+    base · rendering · linking (who is who, no model)
     statistics/    stats · speakers · coverage      free: arithmetic
     model/         ner · sentiment                  local: GPU models
     llm/           summary · chapters · events · entities   llm: paid calls
@@ -56,7 +60,7 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-111 Python files, ~13.7k lines.
+113 Python files, ~13.9k lines.
 
 ## Commands
 
@@ -66,29 +70,33 @@ python -m falconvar.workflow samples/x.mp4 --no-audio --sampler uniform:text
 python -m falconvar.workflow samples/x.mp4 --tier llm --sink file,supabase \
        --index qdrant,supabase
 
+# one tier at a time
+python -m falconvar.video_rag samples/x.mp4 --sampler clip   # extract: media -> embed
+python -m falconvar.aggregates <id> --tier llm --index supabase   # answers, + the video vector
+
 # one component at a time; per-stage tuning lives on these, not on workflow
-python -m falconvar.media samples/x.mp4
-python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
-python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
-python -m falconvar.boundaries <id> --calibrate        # sweep, no decode
-python -m falconvar.boundaries <id> --retune 45        # rethreshold cached scores
-python -m falconvar.boundaries <id> --policy scene --chunk-duration 30
-python -m falconvar.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
-python -m falconvar.video <id> --sampler clip:text+scene       # same, no brackets
-python -m falconvar.video <id> --sampler yolo --per-second 4 --min-interval 3
-python -m falconvar.video <id> --sampler objects --vocabulary "crate,pallet"
-python -m falconvar.video <id> --prune-store           # irreversible, opt-in
-python -m falconvar.cut <id>
-python -m falconvar.describe <id> --describer openai --limit 5   # costs money
-python -m falconvar.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
-python -m falconvar.aggregate <id> --tier llm --llm anthropic
-python -m falconvar.rag.embed <id> --embedder local --index qdrant   # in-process, no key
-python -m falconvar.video <id> --sampler uniform:safety   # a custom question
-python -m falconvar.rag.embed <id> --index qdrant,supabase
-python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
-python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
-python -m falconvar.aggregate <id> --tier llm
-python -m falconvar.aggregate <id> --tier llm --only entities   # who is who, across chunks
+python -m falconvar.video_rag.media samples/x.mp4
+python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
+python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.video_rag.boundaries <id> --calibrate        # sweep, no decode
+python -m falconvar.video_rag.boundaries <id> --retune 45        # rethreshold cached scores
+python -m falconvar.video_rag.boundaries <id> --policy scene --chunk-duration 30
+python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
+python -m falconvar.video_rag.video <id> --sampler clip:text+scene       # same, no brackets
+python -m falconvar.video_rag.video <id> --sampler yolo --per-second 4 --min-interval 3
+python -m falconvar.video_rag.video <id> --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video_rag.video <id> --prune-store           # irreversible, opt-in
+python -m falconvar.video_rag.cut <id>
+python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
+python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
+python -m falconvar.aggregates <id> --tier llm --llm anthropic
+python -m falconvar.video_rag.embed <id> --embedder local --index qdrant   # in-process, no key
+python -m falconvar.video_rag.video <id> --sampler uniform:safety   # a custom question
+python -m falconvar.video_rag.embed <id> --index qdrant,supabase
+python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
+python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
+python -m falconvar.aggregates <id> --tier llm
+python -m falconvar.aggregates <id> --tier llm --only entities   # who is who, across chunks
 python -m eval.entities                         # grade linking against hand labels
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
@@ -106,9 +114,24 @@ top-level directory.
 
 ## Architecture — the load-bearing decisions
 
+**Two tiers, each a driver over the components in its folder.** `video_rag`
+extracts: the file, both modalities onto one grid, descriptions, vectors -- and
+answers queries over them, so it is a complete RAG engine on its own.
+`aggregates` answers higher-level questions over what video_rag extracted, and
+never touches the video. `workflow.py` calls the two drivers and nothing below
+them; each driver calls its own components -- the shape the pipeline always
+had, one level up.
+
+The dependency runs one way. `aggregates` reaches video_rag only through
+`video_rag/driver.py` -- `documents`, `identity_of`, `embedder`,
+`index_video_summary` -- never a component. video_rag never reads anything
+aggregates wrote: the whole-video vector used to be made by `embed` reading
+`aggregates/summary.json`, which also meant a first run never made one, since
+embed runs before aggregate. Now aggregates hands the summary over.
+
 **The grid is a component, not a side effect.** Everything that needs
 boundaries reads `timeline.json`; nothing derives them as a byproduct. There is
-no ordering rule anywhere in `workflow.py`, because the answer falls out of
+no ordering rule anywhere in `video_rag/driver.py`, because the answer falls out of
 what the policy depends on, and `boundaries.POLICIES` is that table as data:
 
     uniform    nothing.  arithmetic over a duration `media.json` already has
@@ -764,12 +787,15 @@ chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
 
-The final summary goes somewhere else: `units.from_summary` turns it into one
-unit per video, which `embed` writes to `video_embeddings` rather than
-`embeddings`. `embeddings` answers *which twenty seconds*, a summary answers
-*which video*, and a video is not a moment you can play -- so the two never
-share a ranking, and `/search` reaches the second only as `level=video`.
-Postgres only, and best-effort: a missing `summary.json` writes nothing.
+The final summary goes somewhere else: once `aggregates` has it, and the run's
+`index` names `supabase`, it hands the payload to
+`video_rag.driver.index_video_summary`, where `units.from_summary` makes one unit
+per video for `video_embeddings` rather than `embeddings`. `embeddings` answers
+*which twenty seconds*, a summary answers *which video*, and a video is not a
+moment you can play -- so the two never share a ranking, and `/search` reaches
+the second only as `level=video`. Postgres only, and best-effort: a vector that
+fails to write does not fail the aggregates. Verified after the tier split:
+Chernobyl, `--tier llm --index supabase`, `video_units: 1`.
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -779,7 +805,7 @@ descriptions since rewritten reads perfectly, which is precisely why staleness
 cannot be left to a reader to notice.
 
 **Entities: who is who is decided by rules; the model only narrates.**
-`aggregate/linking.py` embeds each entry's identity fields and merges under
+`aggregates/linking.py` embeds each entry's identity fields and merges under
 constraints; `entities` then asks the model for one narrative per linked entity
 (concurrently, capped at 12). Tried the other way first: gpt-5.4-mini, given
 test1's 39 actor entries, linked 31, broke the same-answer rule twice after
@@ -867,7 +893,7 @@ reason: a form defaulting to the dataclass's `None` shows nothing where the
 answer is `openai`.
 
 **A model choice is one string, and only the stages that call a model take
-it.** `describe`, `embed`/`retrieve` and `aggregate` each take one
+it.** `describe`, `embed`/`retrieve` and `aggregates` each take one
 `provider/model` argument; media, audio, boundaries, video and cut never see
 one. There was a separate `model` field beside every provider field -- six on
 `Options` and the upload form, a `--model` on four CLIs, two env variables per
@@ -1159,7 +1185,7 @@ which is why it was written that way.
 
 **`level` picks granularity and never mixes the two.** `moment` ranks chunks;
 `video` ranks whole videos by their summary out of `video_embeddings`, which
-`embed` writes from the `summary` aggregate (Postgres only; 4/4 on the test
+`aggregates` fills from its `summary` (Postgres only; 4/4 on the test
 corpus, winner 0.40-0.50 against runners-up of 0.05-0.32). One endpoint, but
 never one ranking: a whole-video "moment" beside real ones is not something you
 can play. At `level=video` the moment filters are reported under `ignored`

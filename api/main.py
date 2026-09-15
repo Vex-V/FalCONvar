@@ -34,8 +34,8 @@ from pydantic import BaseModel, Field
 from api import browse, service
 from api.jobs import Runner, progress
 from falconvar import workflow
-from falconvar.describe import library
-from falconvar.rag.embed import EmbedderUnavailable
+from falconvar.video_rag.describe import library
+from falconvar.video_rag.embed import EmbedderUnavailable
 from falconvar.shared import env, paths
 from falconvar.shared.storage import db
 
@@ -459,8 +459,8 @@ def search(request: SearchRequest) -> dict[str, Any]:
                                "scope": scope, "videos": found}
         if not found:
             out["note"] = ("nothing in video_embeddings for this embedder -- "
-                           "run `aggregate --tier llm`, then "
-                           "`embed --index supabase`")
+                           "run `aggregates --tier llm --index supabase`, which "
+                           "stores each summary as its video's vector")
         if ignored:
             out["ignored"] = (f"{', '.join(ignored)} narrow inside a video, so "
                               "they do not apply to level=video")
