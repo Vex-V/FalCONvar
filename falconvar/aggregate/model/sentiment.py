@@ -23,11 +23,7 @@ class SentimentAggregator:
         self.model_name = model or DEFAULT_SENTIMENT_MODEL
 
     def _pipeline(self) -> Any:
-        try:
-            from transformers import pipeline
-        except ImportError as exc:                       # pragma: no cover
-            raise ModelUnavailable(
-                "transformers is not installed") from exc
+        from transformers import pipeline
         try:
             return pipeline("sentiment-analysis", model=self.model_name,
                             truncation=True, max_length=512)

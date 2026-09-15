@@ -54,10 +54,6 @@ def _depth(limit: int) -> int:
     return max(limit * 4, 40)
 
 
-class QdrantUnavailable(RuntimeError):
-    """No client, or a server that will not answer."""
-
-
 def collection_name(embedder_key: str) -> str:
     return "falconvar_" + embedder_key.replace(":", "_").replace("/", "_")
 
@@ -104,12 +100,7 @@ class QdrantIndex:
         if client is not None:
             self._client = client
             return
-        try:
-            from qdrant_client import QdrantClient
-        except ImportError as exc:                       # pragma: no cover
-            raise QdrantUnavailable(
-                "qdrant-client is not installed: pip install qdrant-client"
-            ) from exc
+        from qdrant_client import QdrantClient
         if url:
             self._client = QdrantClient(url=url)
         else:
@@ -398,5 +389,4 @@ class QdrantIndex:
         return hits
 
 
-__all__ = ["DENSE", "FUSE_K", "SPARSE", "QdrantIndex", "QdrantUnavailable",
-           "collection_name", "sparse_of"]
+__all__ = ["DENSE", "FUSE_K", "SPARSE", "QdrantIndex", "collection_name", "sparse_of"]

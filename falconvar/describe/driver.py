@@ -6,14 +6,14 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..video import load as load_manifest
-from ..shared import env, paths, sinks
-from ..shared.documents import Descriptions, Produced
+from ..shared import env, paths
+from ..shared.storage import sinks
+from ..shared.contracts.documents import Descriptions, Produced
 from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
 
 def run(video_id: str, describer: Optional[str] = None,
-        model: Optional[str] = None,
         samplers: Optional[Sequence[str]] = None,
         limit: Optional[int] = None,
         resume: bool = True,
@@ -21,7 +21,7 @@ def run(video_id: str, describer: Optional[str] = None,
     """One call per (chunk, sampler). The expensive stage.
 
     `describer` is a provider or `provider/model`; None resolves through
-    `shared.providers` -- FALCONVAR_DESCRIBER, then openai.
+    `shared.models.providers` -- FALCONVAR_DESCRIBER, then openai.
     """
     env.load()
     manifest = load_manifest(video_id)
@@ -46,7 +46,7 @@ def run(video_id: str, describer: Optional[str] = None,
     if resume and paths.exists(video_id, "descriptions"):
         existing = load(video_id)
 
-    built = base.build(describer, model=model)
+    built = base.build(describer)
     from .reader import describe
 
     with FrameSource(video_id, manifest) as source:
@@ -85,7 +85,7 @@ def _record_prompts(versions: dict[str, str],
     """
     if "supabase" not in sinks.parse(sink) or not versions:
         return {"prompts_recorded": 0}
-    from ..shared import rows
+    from ..shared.storage import rows
     entries = []
     for name, version in sorted(versions.items()):
         entry = library.load()["questions"].get(name) or {}
@@ -120,8 +120,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="a provider or provider/model; default "
                          f"FALCONVAR_DESCRIBER, then openai. Known: "
                          f"{', '.join(base.available())}")
-    ap.add_argument("--model", default=None,
-                    help="blank: the provider's default chat model")
     ap.add_argument("--sampler", default=None,
                     help="comma-separated subset to describe")
     ap.add_argument("--limit", type=int, default=None,
@@ -134,7 +132,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     samplers = ([s.strip() for s in args.sampler.split(",") if s.strip()]
                 if args.sampler else None)
     try:
-        produced = run(args.video_id, args.describer, args.model, samplers,
+        produced = run(args.video_id, args.describer, samplers,
                        args.limit, not args.no_resume, args.sink)
     except (KeyError, ValueError, FileNotFoundError, StoreUnavailable,
             base.DescriberUnavailable, sinks.UnknownBackend) as exc:

@@ -13,7 +13,10 @@ measurements and the traps live here.
 ```
 falconvar/
   workflow.py      the whole run, as a list of component calls
-  shared/          paths · documents · sinks · env · providers · llm · db · rows · schemas
+  shared/          paths · env         everything below imports these
+    contracts/     documents · schemas   what components hand each other
+    storage/       sinks · db · rows     where a document goes
+    models/        providers · llm       who answers a model call
                    paths and documents import nothing
   media/         1 split: what streams the file carries
   audio/         2 source · reader · models
@@ -26,7 +29,7 @@ falconvar/
   cut/           6 the transcript, onto the grid
   describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
     prompts.json   BUILT-IN questions and shapes; shipped, read-only
-    backends/      stub · model (every provider, through shared/llm)
+    backends/      stub · model (every provider, through shared/models/llm)
   rag/embed/     8 units · embedders · remote · local · readable
     indexes/       qdrant · supabase
   rag/retrieve/ 10 search
@@ -86,7 +89,7 @@ python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
 python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
 python -m falconvar.aggregate <id> --tier llm
 
-python -m falconvar.shared.schemas --check     # CI: are the schemas stale
+python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 #      ^ from the checkout root: recovery/ is not an installed package, on purpose
 python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
@@ -206,6 +209,16 @@ would be worse than one that cannot go in `.env` at all.
 video.** The embedded Qdrant store lives at `_qdrant`, beside the videos rather
 than inside one; without the rule it was listed as a video with no artifacts,
 by `paths.videos()` and so by `GET /videos`.
+
+**A requirement is required.** Nothing falls back when a package in
+`requirements.txt` is missing or older, or when `install.sql` was never run:
+no hand-parsed `.env` without `python-dotenv`, no plain Supabase client for an
+old SDK, no Python ranking when the search RPC is absent, no `transformers`
+stand-in for `sentence-transformers`. Each of those was a second code path that
+answered *differently* while looking the same -- the dense-only Supabase
+ranking had never ranked anything, and nobody could tell. Heavy imports stay
+function-local so `import falconvar` is light; a missing one fails with the
+interpreter's own `ModuleNotFoundError`.
 
 ---
 
@@ -539,10 +552,11 @@ chunk carrying `clip:text` **and** `uniform:text` at 0.1222 where
 `sampler=clip:text` returns one unit at 0.0909, and unfiltered returns all four
 units at 0.1294. The three answers are different, which is the point.
 
-Neither column costs a re-embedding: `text_hash` is over the content, so
-`install.sql` backfills them from `sampler_id` with an `update`. Qdrant is the
-exception -- payload is written only on upsert, so points predating the fields
-need a forced re-index rather than a backfill.
+Neither column cost a re-embedding: `text_hash` is over the content, so
+existing rows were backfilled from `sampler_id` with an `update` (since removed
+from `install.sql`: 0 of 49 rows still needed it). Qdrant is the exception --
+payload is written only on upsert, so points predating the fields need a forced
+re-index rather than a backfill.
 
 **What gets embedded must not depend on which copy it was read from.** `jsonb`
 preserves array order but not object key order, so a description read back from
@@ -595,6 +609,20 @@ nowhere. The RPC replaces `&` with `|` in the rendered tsquery, keeping the
 parser's stemming and stopword removal and only loosening the conjunction;
 `ts_rank_cd` then does the work AND was doing badly. After the fix those
 queries rank 7 rows each, and a query sharing no content word still ranks 0.
+
+**ANY-term over-corrects, so it has a floor.** It fires on a single stem
+collision: measured, a query sharing no content word with the corpus still
+matched, promoted an unrelated chunk to second and pushed the right answer to
+third, where Qdrant's half stayed silent and ranked better for it. With two or
+more query lexemes a row must share at least two; a one-word query needs one.
+"the moment the reactor exploded" shares `reactor` and `explod`, so it still
+ranks.
+
+**RRF ties are broken by the vector rank.** Ties are exact and common -- dense
+1 / text 2 and dense 2 / text 1 are both 1/61 + 1/62 -- and `order by score`
+alone left the winner to the planner. The dense half has an opinion on every
+query where the lexical one may not, and the two backends now agree rather
+than flipping a coin opposite ways.
 
 **Qdrant does sparse and hybrid.** Sparse vectors since 1.7, native
 `Fusion.RRF` since 1.10. An earlier note calling it dense-only was a claim
@@ -752,7 +780,7 @@ cannot be left to a reader to notice.
 
 ## Models and providers
 
-**A stage names a provider and a model; `shared/providers.py` knows the rest.**
+**A stage names a provider and a model; `shared/models/providers.py` knows the rest.**
 Three roles -- `describe`, `llm`, `embed` -- and four protocols, because the
 wire format is the only thing that really differs between vendors:
 
@@ -786,9 +814,14 @@ variable. `/capabilities.defaults` calls `providers.defaults()` for the same
 reason: a form defaulting to the dataclass's `None` shows nothing where the
 answer is `openai`.
 
-**An environment model applies only to the environment's provider.**
-`FALCONVAR_DESCRIBER=ollama` with `FALCONVAR_DESCRIBE_MODEL=gemma3:4b` must not
-turn `--describer openai` into a request asking OpenAI for `gemma3:4b`.
+**A model choice is one string, and only the stages that call a model take
+it.** `describe`, `embed`/`retrieve` and `aggregate` each take one
+`provider/model` argument; media, audio, boundaries, video and cut never see
+one. There was a separate `model` field beside every provider field -- six on
+`Options` and the upload form, a `--model` on four CLIs, two env variables per
+role -- and it bought nothing `ollama/gemma3:4b` does not already say, while
+needing a rule for which of the pair wins (an env model applying only to the
+env's provider). Collapsed: three fields, three variables, no precedence rule.
 
 **`provider/model` splits on the first slash, and only after a known
 provider.** Model ids carry slashes (`BAAI/bge-small-en-v1.5`), so a provider
@@ -828,13 +861,15 @@ by model id and `retrieve` goes through `query_vector`. A hand-set prefix adds
 `:p<hash>` to the key, since its vectors are not comparable to the defaults';
 nothing is added otherwise, so every key already written is unchanged.
 
-**`local` pools the way the model declares.** Without `sentence-transformers`,
-`transformers` reads `1_Pooling/config.json` -- bge is CLS, not mean -- and
-refuses a model whose `modules.json` has a Dense layer after pooling. Skipping
-that layer still produces vectors of the right width, and installing
-`sentence-transformers` later would then put two different functions under one
-key. Weights land in `weights/embedders/`; a model is loaded once per process,
-because `/search` runs in the server and a reload is seconds.
+**`local` is `sentence-transformers`, and nothing else.** It applies the
+model's whole module list -- the pooling it declares (bge is CLS, not mean) and
+any Dense layer after it. A hand-rolled `transformers` path for when it was not
+installed was removed: it was a second function that had to agree with the
+first under one key, and a model with a Dense layer could not agree at all.
+Verified before removing it: on bge-small the two gave **identical** vectors
+(max abs diff 0.0), so the index it built stands. Weights land in
+`weights/embedders/`; a model is loaded once per process, because `/search`
+runs in the server and a reload is seconds.
 
 **Measured: a 33M-parameter local embedder is level with OpenAI here.**
 `BAAI/bge-small-en-v1.5` (384-d, CUDA) against `text-embedding-3-small`, same
@@ -869,6 +904,32 @@ stop. **Not run against** the real Anthropic, Gemini, Mistral, Groq,
 OpenRouter, Together, DeepSeek, xAI or Voyage APIs, nor a real Ollama or LM
 Studio. Their default model ids are reasonable picks, not measured ones, and a
 server's schema support is exactly what `structured` exists to downgrade.
+
+**Model calls are async, and the provider says how many at once.**
+`llm.Model.generate` is a coroutine behind every provider, so concurrency was
+added once. `describe` plans every call in manifest order and reserves its slot
+in the document, then gathers one task per (chunk, sampler run) under
+`describer.concurrency`; a run's frames are read inside that gate, so memory is
+bounded by the cap rather than the video, and still read once per run. The
+summary's folds within a layer are gathered too. `Provider.concurrency` is 8
+for cloud APIs and 1 for Ollama, LM Studio and llama.cpp, which answer one at a
+time; `providers.json` can set it. Each stage runs its own `asyncio.run`, so a
+client is opened per call -- an async client belongs to the loop that opened it
+and fails when a second loop reuses it. The Anthropic path retries 429 and 5xx
+twice, as the OpenAI SDK already does inside a call. Embeddings stay
+synchronous: one request carries 64 texts, which is a whole test video.
+
+Measured on Chernobyl with `gpt-5.4-mini`, nothing written:
+
+| | concurrency 1 | concurrency 8 | |
+|---|---|---|---|
+| describe, 18 calls / 108 images | 76.0 s | **12.8 s** | 5.9x |
+| summary, `batch=2`: 10 folds over 3 levels + final | 28.9 s | **16.7 s** | 1.7x |
+
+Describe's wall is now its slowest single call (12.7 s). The summary gains
+less because its layers, and the final call, are sequential by construction.
+**A failed call still discards the run's answers** -- as it did sequentially,
+but now with more paid calls already in flight when it happens.
 
 ---
 
@@ -1119,36 +1180,37 @@ annotation is `.speaker_diarization`; `.exclusive_speaker_diarization` has
 overlaps resolved, which is what this uses — a word cannot belong to two
 speakers.
 
-**`create table if not exists` never adds a column.** `install.sql` is re-run
-against live databases, so a column declared only inside the `create` is absent
-on every deployment that already had the table -- and the first statement to
-reference it fails, or worse, a writer sends a column PostgREST does not know.
-Every column added after first deployment needs its own `alter table ... add
-column if not exists`. This has bitten three times: `structured`, then
-`chunk_samplers.questions`, then `embeddings.sampler`/`question`, where the
-backfill `update` was the statement that failed.
+**`create table if not exists` never changes a table.** `install.sql` is re-run
+against live databases, so a column added, dropped or retyped only inside the
+`create` is simply not applied on every deployment that already had the table
+-- and the first statement to reference it fails, or worse, a writer sends a
+column PostgREST does not know. This bit three times: `structured`, then
+`chunk_samplers.questions`, then `embeddings.sampler`/`question`.
+
+So the `create`s hold the current shape and **section 10 holds the change**
+for a live database -- an `alter`, a `drop ... if exists` -- each a no-op once
+applied, and removed once every deployment has run it. Those migrations had
+accumulated to about a third of the file before being cleared out: dropped
+columns long gone, a backfill 0 rows needed, three superseded RPC signatures.
 
 An audit is cheap and worth running after editing the file: parse the `create
 table` bodies, diff them against PostgREST's deployed column list, and check
-that anything missing is covered by an explicit `alter`.
+that every difference is covered in section 10.
 
-**`add column if not exists fts` cannot repair a stale generated column.** The
-converse trap. It is a no-op when the column *exists*, so an `fts` built by an
-earlier version of the file survived a re-run untouched and the lexical half
-quietly stopped indexing the terms it is best at. Nothing reported it. The
-statement is `drop column if exists` followed by an unconditional add; the
-column is generated, so nothing is lost.
+**A generated column is not repaired by `add column if not exists`.** It is a
+no-op when the column *exists*, so an `fts` built by an earlier expression
+survived a re-run and the lexical half quietly stopped indexing the terms it is
+best at. Changing `fts` means `drop column if exists fts` then the add, in
+section 10; the column is generated, so nothing is lost.
 
 **A `vector` column comes back from PostgREST as a *string*.** `vector(1536)`
-arrives as the text `"[-0.0342,0.0450,...]"`, not a list. `SupabaseIndex`'s
-dense-only fallback compared it against a list of floats, so its cosine
-returned the not-comparable sentinel for every row and `sorted` fell through to
-whatever order the rows arrived in. It had therefore never ranked anything --
-and it said so only as "the ranking has no lexical half", which is a different
-and much smaller claim. Found by `video_embeddings` returning -1.0000 for four
-rows at once; on the moment path the wrongness was invisible, because table
-order is roughly chunk order and scores a plausible MRR. `as_vector()` parses
-either form.
+arrives as the text `"[-0.0342,0.0450,...]"`, not a list. A cosine written
+against a list of floats returned the not-comparable sentinel for every row and
+`sorted` fell through to whatever order the rows arrived in, so it had never
+ranked anything. Found by `video_embeddings` returning -1.0000 for four rows at
+once; on the moment path (a dense-only fallback, since removed) the wrongness
+was invisible, because table order is roughly chunk order and scores a
+plausible MRR. `as_vector()` parses either form.
 
 **PostgREST's cached schema is the fastest way to see what is really
 deployed.** `GET /rest/v1/` with `Accept: application/openapi+json` lists every
@@ -1228,7 +1290,7 @@ alone, both intersecting, and a contradictory pair returning 0 rows. Lexical
 firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
-`shared.schemas --check` proves the dataclasses, the generated JSON Schema and
+`shared.contracts.schemas --check` proves the dataclasses, the generated JSON Schema and
 the SQL still agree. The API serves **21 routes**; `docs/ROUTES.md` is the
 reasoning and `/docs` the authority on shapes. The web client at `/app` drives
 every route a run or a question needs, generating each form from

@@ -5,9 +5,10 @@ asked for chunk ids, which it can copy; times it would invent."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
-from ...shared.llm import LLMUnavailable, Model
+from ...shared.models.llm import LLMUnavailable, Model
 from ..base import Context
 from ..rendering import chunk_rows, resolve_span
 from . import SYSTEM
@@ -41,9 +42,8 @@ class ChaptersAggregator:
     about = "a table of contents: contiguous chapters over the whole video"
     depends_on = ("summary",)
 
-    def __init__(self, provider: Optional[str] = None,
-                 model: Optional[str] = None) -> None:
-        self.llm = Model(provider, model, role="llm")
+    def __init__(self, llm: Optional[str] = None) -> None:
+        self.llm = Model(llm, role="llm")
 
     @property
     def model_key(self) -> str:
@@ -54,10 +54,10 @@ class ChaptersAggregator:
         if not rows:
             raise LLMUnavailable("nothing to divide into chapters")
         body = "\n".join(line for _, line in rows)
-        answer = self.llm.complete(
+        answer = asyncio.run(self.llm.complete(
             "Divide this video into chapters. They must be contiguous and "
             "cover every chunk, and you must cite chunk ids from the input:\n\n"
-            + body, _CHAPTERS_SCHEMA, SYSTEM)
+            + body, _CHAPTERS_SCHEMA, SYSTEM))
 
         chapters = []
         for chapter in answer["chapters"]:

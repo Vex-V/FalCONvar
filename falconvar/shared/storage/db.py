@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from . import env
+from .. import env
 
 #: falconvar's tables live in their own Postgres schema, not `public`. falconvar's
 #: are still deployed alongside and `video_embeddings` collides outright, so a
@@ -54,19 +54,10 @@ def client(url: Optional[str] = None, key: Optional[str] = None,
         raise DatabaseUnavailable(
             "set SUPABASE_URL and " + " or ".join(names) +
             " in .env (it is gitignored) or in the environment")
+    from supabase import ClientOptions, create_client
     try:
-        from supabase import create_client
-    except ImportError as exc:                           # pragma: no cover
-        raise DatabaseUnavailable(
-            "supabase is not installed: pip install supabase") from exc
-    try:
-        from supabase import ClientOptions
         return create_client(url, key,
                              options=ClientOptions(schema=SCHEMA))
-    except ImportError:
-        # Older clients take the schema differently; a plain client still
-        # works against `public`, and a missing table then says so loudly.
-        return create_client(url, key)
     except Exception as exc:                             # noqa: BLE001
         raise DatabaseUnavailable(f"could not connect: {exc}") from None
 

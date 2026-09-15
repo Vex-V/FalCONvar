@@ -167,8 +167,7 @@ function renderSteps() {
 function choicesFor(param) {
   const c = CAPS;
   const map = {
-    policy: c.policies, describer: c.describers, embedder: c.embedders,
-    llm: c.llms,
+    policy: c.policies,
     tier: c.tiers, transcriber: c.transcribers, diarizer: c.diarizers,
     store_scope: ["sampled", "decimated"],
     sink: ["file", "supabase", "file,supabase"],
@@ -182,17 +181,15 @@ function choicesFor(param) {
  * appears without touching this file. */
 function providerNote(param) {
   const role = param === "embedder" ? "embed" : "chat";
-  const d = CAPS.defaults || {};
-  const blank = { describer: [d.describer, d.describe_model],
-                  embedder: [d.embedder, d.embed_model],
-                  llm: [d.llm, d.llm_model] }[param] || [];
   const listed = (((CAPS.models || {}).providers) || []).filter(p => p[role]).map(p => {
     const model = role === "embed" ? p.embed_model : p.chat_model;
     return `${p.name}${model ? ` (${model})` : ""}${p.configured ? "" : " ✗"}`;
   }).join(" · ");
-  return `blank = ${blank.filter(Boolean).join("/")}. The model field picks another; `
+  return `a provider, or provider/model. blank = ${(CAPS.defaults || {})[param]}; `
        + `✗ = no key set. ${listed}`;
 }
+
+const PROVIDER_PARAMS = ["describer", "embedder", "llm"];
 
 function renderParams() {
   const box = $("#params");
@@ -244,6 +241,7 @@ function renderParams() {
     }
     input.dataset.kind = p.type;
     input.dataset.name = p.name;
+    if (PROVIDER_PARAMS.includes(p.name)) input.placeholder = (CAPS.defaults || {})[p.name] || "";
     field.append(input);
 
     if (p.name === "sampler") {
@@ -251,7 +249,7 @@ function renderParams() {
         `samplers: ${CAPS.samplers.join(", ")} · questions: ${CAPS.prompts.join(", ")}`
         + " — pair as name:question, or name:[q1,q2] for one pass answering two." }));
     }
-    if (["describer", "embedder", "llm"].includes(p.name)) {
+    if (PROVIDER_PARAMS.includes(p.name)) {
       field.append(el("p", { className: "note", textContent: providerNote(p.name) }));
     }
     box.append(field);
@@ -582,7 +580,6 @@ function searchPayload() {
   /* Blank means the server resolves it exactly as `embed` did -- the one
    * embedder guaranteed to match an index this deployment built by default. */
   text("#s-embedder", "embedder");
-  text("#s-model", "model");
 
   const chunks = $("#s-chunks").value.trim();
   if (chunks) {
@@ -795,11 +792,8 @@ async function refreshCaps() {
   CAPS = await api("/capabilities");
   $("#s-index").replaceChildren(...CAPS.indexes.map(i =>
     el("option", { value: i, textContent: i })));
-  const d = CAPS.defaults || {};
-  $("#s-embedder").replaceChildren(
-    el("option", { value: "", textContent:
-      `— default (${[d.embedder, d.embed_model].filter(Boolean).join("/")})` }),
-    ...CAPS.embedders.map(e => el("option", { value: e, textContent: e })));
+  $("#s-embedder").placeholder = (CAPS.defaults || {}).embedder || "";
+  $("#s-embedders").replaceChildren(...CAPS.embedders.map(e => el("option", { value: e })));
   $("#s-question").replaceChildren(
     el("option", { value: "", textContent: "— any question" }),
     ...CAPS.prompts.map(q => el("option", { value: q, textContent: q })));

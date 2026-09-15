@@ -21,13 +21,12 @@ that file: it names the environment variables to read them from.
 
 **A default is resolved when a call is made, never at import.** `.env` is read
 at the top of an entry point, later than module constants resolve, so a default
-captured in a constant would depend on import order. Each role reads its pair
-of variables at the moment it needs them.
+captured in a constant would depend on import order. Each role reads its
+variable at the moment it needs it.
 
-**An environment model applies only to the environment's provider.** With
-`FALCONVAR_DESCRIBER=ollama` and `FALCONVAR_DESCRIBE_MODEL=gemma3:4b`, a call
-naming `openai` gets OpenAI's default, not a request asking OpenAI for
-`gemma3:4b`.
+**A choice is one string.** `ollama/gemma3:4b` names the provider and the model
+together -- in a flag, a form field or `.env` alike -- so no surface carries a
+second field for the model, and nothing has to decide which of two fields wins.
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ import re
 from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
-from . import env, paths
+from .. import env, paths
 
 PROTOCOLS = ("openai", "chat", "anthropic", "local")
 ROLES = ("describe", "llm", "embed")
@@ -50,11 +49,11 @@ STRUCTURED = ("json_schema", "json_object", "prompt")
 #: What a role uses when neither the call nor the environment names a provider.
 FALLBACK = "openai"
 
-#: role -> (provider variable, model variable).
-ENV: dict[str, tuple[str, str]] = {
-    "describe": ("FALCONVAR_DESCRIBER", "FALCONVAR_DESCRIBE_MODEL"),
-    "llm": ("FALCONVAR_LLM", "FALCONVAR_LLM_MODEL"),
-    "embed": ("FALCONVAR_EMBEDDER", "FALCONVAR_EMBED_MODEL"),
+#: role -> the variable naming its provider, or `provider/model`.
+ENV: dict[str, str] = {
+    "describe": "FALCONVAR_DESCRIBER",
+    "llm": "FALCONVAR_LLM",
+    "embed": "FALCONVAR_EMBEDDER",
 }
 
 #: Names that answer a role without being a provider: they load nothing and
@@ -93,6 +92,10 @@ class Provider:
     #: refuse the first and older servers do not know the second, so a refusal
     #: naming the field is retried once with the other.
     token_field: str = "max_tokens"
+    #: Calls in flight at once. A cloud API takes many; a server on this
+    #: machine usually answers one at a time, and a queue there only adds
+    #: timeouts.
+    concurrency: int = 8
     #: Runs on this machine: no key required, and nothing leaves it.
     local: bool = False
     about: str = ""
@@ -144,13 +147,13 @@ _BUILTIN: tuple[Provider, ...] = (
              about="Voyage AI embeddings"),
     Provider("ollama", "chat", base_url="http://localhost:11434/v1",
              key_vars=("OLLAMA_API_KEY",), chat_model="gemma3:4b",
-             embed_model="nomic-embed-text", local=True,
+             embed_model="nomic-embed-text", local=True, concurrency=1,
              about="Ollama on this machine. `ollama pull` the model first"),
     Provider("lmstudio", "chat", base_url="http://localhost:1234/v1",
-             key_vars=("LMSTUDIO_API_KEY",), local=True,
+             key_vars=("LMSTUDIO_API_KEY",), local=True, concurrency=1,
              about="LM Studio's server. Name the model it has loaded"),
     Provider("llamacpp", "chat", base_url="http://localhost:8080/v1",
-             key_vars=("LLAMACPP_API_KEY",), local=True,
+             key_vars=("LLAMACPP_API_KEY",), local=True, concurrency=1,
              about="llama.cpp `llama-server`. Start it with --embeddings for vectors"),
     Provider("local", "local", can_chat=False,
              embed_model="BAAI/bge-small-en-v1.5", local=True,
@@ -192,6 +195,9 @@ def _check(name: str, entry: Any, existing: Optional[Provider]) -> list[str]:
     if entry.get("token_field", "max_tokens") not in ("max_tokens",
                                                      "max_completion_tokens"):
         problems.append("token_field must be max_tokens or max_completion_tokens")
+    if "concurrency" in entry and not (type(entry["concurrency"]) is int
+                                       and entry["concurrency"] >= 1):
+        problems.append("concurrency must be a whole number, 1 or more")
     if "key_vars" in entry and not (isinstance(entry["key_vars"], list)
                                     and all(isinstance(v, str) for v in entry["key_vars"])):
         problems.append("key_vars must be a list of variable names")
@@ -265,29 +271,26 @@ def split(spec: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     return spec, None
 
 
-def choose(role: str, name: Optional[str] = None,
-           model: Optional[str] = None) -> tuple[str, Optional[str]]:
+def choose(role: str, spec: Optional[str] = None) -> tuple[str, Optional[str]]:
     """The provider and model a call should use.
 
-    The call wins, then the environment, then `FALLBACK`. The model comes back
-    `None` only for an offline name, which has none.
+    `spec` wins, then the role's variable, then `FALLBACK` -- each a provider
+    or `provider/model`. The model comes back `None` only for an offline name,
+    which has none.
     """
     if role not in ROLES:
         raise ProviderError(f"unknown role {role!r}; known: {', '.join(ROLES)}")
     env.load()
-    asked, asked_model = split(name)
-    model = model or asked_model
-    var_name, var_model = ENV[role]
-    from_env, env_spec_model = split(os.environ.get(var_name))
-    chosen = asked or from_env or FALLBACK
+    chosen, model = split(spec)
+    if chosen is None:
+        chosen, model = split(os.environ.get(ENV[role]))
+    chosen = chosen or FALLBACK
 
     if chosen == OFFLINE.get(role):
         return chosen, None
     if chosen in OFFLINE.values():
         raise ProviderError(f"{chosen!r} cannot serve {role}; "
                             f"known: {', '.join(names(role))}")
-    if model is None and chosen == from_env:
-        model = os.environ.get(var_model) or env_spec_model
 
     provider = get(chosen)
     if not provider.can(role):
@@ -298,7 +301,7 @@ def choose(role: str, name: Optional[str] = None,
     if not model:
         raise ProviderError(
             f"{chosen} has no default {'embedding' if role == 'embed' else 'chat'} "
-            f"model: name one, as `{chosen}/<model>` or with a model parameter")
+            f"model: name one, as `{chosen}/<model>`")
     return chosen, model
 
 
@@ -323,8 +326,7 @@ def api_key(provider: Provider) -> Optional[str]:
         ".env (it is gitignored) or in the environment")
 
 
-def problems(role: str, name: Optional[str] = None,
-             model: Optional[str] = None) -> list[str]:
+def problems(role: str, spec: Optional[str] = None) -> list[str]:
     """What stops a role running, found before anything is queued.
 
     Unknown names and missing keys only. Whether a local server is up, or a
@@ -332,7 +334,7 @@ def problems(role: str, name: Optional[str] = None,
     validation a network call.
     """
     try:
-        chosen, _ = choose(role, name, model)
+        chosen, _ = choose(role, spec)
     except ProviderError as exc:
         return [str(exc)]
     if chosen in OFFLINE.values():
@@ -346,17 +348,16 @@ def problems(role: str, name: Optional[str] = None,
 
 # -------------------------------------------------------------- publishing
 
-def defaults() -> dict[str, Optional[str]]:
-    """What each role resolves to right now, with no arguments."""
-    out: dict[str, Optional[str]] = {}
-    for role, (name_key, model_key) in (("describe", ("describer", "describe_model")),
-                                        ("llm", ("llm", "llm_model")),
-                                        ("embed", ("embedder", "embed_model"))):
+def defaults() -> dict[str, str]:
+    """What each role resolves to right now, as `provider/model`."""
+    out: dict[str, str] = {}
+    for role, field in (("describe", "describer"), ("llm", "llm"),
+                        ("embed", "embedder")):
         try:
-            out[name_key], out[model_key] = choose(role)
+            chosen, model = choose(role)
+            out[field] = f"{chosen}/{model}" if model else chosen
         except ProviderError:
-            out[name_key] = split(os.environ.get(ENV[role][0]))[0] or FALLBACK
-            out[model_key] = None
+            out[field] = os.environ.get(ENV[role]) or FALLBACK
     return out
 
 
@@ -380,10 +381,11 @@ def catalog() -> dict[str, Any]:
             "embed_model": provider.embed_model,
             "base_url": base_url(provider), "key_vars": list(provider.key_vars),
             "structured": provider.structured if provider.protocol == "chat" else None,
+            "concurrency": provider.concurrency,
             "configured": ready, "why": why,
         })
     return {"providers": rows, "problems": wrong, "file": str(paths.PROVIDERS),
-            "env": {role: list(pair) for role, pair in ENV.items()}}
+            "env": dict(ENV)}
 
 
 __all__ = ["ENV", "FALLBACK", "OFFLINE", "PROTOCOLS", "Provider", "ProviderError",

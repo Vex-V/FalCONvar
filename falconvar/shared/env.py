@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from .paths import REPO_ROOT
 
 _loaded = False
@@ -25,8 +27,8 @@ _loaded = False
 def load(force: bool = False) -> bool:
     """Load `.env` from the checkout root. True if anything was read.
 
-    `python-dotenv` if it is installed, a minimal parser otherwise: a missing
-    optional dependency should not be the reason a key is not found.
+    Never overrides what the process was actually launched with: a shell
+    variable is a deliberate act and a file is a default.
     """
     global _loaded
     if _loaded and not force:
@@ -37,19 +39,7 @@ def load(force: bool = False) -> bool:
         _loaded = True
         return False
 
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(path, override=False)
-    except ImportError:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key, value = key.strip(), value.strip().strip("'\"")
-            # Never override what the process was actually launched with: a
-            # shell variable is a deliberate act and a file is a default.
-            os.environ.setdefault(key, value)
+    load_dotenv(path, override=False)
     _loaded = True
     return True
 

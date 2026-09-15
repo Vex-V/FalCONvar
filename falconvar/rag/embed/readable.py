@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from ...shared import paths, sinks
-from ...shared.documents import Embedded
+from ...shared import paths
+from ...shared.storage import sinks
+from ...shared.contracts.documents import Embedded
 from .units import Unit
 
 

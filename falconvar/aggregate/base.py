@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Sequence
 
-from ..shared.documents import (Descriptions, Manifest, Timeline, Transcript,
+from ..shared.contracts.documents import (Descriptions, Manifest, Timeline, Transcript,
                                 fingerprint_of)
 
 #: Cheapest first. A tier is a ceiling, not a selection.

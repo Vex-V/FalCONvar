@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from ..shared import paths, sinks
-from ..shared.documents import Aggregate, Produced
+from ..shared import paths
+from ..shared.storage import sinks
+from ..shared.contracts.documents import Aggregate, Produced
 from . import TIER_OF, available, resolve
 from .base import TIERS, Context, missing, resolve_order
 
@@ -52,12 +53,11 @@ def run(video_id: str, tier: str = "free",
         only: Optional[Sequence[str]] = None,
         force: bool = False,
         sink: str | Sequence[str] = "file",
-        llm: Optional[str] = None,
-        model: Optional[str] = None) -> Produced:
+        llm: Optional[str] = None) -> Produced:
     """Run every aggregator up to ``tier``, cheapest first.
 
     `llm` is who answers the paid tier -- a provider or `provider/model`; None
-    resolves through `shared.providers` (FALCONVAR_LLM, then openai).
+    resolves through `shared.models.providers` (FALCONVAR_LLM, then openai).
     """
     if tier not in TIERS:
         raise KeyError(f"unknown tier {tier!r}; known: {', '.join(TIERS)}")
@@ -77,8 +77,8 @@ def run(video_id: str, tier: str = "free",
     for name in resolve_order(names, TIER_OF):
         # Only the paid tier takes a provider. The local models name their own
         # checkpoints, and arithmetic needs none.
-        aggregator = (resolve(name)(provider=llm, model=model)
-                      if TIER_OF[name] == "llm" else resolve(name)())
+        aggregator = (resolve(name)(llm) if TIER_OF[name] == "llm"
+                      else resolve(name)())
         author = getattr(aggregator, "model_key", None)
         why = missing(aggregator, context, ran)
         if why is not None:
@@ -128,7 +128,7 @@ def run(video_id: str, tier: str = "free",
         elif "file" in backends:
             produced[name] = str(path)
         if "supabase" in backends:
-            from ..shared import rows
+            from ..shared.storage import rows
             rows.WRITERS["aggregate"](video_id, document.as_dict())
             produced.setdefault(name, "aggregate@supabase")
         ran.append(name)
@@ -163,7 +163,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--llm", default=None,
                     help="who answers the llm tier: a provider or provider/model; "
                          "default FALCONVAR_LLM, then openai")
-    ap.add_argument("--llm-model", default=None)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -171,7 +170,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             if args.only else None)
     try:
         produced = run(args.video_id, args.tier, only, args.force, args.sink,
-                       args.llm, args.llm_model)
+                       args.llm)
     except (KeyError, ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}")
         return 1

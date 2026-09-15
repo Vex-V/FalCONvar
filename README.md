@@ -199,16 +199,16 @@ whose input is missing is skipped with the reason rather than failing.
 
 ## Models
 
-Three roles call a model. Each is a provider plus an optional model, and unset
-every role is `openai`:
+Three roles call a model. Each takes one string — a provider, or
+`provider/model` — and unset every role is `openai`:
 
 | role | does | flag | `.env` |
 |---|---|---|---|
-| `describe` | frames → structured answers (needs a vision model) | `--describer` | `FALCONVAR_DESCRIBER` · `FALCONVAR_DESCRIBE_MODEL` |
-| `llm` | text → the `--tier llm` aggregates | `--llm` | `FALCONVAR_LLM` · `FALCONVAR_LLM_MODEL` |
-| `embed` | text → vectors, for `embed` and `retrieve` | `--embedder` | `FALCONVAR_EMBEDDER` · `FALCONVAR_EMBED_MODEL` |
+| `describe` | frames → structured answers (needs a vision model) | `--describer` | `FALCONVAR_DESCRIBER` |
+| `llm` | text → the `--tier llm` aggregates | `--llm` | `FALCONVAR_LLM` |
+| `embed` | text → vectors, for `embed` and `retrieve` | `--embedder` | `FALCONVAR_EMBEDDER` |
 
-A provider name may carry its model after the first slash:
+The model goes after the first slash:
 
 ```bash
 python -m falconvar.describe <id> --describer anthropic
@@ -244,6 +244,10 @@ which names the key's variable and never holds the key:
 {"providers": {"vllm": {"protocol": "chat", "base_url": "http://localhost:8001/v1",
                         "chat_model": "Qwen/Qwen2.5-VL-7B-Instruct", "local": true}}}
 ```
+
+Calls run concurrently: `concurrency` caps how many are in flight per provider
+— 8 for cloud APIs, 1 for servers on this machine — and can be set in the same
+file. Describing a 7-chunk video took 76 s one call at a time and 12.8 s at 8.
 
 `GET /capabilities` lists every provider, whether it has a key, and what each
 role resolves to right now.
@@ -309,7 +313,7 @@ do not, and `GET /videos` reads them from disk.
 ```
 falconvar/
   workflow.py      the whole run, as a list of component calls
-  shared/          paths · documents · sinks · env · providers · llm · db · rows
+  shared/          paths · env · contracts/ · storage/ · models/
   media/           1  split
   audio/           2  source · reader · models · backends/
   boundaries/      3+4 scenes · speech · grid

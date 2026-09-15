@@ -20,9 +20,10 @@ from ..frames import LoadedFrame
 @register
 class StubDescriber:
     name = "stub"
+    concurrency = 8
 
-    def describe(self, images: Sequence[LoadedFrame],
-                 context: dict[str, Any]) -> Description:
+    async def describe(self, images: Sequence[LoadedFrame],
+                       context: dict[str, Any]) -> Description:
         span = f"{context['start_ts']:.1f}-{context['end_ts']:.1f}s"
         indexes = ", ".join(str(f.index) for f in images)
         question = prompts.question_for(context)

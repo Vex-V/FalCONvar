@@ -92,10 +92,9 @@ class CLIPEmbedder(FrameEmbedder):
             with torch.no_grad():
                 pixels = self._processor(images=batch, return_tensors="pt")["pixel_values"]
                 features = self._model.get_image_features(pixel_values=pixels.to(self.device))
-            # transformers >=5 returns a model output here rather than a tensor.
-            if hasattr(features, "pooler_output"):
-                features = features.pooler_output
-            out.append(features.float().cpu().numpy())
+            # A model output, not a tensor: the projected embedding is its
+            # `pooler_output`.
+            out.append(features.pooler_output.float().cpu().numpy())
         return _l2(np.concatenate(out, axis=0))
 
     def config(self) -> dict:

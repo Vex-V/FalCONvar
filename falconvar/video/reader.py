@@ -23,7 +23,7 @@ from typing import Callable, Iterator, Optional
 import av
 import numpy as np
 
-from ..shared.documents import Media
+from ..shared.contracts.documents import Media
 
 #: OpenCV auto-applies container rotation; PyAV does not, so the reader does.
 #: PyAV 18.1 exposes the display matrix through none of `side_data`,
@@ -67,10 +67,8 @@ class Frame:
 
 def rotation_of(path: str) -> float:
     """Container rotation in degrees, via OpenCV. 0.0 when unknown."""
-    try:
-        import cv2
-    except ImportError:                                  # pragma: no cover
-        return 0.0
+    import cv2
+
     cap = cv2.VideoCapture(path)
     try:
         if not cap.isOpened():

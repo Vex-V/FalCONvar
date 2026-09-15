@@ -4,18 +4,16 @@ Ranking happens in the database via the `search_embeddings` RPC, which fuses a
 vector ranking and a `ts_rank_cd` text ranking with RRF. Fetching every row to
 rank in Python would move a video's whole index over the wire per query.
 
-Without the RPC this falls back to a dense-only query and sets `degraded` to
-say why, because a dense-only result and a fused one are indistinguishable on
-sight.
-
-`db/supabase/install.sql` holds the schema and the RPC.
+`db/supabase/install.sql` holds the schema and the RPC, and both are required:
+a database without the RPC is a deployment that was never installed, and a
+search there says so rather than answering worse.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ....shared import db
+from ....shared.storage import db
 from ..units import Unit
 
 TABLE = "embeddings"
@@ -28,9 +26,8 @@ def as_vector(value: Any) -> list[float]:
     `"[-0.0342,0.0450,...]"`, not a list -- so a cosine written against a list
     silently compared nothing, returned its "these are not comparable"
     sentinel for every row, and left `sorted` to preserve the order the rows
-    happened to arrive in. The fallback then reported a ranking it had not
-    computed, with a `degraded` note saying only that the lexical half was
-    missing. Measured: every similarity -1.0 across a 4-row table.
+    happened to arrive in -- a ranking nobody had computed. Measured: every
+    similarity -1.0 across a 4-row table.
     """
     if isinstance(value, str):
         try:
@@ -69,7 +66,7 @@ def write_video_unit(unit: Any, embedder_key: str, api: Any = None) -> int:
     has no chunk, no sampler and no ranking of its own yet. `install.sql` has
     held the table since before anything wrote it; this is what fills it.
     """
-    from ....shared import db
+    from ....shared.storage import db
     if not unit or not unit.vector:
         return 0
     return _upsert(VIDEO_TABLE, [{
@@ -84,11 +81,12 @@ def search_videos(vector: Sequence[float], embedder_key: str,
     """Which video is this about. Ranked in Python, deliberately.
 
     One row per video, so the whole table is a handful of vectors even on a
-    large deployment -- the objection to `_dense_only` (it moves a video's whole
-    index over the wire) does not apply when the table IS one row per video.
+    large deployment -- the objection to ranking moments in Python (it moves a
+    video's whole index over the wire) does not apply when the table IS one row
+    per video.
     """
     import math
-    from ....shared import db
+    from ....shared.storage import db
 
     rows = (api or db.client(write=False)).table(VIDEO_TABLE).select(
         "video_id,kind,content,embedding").eq("embedder", embedder_key
@@ -119,7 +117,6 @@ class SupabaseIndex:
         self.video_id = video_id
         self.embedder_key = embedder_key
         self._api = api or db.client()
-        self.degraded: Optional[str] = None
 
     # -- writing ---------------------------------------------------------
     def stored_hashes(self) -> dict[str, str]:
@@ -191,12 +188,9 @@ class SupabaseIndex:
                 "p_limit": limit,
             }).execute()
         except Exception as exc:                         # noqa: BLE001
-            # Said out loud rather than silently degraded: a dense-only result
-            # and a fused one are indistinguishable on sight.
-            self.degraded = (f"search_embeddings RPC unavailable ({exc}); "
-                             "ranking has no lexical half")
-            return self._dense_only(vector, limit, sampler, question,
-                                    strategy, chunk_ids, structured, scope)
+            raise db.DatabaseUnavailable(
+                f"search_embeddings failed ({exc}). The ranking lives in that "
+                "RPC; if it is missing, run db/supabase/install.sql") from None
 
         return [{
             "video_id": r.get("video_id", self.video_id),
@@ -213,61 +207,6 @@ class SupabaseIndex:
             # deployment that has the rows and no output directory.
             "start_ts": r.get("start_ts"), "end_ts": r.get("end_ts"),
         } for r in (response.data or [])]
-
-    def _dense_only(self, vector: Sequence[float], limit: int,
-                    sampler: Optional[str],
-                    question: Optional[str] = None,
-                    strategy: Optional[str] = None,
-                    chunk_ids: Optional[Sequence[int]] = None,
-                    structured: Optional[dict[str, Any]] = None,
-                    video_ids: Optional[Sequence[str]] = None
-                    ) -> list[dict[str, Any]]:
-        """Every row for this video, ranked in Python. The fallback.
-
-        Correct but not scalable -- it moves the whole index over the wire. It
-        exists so a database without the RPC still answers, and `degraded` says
-        why the answer is worse.
-        """
-        import math
-
-        query = (self._api.table(TABLE)
-                 .select("video_id,chunk_id,sampler_id,sampler,question,"
-                         "content,structured,embedding")
-                 .eq("embedder", self.embedder_key))
-        if video_ids:
-            query = query.in_("video_id", list(video_ids))
-        if sampler is not None:
-            query = query.eq("sampler_id", sampler)
-        if question is not None:
-            query = query.eq("question", question)
-        # Every filter the RPC applies, applied here too. A fallback that
-        # quietly ignored one would answer a different question from the path
-        # it stands in for, and `degraded` only warns about the ranking.
-        if strategy is not None:
-            query = query.eq("sampler", strategy)
-        if chunk_ids:
-            query = query.in_("chunk_id", list(chunk_ids))
-        if structured:
-            query = query.contains("structured", structured)
-        rows = query.execute().data or []
-
-        def cosine(a: Sequence[float], b: Sequence[float]) -> float:
-            if not a or not b or len(a) != len(b):
-                return -1.0
-            dot = sum(x * y for x, y in zip(a, b))
-            na = math.sqrt(sum(x * x for x in a)) or 1.0
-            nb = math.sqrt(sum(y * y for y in b)) or 1.0
-            return dot / (na * nb)
-
-        scored = sorted(rows, key=lambda r: -cosine(vector, as_vector(r.get("embedding"))))
-        return [{
-            "video_id": r.get("video_id", self.video_id),
-            "chunk_id": r["chunk_id"], "sampler_id": r["sampler_id"],
-            "content": r.get("content", ""),
-            "structured": r.get("structured", {}),
-            "sampler": r.get("sampler", ""), "question": r.get("question", ""),
-            "score": 1.0 / (60 + rank), "dense_rank": rank, "text_rank": None,
-        } for rank, r in enumerate(scored[:limit], start=1)]
 
 
 __all__ = ["SupabaseIndex", "TABLE"]

@@ -119,13 +119,13 @@ class HashEmbedder:
 def build(name: Optional[str] = None, **kwargs) -> Embedder:
     """A provider name, `provider/model`, `hash`, or None for the default.
 
-    Every provider resolves through `shared.providers`, so `embed` and
+    Every provider resolves through `shared.models.providers`, so `embed` and
     `retrieve` reading the same environment cannot disagree about which space
     a search belongs to.
     """
-    from ...shared import providers
+    from ...shared.models import providers
 
-    chosen, model = providers.choose("embed", name, kwargs.pop("model", None))
+    chosen, model = providers.choose("embed", name)
     if chosen == providers.OFFLINE["embed"]:
         return HashEmbedder(**({"dims": kwargs["dims"]} if kwargs.get("dims") else {}))
     provider = providers.get(chosen)
@@ -137,7 +137,7 @@ def build(name: Optional[str] = None, **kwargs) -> Embedder:
 
 
 def available() -> list[str]:
-    from ...shared import providers
+    from ...shared.models import providers
     return providers.names("embed")
 
 

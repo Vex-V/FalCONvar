@@ -11,8 +11,9 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..media import load as load_media
-from ..shared import paths, sinks
-from ..shared.documents import Manifest, Produced
+from ..shared import paths
+from ..shared.storage import sinks
+from ..shared.contracts.documents import Manifest, Produced
 from . import samplers as samplers_mod
 from .pipeline import ingest
 from .reader import UnreadableSource

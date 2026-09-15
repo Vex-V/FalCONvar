@@ -25,7 +25,7 @@ from typing import Any, Optional, Sequence
 
 import av
 
-from ..shared.documents import Cuts, Media
+from ..shared.contracts.documents import Cuts, Media
 
 #: Cuts are a global property of the frame; full resolution buys nothing but
 #: time. Detection runs on a downscaled copy.

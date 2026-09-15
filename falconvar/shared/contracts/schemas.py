@@ -18,7 +18,8 @@ import typing
 from pathlib import Path
 from typing import Any, Optional, get_args, get_origin
 
-from . import documents, paths
+from .. import paths
+from . import documents
 
 #: Written to `db/json/`. Relative to the checkout, not the data root: these
 #: are source, not output.
@@ -154,15 +155,10 @@ def validate(document: dict[str, Any], tag: str, deep: bool = False) -> list[str
             problems.append(f"missing required field {name!r}")
 
     if deep:
-        try:
-            import jsonschema
-        except ImportError:
-            problems.append("deep validation needs `jsonschema` installed")
-        else:
-            for error in jsonschema.Draft202012Validator(schema).iter_errors(
-                    document):
-                problems.append(f"{'.'.join(str(p) for p in error.path)}: "
-                                f"{error.message}")
+        import jsonschema
+        for error in jsonschema.Draft202012Validator(schema).iter_errors(document):
+            problems.append(f"{'.'.join(str(p) for p in error.path)}: "
+                            f"{error.message}")
     return problems
 
 

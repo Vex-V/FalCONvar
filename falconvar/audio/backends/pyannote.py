@@ -43,13 +43,8 @@ class PyannoteDiarizer:
         if pipeline is not None:
             self.device, self._pipeline = "given", pipeline
             return
-        try:
-            import torch
-            from pyannote.audio import Pipeline
-        except ImportError as exc:                       # pragma: no cover
-            raise ModelUnavailable(
-                "pyannote.audio is not installed: pip install pyannote.audio"
-            ) from exc
+        import torch
+        from pyannote.audio import Pipeline
 
         key = _token(token)
         if not key:

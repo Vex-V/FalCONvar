@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared import providers
+from ...shared.models import providers
 from .embedders import EmbedderUnavailable, key_for, prefixes_for
 
 #: Widths that need no probe.
@@ -47,10 +47,7 @@ class RemoteEmbedder:
         self._client = client if client is not None else self._connect()
 
     def _connect(self) -> Any:
-        try:
-            from openai import OpenAI
-        except ImportError as exc:                          # pragma: no cover
-            raise EmbedderUnavailable("the openai package is not installed") from exc
+        from openai import OpenAI
         try:
             key = providers.api_key(self.provider)
         except providers.ProviderUnavailable as exc:

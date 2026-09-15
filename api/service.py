@@ -22,8 +22,10 @@ from falconvar import aggregate, audio, boundaries, cut, describe, media, video
 from falconvar import workflow
 from falconvar.describe import library, prompts
 from falconvar.rag import embed, retrieve
-from falconvar.shared import paths, providers, sinks
-from falconvar.shared.documents import Produced
+from falconvar.shared import paths
+from falconvar.shared.models import providers
+from falconvar.shared.storage import sinks
+from falconvar.shared.contracts.documents import Produced
 from falconvar.video import samplers as samplers_mod
 
 #: Where an upload is parked until a run reads it.
