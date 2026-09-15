@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...boundaries import load as load_timeline
+from ..boundaries import load as load_timeline
 from ...shared import paths
 from ..embed import embedders as embedders_mod
 from ..embed.driver import DEFAULT_INDEX

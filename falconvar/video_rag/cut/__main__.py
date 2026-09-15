@@ -1,4 +1,4 @@
-"""`python -m falconvar.cut` -> the component's driver."""
+"""`python -m falconvar.video_rag.cut` -> the component's driver."""
 
 from .driver import main
 

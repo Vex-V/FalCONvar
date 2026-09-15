@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared.models import llm, providers
+from ....shared.models import llm, providers
 from .. import prompts
 from ..base import DescriberUnavailable, Description
 from ..frames import LoadedFrame

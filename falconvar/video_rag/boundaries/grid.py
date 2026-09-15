@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ..shared.contracts.documents import Timeline
+from ...shared.contracts.documents import Timeline
 
 #: Every policy, and which evidence each needs. The dependency, not a branch:
 #: a driver reads this to know what must run first, rather than carrying an

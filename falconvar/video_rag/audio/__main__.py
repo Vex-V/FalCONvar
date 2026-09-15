@@ -1,4 +1,4 @@
-"""`python -m falconvar.audio` -> the component's driver."""
+"""`python -m falconvar.video_rag.audio` -> the component's driver."""
 
 from .driver import main
 

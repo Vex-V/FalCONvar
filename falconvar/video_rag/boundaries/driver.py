@@ -22,9 +22,9 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from ..media import load as load_media
-from ..shared import paths
-from ..shared.storage import sinks
-from ..shared.contracts.documents import Cuts, Produced, RawTranscript, Timeline
+from ...shared import paths
+from ...shared.storage import sinks
+from ...shared.contracts.documents import Cuts, Produced, RawTranscript, Timeline
 from . import scenes, speech
 from .grid import POLICIES, build
 

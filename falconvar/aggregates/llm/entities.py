@@ -54,16 +54,18 @@ class EntitiesAggregator:
     tier = "llm"
     about = "the same person or thing across chunks, and what each did"
     depends_on: tuple[str, ...] = ()
+    #: Takes an embedder as well as an llm; the driver passes both.
+    embeds = True
 
     def __init__(self, llm: Optional[str] = None, embedder: Optional[str] = None,
                  rule: str = "max", mutual: bool = True,
                  min_appearances: int = 2, max_narratives: int = 12) -> None:
-        # The embedder is resolved like `embed`'s: FALCONVAR_EMBEDDER, then
-        # openai. Imported here, not at module scope -- `rag` is another
-        # component, and `--tier free` must not load a client.
-        from ...rag.embed import embedders
+        # The embedder is resolved exactly as video_rag's `embed` resolves one,
+        # and reached through its driver -- the other tier, never a component.
+        # Imported here so `--tier free` never loads a client.
+        from ...video_rag import driver as video_rag
         self.llm = Model(llm, role="llm")
-        self.embedder = embedders.build(embedder)
+        self.embedder = video_rag.embedder(embedder)
         self.rule, self.mutual = rule, mutual
         self.min_appearances = min_appearances
         self.max_narratives = max_narratives

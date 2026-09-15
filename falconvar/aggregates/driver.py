@@ -1,8 +1,14 @@
-"""The aggregate component: finished documents -> `aggregates/<name>.json`.
+"""The aggregates driver: what video_rag extracted -> `aggregates/<name>.json`.
 
 Each aggregator writes its own file, so a run that dies partway leaves the
 results it did produce rather than none -- the same reason tiers run cheapest
 first.
+
+**Reaches video_rag through its driver, never its components.** Documents,
+identity declarations, an embedder and the whole-video vector all come from
+`video_rag.driver`, imported inside the functions that need them so importing
+this package loads nothing from the other tier. video_rag, for its part, never
+reads what this writes: the summary is handed to it, not left for it to find.
 """
 
 from __future__ import annotations
@@ -17,28 +23,20 @@ from .base import TIERS, Context, missing, resolve_order
 
 
 def context_for(video_id: str) -> Context:
-    """Every document this video has. Missing ones are None, not an error."""
-    from ..boundaries import load as load_timeline
+    """Every document video_rag wrote for this video. Missing ones are None."""
+    from ..video_rag import driver as video_rag
 
-    timeline = load_timeline(video_id)
-    manifest = descriptions = transcript = None
-    if paths.exists(video_id, "manifest"):
-        from ..video import load as load_manifest
-        manifest = load_manifest(video_id)
-    if paths.exists(video_id, "descriptions"):
-        from ..describe import load as load_descriptions
-        descriptions = load_descriptions(video_id)
-    if paths.exists(video_id, "transcript"):
-        from ..cut import load as load_transcript
-        transcript = load_transcript(video_id)
+    found = video_rag.documents(video_id)
+    descriptions = found["descriptions"]
     identity: dict[str, dict[str, list[str]]] = {}
     if descriptions is not None:
-        from ..describe import library
         asked = {block.get("question") or sampler_id
                  for chunk in descriptions.chunks
                  for sampler_id, block in (chunk.get("samplers") or {}).items()}
-        identity = {q: found for q in sorted(asked) if (found := library.identity_of(q))}
-    return Context(video_id, timeline, manifest, descriptions, transcript, identity)
+        identity = {q: declared for q in sorted(asked)
+                    if (declared := video_rag.identity_of(q))}
+    return Context(video_id, found["timeline"], found["manifest"], descriptions,
+                   found["transcript"], identity)
 
 
 #: Who made an `llm` aggregate that does not say. Before providers existed
@@ -56,15 +54,29 @@ def made_by(document: Aggregate) -> Optional[str]:
     return recorded
 
 
+def validate(tier: str = "free", llm: Optional[str] = None) -> list[str]:
+    """What stops a run before it starts, as messages."""
+    if tier not in TIERS:
+        return [f"tier must be one of {', '.join(TIERS)}"]
+    if tier != "llm":
+        return []
+    from ..shared.models import providers
+    return providers.problems("llm", llm)
+
+
 def run(video_id: str, tier: str = "free",
         only: Optional[Sequence[str]] = None,
         force: bool = False,
         sink: str | Sequence[str] = "file",
-        llm: Optional[str] = None) -> Produced:
+        llm: Optional[str] = None,
+        embedder: Optional[str] = None,
+        index: Optional[str] = None) -> Produced:
     """Run every aggregator up to ``tier``, cheapest first.
 
-    `llm` is who answers the paid tier -- a provider or `provider/model`; None
-    resolves through `shared.models.providers` (FALCONVAR_LLM, then openai).
+    `llm` is who answers the paid tier and `embedder` who embeds for it -- each
+    a provider or `provider/model`, None resolving through
+    `shared.models.providers`. `index` naming `supabase` also stores the
+    summary as the video's vector, which `/search level=video` ranks.
     """
     if tier not in TIERS:
         raise KeyError(f"unknown tier {tier!r}; known: {', '.join(TIERS)}")
@@ -82,10 +94,16 @@ def run(video_id: str, tier: str = "free",
     models: set[str] = set()
 
     for name in resolve_order(names, TIER_OF):
-        # Only the paid tier takes a provider. The local models name their own
-        # checkpoints, and arithmetic needs none.
-        aggregator = (resolve(name)(llm) if TIER_OF[name] == "llm"
-                      else resolve(name)())
+        # Only the paid tier takes a provider, and only an aggregator that
+        # embeds takes an embedder. The local models name their own
+        # checkpoints, and arithmetic needs neither.
+        cls = resolve(name)
+        if TIER_OF[name] != "llm":
+            aggregator = cls()
+        elif getattr(cls, "embeds", False):
+            aggregator = cls(llm, embedder)
+        else:
+            aggregator = cls(llm)
         author = getattr(aggregator, "model_key", None)
         # An aggregator whose answer depends on more than the chunk text --
         # what the shapes declare as identity -- folds that in, so a changed
@@ -147,13 +165,23 @@ def run(video_id: str, tier: str = "free",
             produced.setdefault(name, "aggregate@supabase")
         ran.append(name)
 
+    # The whole-video vector, from the summary this run has in hand. It lived in
+    # `embed`, which read `summary.json` -- a file that on a first run did not
+    # exist yet, because embed runs before aggregate.
+    video_units = 0
+    if "summary" in ran and index:
+        from ..video_rag import driver as video_rag
+        video_units = video_rag.index_video_summary(
+            video_id, load(video_id, "summary").payload, embedder, index)
+
     return Produced(
         video_id=video_id, component="aggregate",
         backend=",".join(sinks.parse(sink)),
         artifacts=produced,
         stats={"tier": tier, "ran": len(ran), "current": current,
                "computed": len(ran) - current, "aggregates": ran,
-               "models": sorted(models), "skipped": skipped},
+               "models": sorted(models), "video_units": video_units,
+               "skipped": skipped},
         skipped=sorted(skipped),
     )
 
@@ -167,7 +195,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     import argparse
     import json
 
-    ap = argparse.ArgumentParser(description="Video-level structure.")
+    ap = argparse.ArgumentParser(description="Higher-level answers over what video_rag extracted.")
     ap.add_argument("video_id")
     ap.add_argument("--tier", default="free", choices=TIERS,
                     help="a cost ceiling; cheaper tiers still run")
@@ -177,6 +205,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--llm", default=None,
                     help="who answers the llm tier: a provider or provider/model; "
                          "default FALCONVAR_LLM, then openai")
+    ap.add_argument("--embedder", default=None,
+                    help="who embeds for it: a provider or provider/model; "
+                         "default FALCONVAR_EMBEDDER, then openai")
+    ap.add_argument("--index", default=None,
+                    help="`supabase` also stores the summary as the video's vector")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -184,7 +217,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             if args.only else None)
     try:
         produced = run(args.video_id, args.tier, only, args.force, args.sink,
-                       args.llm)
+                       args.llm, args.embedder, args.index)
     except (KeyError, ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}")
         return 1
@@ -201,6 +234,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"    {name}")
     for name, why in s["skipped"].items():
         print(f"    {name:<12} -- skipped: {why}")
+    if s["video_units"]:
+        print(f"  video vector  {s['video_units']}   -> video_embeddings")
     print(f"\naggregates -> {paths.artifact(produced.video_id, 'aggregates')}")
     return 0
 

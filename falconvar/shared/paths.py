@@ -56,7 +56,7 @@ UPLOADS = DATA_ROOT / "uploads"
 
 #: Custom describe prompts, added through the API. Under the data root rather
 #: than in the package because a request writes it; the built-ins stay in
-#: `falconvar/describe/prompts.json`, version-controlled and read-only.
+#: `falconvar/video_rag/describe/prompts.json`, version-controlled and read-only.
 PROMPTS = DATA_ROOT / "prompts.json"
 #: Model endpoints added or overridden per deployment. Hand-edited, and never
 #: holds a key -- it names the variables keys are read from. The built-ins live

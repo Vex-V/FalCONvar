@@ -1,4 +1,4 @@
-"""`python -m falconvar.describe` -> the component's driver."""
+"""`python -m falconvar.video_rag.describe` -> the component's driver."""
 
 from .driver import main
 

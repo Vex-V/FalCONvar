@@ -31,7 +31,7 @@ import asyncio
 import time
 from typing import Any, Optional, Sequence
 
-from ..shared.contracts.documents import Descriptions, Manifest, Timeline
+from ...shared.contracts.documents import Descriptions, Manifest, Timeline
 from . import prompts
 from .base import Describer
 from .frames import FrameSource

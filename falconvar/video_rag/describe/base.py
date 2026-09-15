@@ -54,7 +54,7 @@ def build(name: Optional[str] = None, **kwargs) -> Describer:
     Every provider is one class; which wire format it speaks is `shared.models.llm`'s
     concern, so adding a provider adds no describer.
     """
-    from ..shared.models import providers
+    from ...shared.models import providers
 
     chosen, _ = providers.choose("describe", name)
     if chosen == providers.OFFLINE["describe"]:
@@ -66,7 +66,7 @@ def build(name: Optional[str] = None, **kwargs) -> Describer:
 
 
 def available() -> list[str]:
-    from ..shared.models import providers
+    from ...shared.models import providers
     return sorted(set(_REGISTRY) | set(providers.names("describe")))
 
 

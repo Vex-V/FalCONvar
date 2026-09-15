@@ -18,15 +18,15 @@ import functools
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from falconvar import aggregate, audio, boundaries, cut, describe, media, video
-from falconvar import workflow
-from falconvar.describe import library, prompts
-from falconvar.rag import embed, retrieve
+from falconvar import aggregates, workflow
+from falconvar.video_rag import (audio, boundaries, cut, describe, embed, media,
+                                 retrieve, video)
+from falconvar.video_rag.describe import library, prompts
 from falconvar.shared import paths
 from falconvar.shared.models import providers
 from falconvar.shared.storage import sinks
 from falconvar.shared.contracts.documents import Produced
-from falconvar.video import samplers as samplers_mod
+from falconvar.video_rag.video import samplers as samplers_mod
 
 #: Where an upload is parked until a run reads it.
 UPLOADS = paths.UPLOADS
@@ -60,7 +60,7 @@ COMPONENTS: dict[str, Callable[..., Produced]] = {
     "cut": cut.run,
     "describe": describe.run,
     "embed": embed.run,
-    "aggregate": aggregate.run,
+    "aggregate": aggregates.run,
 }
 
 
@@ -181,15 +181,15 @@ def exports(video_id: str) -> dict[str, Any]:
     documents = [{"name": name, "about": about,
                   "url": f"/videos/{video_id}/artifacts/{name}"}
                  for name, about in ARTIFACTS.items() if name in present]
-    aggregates = []
+    listed = []
     directory = paths.artifact(video_id, "aggregates")
     if directory.exists():
-        aggregates = [{"name": p.stem,
-                       "about": aggregate.ABOUT.get(p.stem, ""),
-                       "url": f"/videos/{video_id}/aggregates/{p.stem}"}
-                      for p in sorted(directory.glob("*.json"))]
+        listed = [{"name": p.stem,
+                   "about": aggregates.ABOUT.get(p.stem, ""),
+                   "url": f"/videos/{video_id}/aggregates/{p.stem}"}
+                  for p in sorted(directory.glob("*.json"))]
     return {"video_id": video_id, "documents": documents,
-            "aggregates": aggregates,
+            "aggregates": listed,
             "frames": f"/videos/{video_id}/frames/{{index}}"
                       if "store" in present else None}
 
@@ -286,7 +286,7 @@ def available() -> dict[str, Any]:
     registry in alphabetical order defaults to `stub` and produces a run that
     looks complete and says nothing.
     """
-    from falconvar.audio import models as audio_models
+    from falconvar.video_rag.audio import models as audio_models
 
     return {
         "components": list(workflow.COMPONENTS),
@@ -306,10 +306,10 @@ def available() -> dict[str, Any]:
         "sinks": list(sinks.BACKENDS),
         "transcribers": sorted(audio_models.TRANSCRIBERS),
         "diarizers": sorted(audio_models.DIARIZERS),
-        "aggregators": {name: {"tier": aggregate.TIER_OF[name],
-                               "about": aggregate.about(name)}
-                        for name in aggregate.available()},
-        "tiers": list(aggregate.TIERS),
+        "aggregators": {name: {"tier": aggregates.TIER_OF[name],
+                               "about": aggregates.about(name)}
+                        for name in aggregates.available()},
+        "tiers": list(aggregates.TIERS),
         "artifacts": dict(ARTIFACTS),
         # What a search may narrow by, and which structured values are a
         # vocabulary rather than free text.

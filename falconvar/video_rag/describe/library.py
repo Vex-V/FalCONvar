@@ -2,7 +2,7 @@
 
 Two files, and the split is the point:
 
-    falconvar/describe/prompts.json   built in, shipped, read-only at runtime
+    falconvar/video_rag/describe/prompts.json   built in, shipped, read-only at runtime
     data/prompts.json                 custom, written by the API
 
 Custom entries layer on top and may not shadow a built-in, so a request can
@@ -51,7 +51,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from ..shared import paths
+from ...shared import paths
 
 BUILTIN_PATH = Path(__file__).with_name("prompts.json")
 

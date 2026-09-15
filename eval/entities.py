@@ -93,9 +93,9 @@ def v0_groups(mentions, vectors, link=0.88, generic=0.80) -> list[list[int]]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    from falconvar.aggregate.driver import context_for
-    from falconvar.aggregate.linking import RULES, link, mentions_of
-    from falconvar.rag.embed import embedders
+    from falconvar.aggregates.driver import context_for
+    from falconvar.aggregates.linking import RULES, link, mentions_of
+    from falconvar.video_rag.embed import embedders
     from falconvar.shared import env
 
     ap = argparse.ArgumentParser(description="Grade entity linking against hand labels.")

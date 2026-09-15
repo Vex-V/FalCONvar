@@ -23,7 +23,7 @@ from typing import Callable, Iterator, Optional
 import av
 import numpy as np
 
-from ..shared.contracts.documents import Media
+from ...shared.contracts.documents import Media
 
 #: OpenCV auto-applies container rotation; PyAV does not, so the reader does.
 #: PyAV 18.1 exposes the display matrix through none of `side_data`,

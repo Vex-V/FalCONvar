@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..shared.contracts.documents import Cuts, RawTranscript
+from ...shared.contracts.documents import Cuts, RawTranscript
 
 #: Below this, a gap between speech is a breath rather than a boundary.
 #: Whisper's own segments on narration sit a median 4.8 s apart with sub-second

@@ -6,9 +6,9 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..video import load as load_manifest
-from ..shared import env, paths
-from ..shared.storage import sinks
-from ..shared.contracts.documents import Descriptions, Produced
+from ...shared import env, paths
+from ...shared.storage import sinks
+from ...shared.contracts.documents import Descriptions, Produced
 from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
@@ -85,7 +85,7 @@ def _record_prompts(versions: dict[str, str],
     """
     if "supabase" not in sinks.parse(sink) or not versions:
         return {"prompts_recorded": 0}
-    from ..shared.storage import rows
+    from ...shared.storage import rows
     entries = []
     for name, version in sorted(versions.items()):
         entry = library.load()["questions"].get(name) or {}

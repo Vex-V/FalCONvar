@@ -1,8 +1,9 @@
-"""9 · aggregate -- video-level structure over what the chunks said.
+"""aggregates -- higher-level answers over what video_rag extracted.
 
-Reads the finished documents, never the video and never another component's
-modules. Answers the questions embeddings cannot: counts, coverage, who
-dominated, how much of this is speech.
+The second tier. Reads the documents video_rag wrote, through video_rag's
+driver -- never the video, and never a video_rag component. Answers the
+questions embeddings cannot: counts, coverage, who dominated, how much of this
+is speech, what the whole video is about, who is who across chunks.
 
 Three tiers, cheapest first. `free` is arithmetic, `local` adds GPU models,
 `llm` adds paid calls. Both dear tiers are registered lazily, so importing this
@@ -68,7 +69,7 @@ def about(name: str) -> str:
     return ABOUT[name]
 
 
-from .driver import context_for, load, main, run  # noqa: E402
+from .driver import context_for, load, main, run, validate  # noqa: E402
 
 __all__ = ["REGISTRY", "TIERS", "Context", "about", "available", "context_for",
-           "load", "main", "missing", "resolve_order", "run"]
+           "load", "main", "missing", "resolve_order", "run", "validate"]

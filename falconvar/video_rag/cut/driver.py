@@ -6,9 +6,9 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..audio import load as load_raw
-from ..shared import paths
-from ..shared.storage import sinks
-from ..shared.contracts.documents import Produced, Transcript
+from ...shared import paths
+from ...shared.storage import sinks
+from ...shared.contracts.documents import Produced, Transcript
 from .cutter import stats_for, to_chunks
 
 

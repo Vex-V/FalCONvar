@@ -9,52 +9,21 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from ...shared import paths
-from ...shared.storage import sinks
 from ...shared.contracts.documents import Produced
 from . import embedders as embedders_mod
 from . import readable
 from . import units as units_mod
 from . import indexes as backends
 
-def _embed_video(video_id: str, built, names: Sequence[str]) -> int:
-    """Embed the video-level summary into `video_embeddings`. Postgres only.
-
-    `falconvar.video_embeddings` existed in the DDL before anything wrote it:
-    a complete `--tier llm` run left it at 0 rows while every other table was
-    exactly full. This is what fills it.
-
-    Postgres only for now: Qdrant would need a second collection with its own
-    name, and the whole-video corpus is one row per video, which is not a size
-    that needs a vector database.
-    """
-    if "supabase" not in names:
-        return 0
-    from ...shared import paths
-    from ...shared.storage import sinks
-    from .indexes.supabase import write_video_unit
-
-    path = paths.artifact(video_id, "aggregates") / "summary.json"
-    if not path.exists():
-        return 0
-    try:
-        payload = sinks.read_json(path).get("payload") or {}
-        unit = units_mod.from_summary(video_id, payload)
-        if unit is None:
-            return 0
-        unit.vector = built.embed([unit.content])[0]
-        return write_video_unit(unit, built.key)
-    except Exception:                                    # noqa: BLE001
-        return 0
-
 
 def collect(video_id: str) -> list[units_mod.Unit]:
     """Every embeddable unit this video has, from both modalities."""
     out: list[units_mod.Unit] = []
     if paths.exists(video_id, "descriptions"):
-        from ...describe import load as load_descriptions
+        from ..describe import load as load_descriptions
         out += units_mod.from_descriptions(load_descriptions(video_id))
     if paths.exists(video_id, "transcript"):
-        from ...cut import load as load_transcript
+        from ..cut import load as load_transcript
         out += units_mod.from_transcript(load_transcript(video_id))
     return out
 
@@ -122,7 +91,7 @@ def _embed(built, names, indexes, video_id: str, batch: int) -> Produced:
     # Written whatever the index, because it answers a question no index can:
     # what text did this chunk actually contribute. Free -- the units are
     # already in hand and the vectors are left out.
-    from ...boundaries import load as load_timeline
+    from ..boundaries import load as load_timeline
     try:
         fingerprint = load_timeline(video_id).fingerprint()
     except Exception:                                    # noqa: BLE001
@@ -135,16 +104,13 @@ def _embed(built, names, indexes, video_id: str, batch: int) -> Produced:
         dropped += target.prune(live)
         artifacts[name] = str(target.save())
 
-    # The whole-video vector, if this video has a summary to make one from.
-    # After the moments, and best-effort: it answers a different question, and
-    # losing it must not fail a run whose moments are already written.
-    videos = _embed_video(video_id, built, names)
-
+    # No whole-video vector here: that is made from the summary, which
+    # `aggregates` hands to `video_rag.driver.index_video_summary`. Reading it
+    # back from `aggregates/summary.json` made this tier depend on the one above.
     return Produced(
         video_id=video_id, component="embed", backend=",".join(names),
         artifacts=artifacts,
         stats={"units": len(wanted), "embedded": len(changed),
-               "video_units": videos,
                "unchanged": len(wanted) - len(changed), "pruned": dropped,
                "embedder": built.key, "indexes": names,
                "samplers": sorted({u.sampler_id for u in wanted})},

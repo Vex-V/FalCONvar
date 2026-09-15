@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from ....shared import paths
+from .....shared import paths
 
 # Ultralytics resolves a bare filename against the working directory and
 # downloads it if absent, which scatters weights wherever the command was run
