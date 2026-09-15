@@ -8,7 +8,7 @@ downstream is keyed by `(video_id, chunk_id)`.
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt   # all of it: nothing falls back without a package
 pip install -e .              # then `python -m falconvar.…` from any directory
 cp .env.example .env          # OpenAI key; Supabase and HF tokens if used
 ```
@@ -192,10 +192,18 @@ cheapest first, so `--tier llm` runs all three tiers.
 |---|---|---|
 | `free` | `stats`, `speakers`, `coverage` | arithmetic |
 | `local` | `ner`, `sentiment` | GPU models |
-| `llm` | `summary`, `chapters`, `events` | paid calls |
+| `llm` | `summary`, `chapters`, `events`, `entities` | paid calls |
 
 `speakers` needs a transcript and `chapters` needs `summary`; an aggregator
 whose input is missing is skipped with the reason rather than failing.
+
+`entities` links the same person or thing across chunks — by embedding what a
+shape declares as identity (`clothing`, `appearance`) and merging under rules
+read off each video, not by asking a model — then has the model write what each
+one did, with how long they were in shot and who they appeared with. A custom
+shape declares identity on a list field: `{"type": "list", "of": {...},
+"identity": ["actor"]}`. `python -m eval.entities` grades the linking against
+hand labels.
 
 ## Models
 
@@ -322,7 +330,7 @@ falconvar/
   describe/        7  prompts · library · prompts.json · frames · backends/
   rag/embed/       8  units · embedders · remote · local · indexes/ · readable
   rag/retrieve/   10
-  aggregate/       9  statistics/ · model/ · llm/
+  aggregate/       9  statistics/ · model/ · llm/ · linking
 api/               HTTP: routes, dispatch, one background worker, db reads
 web/               the client at /app: one page, no build step
 recovery/          STANDALONE: rebuild a store from a manifest + the video
@@ -333,7 +341,7 @@ data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface
 ```
 
-104 Python files, ~13.0k lines.
+111 Python files, ~13.7k lines.
 
 ## State
 
@@ -347,7 +355,11 @@ driving every stage with its own settings: a `scene` grid with a 30 s floor gave
 and 16 searchable units; every Postgres table exact under both keys;
 `recovery.recreate` 76/76 byte-identical.
 
+Of the providers, only OpenAI and the in-process `local` embedder have been run
+for real; the rest are checked against a mock server's recording of the request.
+
 Not built: a test suite, an import checker, a corpus big enough for
-`eval/harness.py` to give a result rather than a direction, and sampler
-threshold calibration. `CLAUDE.md` is the reasoning
-behind every decision here, and records what is measured and what is not.
+`eval/harness.py` to give a result rather than a direction, sampler threshold
+calibration, and keeping a describe run's answers when one of its calls fails.
+`CLAUDE.md` is the reasoning behind every decision here, and records what is
+measured and what is not.

@@ -358,7 +358,8 @@ def prompt_list() -> dict[str, Any]:
         "shapes": {name: {"fallback": bool(shape.get("fallback")),
                           "builtin": name in builtin,
                           "fields": sorted(shape.get("fields") or {}),
-                          "summary": shape.get("summary")}
+                          "summary": shape.get("summary"),
+                          "identity": library.shape_identity(name)}
                    for name, shape in sorted(library.shapes().items())},
         "field_types": list(library.FIELD_TYPES),
         "limits": {"fields": library.MAX_FIELDS,

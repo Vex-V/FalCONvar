@@ -36,6 +36,8 @@ _LAZY: dict[str, tuple[str, str, str]] = {
                  "a table of contents: contiguous chapters over the video"),
     "events": ("llm.events:EventsAggregator", "llm",
                "discrete things that happened, each pinned to a chunk"),
+    "entities": ("llm.entities:EntitiesAggregator", "llm",
+                 "the same person or thing across chunks, and what each did"),
 }
 
 #: What each lazy entry costs, without importing it. Needed because `--tier

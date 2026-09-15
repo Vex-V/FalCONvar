@@ -12,6 +12,11 @@
       "description": "What is happening here, in 4 to 5 sentences of plain prose. No preamble, no lists, no labels -- just the description."
     }
   },
+  "identity": {
+    "people": {"people": ["appearance", "clothing"]},
+    "objects": {"objects": ["object", "appearance"]},
+    "text": {"visible_text": ["text"]}
+  },
   "shapes": {
     "scene": {
       "summary": "standard",

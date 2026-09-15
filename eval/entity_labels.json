@@ -1,0 +1,56 @@
+{
+  "about": "Hand labels for entity linking. `groups` are mentions judged to be the same subject; `unsure` mentions are left out of scoring entirely, because a label nobody can defend grades the labeller rather than the linker. Every other mention is its own entity. Labelled from the stored descriptions alone, by reading them -- not from the video -- and after one look at test1's outputs, so test1 is the tuning set and test2 the check. `different` names unsure mentions that are nonetheless clearly NOT a given group -- a dark puffy coat is not the woman in the gray top -- so linking them counts as wrong; added after the first real run merged exactly those, which the unsure exclusion had hidden.",
+  "videos": {
+    "test1": {
+      "groups": {
+        "cashier": ["c0/clip:activity/actors/0", "c1/clip:activity/actors/0", "c2/clip:activity/actors/0", "c3/clip:activity/actors/0"],
+        "woman in blue jacket and pink top": ["c0/clip:activity/actors/1", "c1/clip:activity/actors/2", "c2/clip:activity/actors/2", "c3/clip:activity/actors/2"],
+        "man in red cap": ["c1/clip:activity/actors/6", "c3/clip:activity/actors/1"],
+        "woman in gray top, with the child": ["c1/clip:activity/actors/3", "c2/clip:activity/actors/4"],
+        "small child at the checkout": ["c1/clip:activity/actors/4", "c2/clip:activity/actors/5", "c3/clip:activity/actors/5"],
+        "woman with white shoulder bag": ["c0/clip:activity/actors/8", "c2/clip:activity/actors/7"],
+        "person in white hood at right shelves": ["c1/clip:activity/actors/10", "c3/clip:activity/actors/6"]
+      },
+      "unsure": {
+        "c0/clip:activity/actors/2": "man at left counter -- could be the bald man or the red-cap man",
+        "c1/clip:activity/actors/1": "bald man with glasses at the register -- could be the older man in c2",
+        "c2/clip:activity/actors/1": "older man near left register -- could be the red-cap man",
+        "c0/clip:activity/actors/3": "man in dark sweater -- the dark-clothed men are indistinguishable",
+        "c1/clip:activity/actors/5": "dark-clothed person, foreground left",
+        "c1/clip:activity/actors/8": "man in dark jacket, center aisle",
+        "c2/clip:activity/actors/3": "man in dark jacket, center-left",
+        "c3/clip:activity/actors/3": "man in dark jacket, lower left",
+        "c0/clip:activity/actors/4": "woman in dark puffy coat -- could be the white-bag woman in c2",
+        "c3/clip:activity/actors/8": "shopper in dark coat",
+        "c0/clip:activity/actors/5": "girl with large pink bow -- could be the small child",
+        "c0/clip:activity/actors/6": "child in white hooded top -- child here, woman in c3",
+        "c1/clip:activity/actors/9": "group at right shelves -- may be the same group as c2's",
+        "c2/clip:activity/actors/8": "two adults and child at back shelves",
+        "c2/clip:activity/actors/9": "young woman entering -- matched only on behaviour",
+        "c3/clip:activity/actors/7": "woman entering/exiting",
+        "c2/clip:activity/actors/6": "woman in white coat -- could be c3's cream coat",
+        "c3/clip:activity/actors/4": "woman in cream coat"
+      },
+      "different": {
+        "c0/clip:activity/actors/4": ["woman in gray top, with the child"],
+        "c3/clip:activity/actors/4": ["woman in gray top, with the child"]
+      }
+    },
+    "test2": {
+      "groups": {
+        "person on the ladder": ["c0/yolo:activity/actors/0", "c1/yolo:activity/actors/3", "c2/yolo:activity/actors/2"],
+        "person in dark clothing at left shelves": ["c0/yolo:activity/actors/2", "c1/yolo:activity/actors/2"],
+        "bald man in light shirt, on his phone": ["c0/yolo:activity/actors/3", "c1/yolo:activity/actors/0"],
+        "store fixtures": ["c1/yolo:activity/actors/4", "c2/yolo:activity/actors/3"]
+      },
+      "unsure": {
+        "c2/yolo:activity/actors/0": "person in gray shirt near left aisle -- could be the dark-clothing person",
+        "c2/yolo:activity/actors/1": "bald person with sunglasses -- could be the phone man",
+        "c0/yolo:activity/actors/4": "man in blue shirt -- could be c1's blue jacket",
+        "c1/yolo:activity/actors/1": "person in blue jacket",
+        "c0/yolo:activity/actors/1": "person in light shirt near coolers -- could be the phone man",
+        "c0/yolo:activity/actors/5": "additional partially visible people -- a group"
+      }
+    }
+  }
+}

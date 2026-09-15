@@ -229,7 +229,7 @@ manifest names it -- not a position among the kept ones, and not a second.
 
     out   /prompts      {prompts[{name, builtin, shape, fields[], about,
                                   instruction}],
-                         shapes{name: {fallback, builtin, fields[], summary}},
+                         shapes{name: {fallback, builtin, fields[], summary, identity{}}},
                          field_types[], limits{}, custom_file}
           /prompts/{n}  the same entry plus {schema, version}
     404   unknown question (with `known`)
@@ -245,6 +245,7 @@ indicative, because a call's schema depends on nothing but its question.
     in    {name, instruction, about?, summary?,
            fields: {field: {type: "text"|"list", about,
                             of?: {key: description},   -- list of objects
+                            identity?: [key, ...],     -- keys of `of` that say who
                             one_of?: [...]}}}          -- a fixed vocabulary
     out   201, the same body `GET /prompts/{name}` returns
     409   the name is a built-in question, or a built-in shape
@@ -410,6 +411,12 @@ to fix the vocabulary. The schema is generated from it, because the call goes
 out with `strict: true` and a raw schema the API refuses would fail after the
 frames are read. `/prompts.shapes` marks each shape `builtin`, and
 `field_types` and `limits` publish what a builder may contain.
+
+`identity` on a list-of-objects field names the keys that identify an entry
+across chunks -- `clothing`, not `action` -- and is what the `entities`
+aggregate links on. It is kept beside the shape, not in it, so declaring or
+changing it re-describes nothing; a shape without it is never linked.
+`/prompts.shapes` publishes each shape's `identity`.
 
 Built-ins use exactly this vocabulary -- `yolo` is not a special case, it is the
 `people` shape. A custom shape is stored under its question's name, is deleted

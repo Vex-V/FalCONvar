@@ -19,7 +19,7 @@ left to a reader to notice.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence
 
 from ..shared.contracts.documents import (Descriptions, Manifest, Timeline, Transcript,
@@ -42,6 +42,10 @@ class Context:
     manifest: Optional[Manifest] = None
     descriptions: Optional[Descriptions] = None
     transcript: Optional[Transcript] = None
+    #: `{question: {field: [keys]}}` -- which keys identify an entry across
+    #: chunks, for the questions this video was asked. Read from the shapes by
+    #: the driver, so an aggregator never imports `describe`.
+    identity: dict[str, dict[str, list[str]]] = field(default_factory=dict)
 
     @property
     def sources(self) -> set[str]:
@@ -124,7 +128,7 @@ def missing(aggregator: Any, context: Context,
 #: which kind a failed dependency was without importing anything.
 AGGREGATOR_NAMES = frozenset({
     "stats", "speakers", "coverage", "novelty", "ner", "sentiment",
-    "summary", "chapters", "events",
+    "summary", "chapters", "events", "entities",
 })
 
 

@@ -33,10 +33,10 @@ falconvar/
   rag/embed/     8 units · embedders · remote · local · readable
     indexes/       qdrant · supabase
   rag/retrieve/ 10 search
-  aggregate/     9 base · rendering
+  aggregate/     9 base · rendering · linking (who is who, no model)
     statistics/    stats · speakers · coverage      free: arithmetic
     model/         ner · sentiment                  local: GPU models
-    llm/           summary · chapters · events      llm: paid calls
+    llm/           summary · chapters · events · entities   llm: paid calls
 api/               main (routes) · service (dispatch) · jobs (one worker)
                    browse (read-only queries over the rows a run wrote)
 web/               the client at /app. No build step: index.html · app.js ·
@@ -56,7 +56,7 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-104 Python files, ~13.0k lines.
+111 Python files, ~13.7k lines.
 
 ## Commands
 
@@ -88,6 +88,8 @@ python -m falconvar.rag.embed <id> --index qdrant,supabase
 python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
 python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
 python -m falconvar.aggregate <id> --tier llm
+python -m falconvar.aggregate <id> --tier llm --only entities   # who is who, across chunks
+python -m eval.entities                         # grade linking against hand labels
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
@@ -776,6 +778,56 @@ is asked for chunk ids, which it can copy; times it would invent.
 descriptions since rewritten reads perfectly, which is precisely why staleness
 cannot be left to a reader to notice.
 
+**Entities: who is who is decided by rules; the model only narrates.**
+`aggregate/linking.py` embeds each entry's identity fields and merges under
+constraints; `entities` then asks the model for one narrative per linked entity
+(concurrently, capped at 12). Tried the other way first: gpt-5.4-mini, given
+test1's 39 actor entries, linked 31, broke the same-answer rule twice after
+being told it, and merged an older woman with an older man.
+
+**Identity is declared, never inferred.** A shape names the keys that identify
+an entry -- `people`: `appearance`, `clothing` -- in `prompts.json`'s top-level
+`identity` map, or as `identity` on a custom field spec. Beside the shape, not
+inside it: `version_of` hashes the shape, so a key there would re-describe
+every answer given in it (verified: 18/18 prompt hashes unchanged). A shape
+declaring none is never linked. The driver fills `Context.identity`, so the
+aggregator never imports `describe`, and `entities` folds the declarations
+into its fingerprint through `inputs_of` -- the only aggregator with one, so
+every other stored fingerprint is untouched.
+
+**Cannot-link is per answer, and the threshold is read off it.** Two entries in
+one answer are different by the question's own wording ("one entry per
+distinct person"), so their similarities are a calibration set for this video
+and this embedder: link only above the most similar provably-different pair,
+and only mutual best matches. Per answer rather than v0's per chunk, because
+two questions about one chunk may describe the same person. v0's fixed 0.88 was
+a fact about one embedder:
+
+| F1, test1 / test2 | text-embedding-3-small | bge-small |
+|---|---|---|
+| v0: 0.88 fixed, cannot-link per chunk | 0.64 / 0.29 | 0.77 / 0.80 |
+| **`max` + mutual (default)** | **0.94 / 0.91** | 0.88 / 0.91 |
+| `q95` + mutual | 0.90 / 0.91 | 0.97 / 0.91 |
+
+The default holds precision 1.00 on both videos under both embedders. `q95` is
+better on bge and makes wrong merges on OpenAI, and the default has to hold
+under whatever embedder a deployment runs. v0's genericness filter, tried as an
+outlier test on mean similarity, changed no result anywhere and was dropped.
+
+**A score that skips doubtful labels hides exactly the wrong merges.** The
+first real run scored precision 1.00 while merging a dark puffy coat and a
+cream coat into the woman in the gray top -- every one of those mentions was
+labelled unsure, so no pair of them was scored. `eval/entities.py` now counts
+links touching unsure mentions as `unchecked`, and `different` labels rule a
+mention out of a group. Still in the stored output, unscored: the dark-coat and
+cream-coat women linked to each other, and two women linked on "entering".
+`activity`'s `actor` field carries position and behaviour; the `people` shape's
+`clothing` would not.
+
+**The labels are tiny and were written by the builder**: 20 scored mentions on
+test1 and 9 on test2, read from the descriptions after seeing one run. test2 is
+the check test1 was not tuned on. A direction, not a result.
+
 ---
 
 ## Models and providers
@@ -1290,11 +1342,23 @@ alone, both intersecting, and a contradictory pair returning 0 rows. Lexical
 firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
-`shared.contracts.schemas --check` proves the dataclasses, the generated JSON Schema and
-the SQL still agree. The API serves **21 routes**; `docs/ROUTES.md` is the
+`shared.contracts.schemas --check` proves the dataclasses and the generated JSON
+Schema still agree. The API serves **21 routes**; `docs/ROUTES.md` is the
 reasoning and `/docs` the authority on shapes. The web client at `/app` drives
 every route a run or a question needs, generating each form from
 `/capabilities` rather than restating it.
+
+**The live deployment, as of 2026-09-15** -- facts about one database, not the
+code, and worth re-checking before trusting:
+
+- `install.sql` has not been re-run since it was trimmed and widened. Both
+  vector columns are still `vector(1536)` and `embeddings.timeline_fingerprint`
+  still exists; section 10 fixes both.
+- The publishable key in `.env` is refused with a 401 while the secret key
+  works, so every read that goes through `db.client(write=False)` -- the
+  `/db/*` routes, `video_embeddings`, the grid fallback in `retrieve` -- fails
+  there. The code has not changed; the key needs re-copying from Settings >
+  API. The "exact under both keys" result above predates it.
 
 ## Not built
 
@@ -1312,8 +1376,13 @@ every route a run or a question needs, generating each form from
   mock server's recording of the request, not against the real thing.
 - **An answering model in-process.** Local answers go through a server --
   Ollama, LM Studio, llama.cpp, vLLM. Nothing loads a VLM into this process.
-- **Supabase at any width, run.** `install.sql` drops the fixed width; nothing
-  has written a non-1536 vector to the live database yet.
+- **Supabase at any width, run.** `install.sql` drops the fixed width, but the
+  live database has not had it re-run: both vector columns are still
+  `vector(1536)`, so nothing but OpenAI's embedder can write there yet.
+- **Keeping answers when a describe call fails.** One failed call raises and
+  the run's other answers -- already paid for, and with concurrency more of
+  them in flight -- are discarded. Writing the successes before raising would
+  let a re-run pay only for the failures.
 - **A stemmed, properly weighted sparse half.** `indexes.tokenize` does not
   stem and the sparse vector sends raw counts where `Modifier.IDF` expects BM25
   weights. `eval/harness.py` can now grade the change; nothing has been
@@ -1321,9 +1390,10 @@ every route a run or a question needs, generating each form from
 - **Reranking, query expansion, fusion tuning.** All plausible; none measured.
 - **Live sources.** `Frame` carries no `gap_before`/`discontinuity` seams, so
   that is a retrofit through every stage rather than a field already there.
-- **Entity narratives.** Linking the same person or object across chunks, then
-  asking for one narrative per entity. The specialists already return one bound
-  object per entity, which is the input it needs; every aggregator reads chunks
-  as independent documents.
+- **Entity linking from pixels, and labels worth the name.** `entities` reads
+  descriptions only, so wording decides identity. `yolo` computes a CLIP
+  embedding per person crop and discards it; keeping crops, and asking the
+  describer to cite numbered boxes, would let appearance decide instead. The
+  labelled set is 29 scored mentions.
 - **Qdrant served mode, tested.** The `url=` path is written, never run against
   a server.
