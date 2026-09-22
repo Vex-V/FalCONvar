@@ -274,8 +274,9 @@ function renderParams() {
     field.append(label);
 
     const choices = choicesFor(p);
+    const kind = kindOf(p.type);
     let input;
-    if (p.type === "bool") {
+    if (kind === "bool") {
       input = el("select", { id });
       input.append(el("option", { value: "", textContent: `— default (${p.default})` }),
                    el("option", { value: "true", textContent: "true" }),
@@ -284,14 +285,14 @@ function renderParams() {
       input = el("select", { id });
       input.append(el("option", { value: "", textContent: "— default" }));
       for (const c of choices) input.append(el("option", { value: c, textContent: c }));
-    } else if (p.type === "int" || p.type === "float") {
-      input = el("input", { type: "number", id, step: p.type === "float" ? "any" : "1",
+    } else if (kind === "int" || kind === "float") {
+      input = el("input", { type: "number", id, step: kind === "float" ? "any" : "1",
                             placeholder: p.default === null ? "" : String(p.default) });
     } else {
       input = el("input", { type: "text", id,
                             placeholder: p.default === null ? "" : String(p.default) });
     }
-    input.dataset.kind = p.type;
+    input.dataset.kind = kind;
     input.dataset.name = p.name;
     if (PROVIDER_PARAMS.includes(p.name)) input.placeholder = (CAPS.defaults || {})[p.name] || "";
     field.append(input);
@@ -304,9 +305,70 @@ function renderParams() {
     if (PROVIDER_PARAMS.includes(p.name)) {
       field.append(el("p", { className: "note", textContent: providerNote(p.name) }));
     }
+    field.condition = p.when;
     box.append(field);
   }
   if (!params.length) box.append(el("p", { className: "note", textContent: "No parameters." }));
+  box.oninput = box.onchange = () => applyConditions(params);
+  applyConditions(params);
+}
+
+/* The published type is the annotation as written -- `Optional[float]`,
+ * `str | Sequence[str]` -- because `/capabilities` restates nothing about a
+ * component and the annotation is what the component takes. Picking a widget
+ * needs the *shape*, not the wording, so it is read here rather than matched
+ * exactly, which is what this used to do: every `Optional[...]` field fell
+ * through to a text box and was sent as a string, so `threshold` reached a
+ * sampler as "0.9" and raised on its range check, and `vocabulary` arrived as
+ * a string that `list()` turned into one entry per letter. A union takes its
+ * first member, which is why `str | Sequence[str]` stays one text box holding
+ * a spec the component parses itself. */
+function kindOf(type) {
+  let t = String(type || "").trim().replace(/^Optional\[(.*)\]$/, "$1");
+  t = t.split("|").map(s => s.trim()).filter(s => s && s !== "None")[0] || t;
+  if (/^(Sequence|list|List)\[/.test(t)) return "list";
+  return ["bool", "int", "float"].includes(t) ? t : "str";
+}
+
+/* A setting that only one policy, sampler or tier reads is shown only when
+ * that choice is made. The conditions come from /capabilities
+ * (`parameters.<component>[].when`), so this holds none of them: a blank field
+ * is read as its parameter's default, and a sampler spec by the names in it. */
+function currentValue(params, name) {
+  const input = document.querySelector(`#params [data-name="${name}"]`);
+  const raw = input ? input.value.trim() : "";
+  if (raw !== "") return input.dataset.kind === "bool" ? raw === "true" : raw;
+  const p = params.find(q => q.name === name);
+  return p ? p.default : null;
+}
+
+function samplerNames(spec) {
+  const list = Array.isArray(spec) ? spec.join(",") : String(spec || "");
+  return list.replace(/\[[^\]]*\]/g, "").split(",")
+    .map(s => s.split(":")[0].trim()).filter(Boolean);
+}
+
+function applies(params, when) {
+  if (!when) return true;
+  const value = currentValue(params, when.param);
+  if (when.names) return samplerNames(value).some(n => when.names.includes(n));
+  return when.in.includes(value);
+}
+
+function applyConditions(params) {
+  const hidden = [];
+  for (const field of document.querySelectorAll("#params .field")) {
+    if (!field.condition) continue;
+    field.hidden = !applies(params, field.condition);
+    if (field.hidden) hidden.push(field.querySelector("[data-name]").dataset.name);
+  }
+  const why = [...new Set(params.filter(p => p.when && hidden.includes(p.name))
+    .map(p => {
+      const value = currentValue(params, p.when.param);
+      return value === null ? `no ${p.when.param} yet` : `${p.when.param} = ${JSON.stringify(value)}`;
+    }))];
+  $("#params-note").textContent = hidden.length
+    ? `Hidden (${why.join("; ")}): ${hidden.join(", ")}.` : "";
 }
 
 /* A blank field is omitted, never sent as null: the component's own default
@@ -314,14 +376,17 @@ function renderParams() {
 function collectParams() {
   const out = {};
   for (const input of document.querySelectorAll("#params [data-name]")) {
+    if (input.closest(".field").hidden) continue;      // a value that does not apply is not sent
     const raw = input.value.trim();
     if (raw === "") continue;
     const kind = input.dataset.kind;
     if (kind === "bool") out[input.dataset.name] = raw === "true";
     else if (kind === "int") out[input.dataset.name] = parseInt(raw, 10);
     else if (kind === "float") out[input.dataset.name] = parseFloat(raw);
-    else if (input.dataset.name === "samplers")
-      out.samplers = raw.split(",").map(s => s.trim()).filter(Boolean);
+    // Every sequence, not `samplers` alone: `vocabulary` and `languages` are
+    // the same shape and were reaching the component as one long string.
+    else if (kind === "list")
+      out[input.dataset.name] = raw.split(",").map(s => s.trim()).filter(Boolean);
     else out[input.dataset.name] = raw;
   }
   return out;
@@ -453,6 +518,7 @@ function renderAggregatePage() {
       const box = el("input", { type: "checkbox", checked: PICKS.chosen.has(name) });
       box.onchange = () => {
         if (box.checked) PICKS.chosen.add(name); else PICKS.chosen.delete(name);
+        applyAggregateConditions();
       };
       let reads;
       if (a.reads === null) {
@@ -493,6 +559,30 @@ function renderAggregatePage() {
   $("#a-llm").placeholder = (CAPS.defaults || {}).llm || "";
   $("#a-embedder").placeholder = (CAPS.defaults || {}).embedder || "";
   $("#a-providers").textContent = `${providerNote("llm")}\n${providerNote("embedder")}`;
+  applyAggregateConditions();
+}
+
+/* The run's tier is the dearest one ticked. */
+function pickedTier() {
+  const tiers = [...PICKS.chosen].filter(n => (CAPS.aggregators || {})[n])
+    .map(n => CAPS.aggregators[n].tier);
+  return tiers.sort((a, b) => tierRank(b) - tierRank(a))[0] || null;
+}
+
+/* llm, embedder and index mean nothing below the llm tier; the condition is
+ * the one /capabilities publishes for the aggregate component's parameters. */
+function applyAggregateConditions() {
+  const when = Object.fromEntries(((CAPS.parameters || {}).aggregate || [])
+    .map(p => [p.name, p.when]));
+  const tier = pickedTier();
+  const hidden = [];
+  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"], ["#a-index", "index"]]) {
+    const c = when[key];
+    const off = !!c && c.param === "tier" && !c.in.includes(tier);
+    $(id).closest(".field").hidden = off;
+    if (off) hidden.push(key);
+  }
+  $("#a-providers").hidden = hidden.includes("llm") && hidden.includes("embedder");
 }
 
 $("#a-run").onclick = async () => {
@@ -501,8 +591,7 @@ $("#a-run").onclick = async () => {
   const only = [...PICKS.chosen].filter(n => (CAPS.aggregators || {})[n]);
   if (!only.length) { state.replaceChildren(chip("tick at least one", "bad")); return; }
 
-  const tier = only.map(n => CAPS.aggregators[n].tier)
-    .sort((a, b) => tierRank(b) - tierRank(a))[0];
+  const tier = pickedTier();
   const params = { tier, only, sink: $("#a-sink").value };
   const inputs = {};
   for (const name of only) {
@@ -511,6 +600,7 @@ $("#a-run").onclick = async () => {
   }
   if (Object.keys(inputs).length) params.inputs = inputs;
   for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"], ["#a-index", "index"]]) {
+    if ($(id).closest(".field").hidden) continue;       // does not apply to this tier
     const v = $(id).value.trim();
     if (v) params[key] = v;
   }

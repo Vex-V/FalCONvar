@@ -1,0 +1,17 @@
+{
+  "cashier": ["c0/yolo/people/8", "c0/clip:yolo/people/1", "c1/yolo/people/0", "c1/clip:yolo/people/1", "c2/yolo/people/2", "c2/clip:yolo/people/7", "c3/yolo/people/2", "c3/clip:yolo/people/3"],
+  "bald_man": ["c0/yolo/people/7", "c0/clip:yolo/people/0", "c1/yolo/people/1", "c1/clip:yolo/people/0", "c2/yolo/people/0", "c2/clip:yolo/people/0", "c3/yolo/people/1", "c3/clip:yolo/people/1"],
+  "blue_jacket": ["c0/yolo/people/0", "c0/clip:yolo/people/2", "c1/yolo/people/2", "c1/clip:yolo/people/2", "c2/yolo/people/1", "c2/clip:yolo/people/1", "c3/yolo/people/0", "c3/clip:yolo/people/0"],
+  "gray_sweater": ["c0/clip:yolo/people/3", "c1/yolo/people/3", "c1/clip:yolo/people/4", "c2/yolo/people/3", "c2/clip:yolo/people/2"],
+  "blond_child": ["c0/clip:yolo/people/4", "c1/yolo/people/4", "c1/clip:yolo/people/5"],
+  "cap_man": ["c1/yolo/people/7", "c3/yolo/people/7", "c3/clip:yolo/people/2"],
+  "white_hood": ["c0/yolo/people/4", "c0/clip:yolo/people/8", "c1/yolo/people/10", "c1/clip:yolo/people/13", "c2/yolo/people/6", "c2/clip:yolo/people/5", "c3/yolo/people/5", "c3/clip:yolo/people/5"],
+  "cream_coat": ["c0/clip:yolo/people/10", "c2/yolo/people/4", "c2/clip:yolo/people/9", "c3/yolo/people/4", "c3/clip:yolo/people/6"],
+  "bow_girl": ["c0/yolo/people/3", "c0/clip:yolo/people/7"],
+  "red_girl": ["c0/yolo/people/5", "c2/yolo/people/7"],
+  "blue_scarf": ["c1/yolo/people/6", "c1/clip:yolo/people/7"],
+  "sweater_man": ["c0/yolo/people/1", "c0/clip:yolo/people/9"],
+  "puffer_woman": ["c0/yolo/people/2", "c0/clip:yolo/people/6"],
+  "box_man": ["c0/yolo/people/6", "c0/clip:yolo/people/11"],
+  "backpack_woman": ["c3/yolo/people/6", "c3/clip:yolo/people/7"]
+}
