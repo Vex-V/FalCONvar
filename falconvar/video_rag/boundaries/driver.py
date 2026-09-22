@@ -38,6 +38,24 @@ def load(video_id: str) -> Timeline:
     return Timeline.from_dict(sinks.read_json(paths.artifact(video_id, "timeline")))
 
 
+#: Policies whose evidence is a scene pass, read off POLICIES so a picture
+#: policy added later gets the scene settings without editing this.
+_PICTURE = tuple(p for p, needs in POLICIES.items() if needs == "video")
+
+#: setting -> (the policies that read it, its default).
+#:
+#: Keyed by policy, not by precursor: `speech.detect` takes `silence_s` but
+#: only `vad` reads it -- `speaker_cuts` has no such argument -- so grouping
+#: both speech policies together would let `--policy speaker --silence 2.0`
+#: through to be ignored, which is the failure this table exists to stop.
+EVIDENCE_SETTINGS: dict[str, tuple[tuple[str, ...], object]] = {
+    "stride": (_PICTURE, scenes.DEFAULT_STRIDE),
+    "threshold": (_PICTURE, scenes.DEFAULT_THRESHOLD),
+    "detect_width": (_PICTURE, scenes.DETECT_WIDTH),
+    "silence_s": (("vad",), speech.DEFAULT_SILENCE_S),
+}
+
+
 def evidence(video_id: str, policy: str,
              stride: int = scenes.DEFAULT_STRIDE,
              threshold: float = scenes.DEFAULT_THRESHOLD,
@@ -53,6 +71,26 @@ def evidence(video_id: str, policy: str,
     if policy not in POLICIES:
         raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
     needs = POLICIES[policy]
+
+    # A setting this policy's precursor cannot read is refused, not dropped.
+    # `stride` belongs to the scene pass and `silence_s` to the speech one, and
+    # a signature cannot say so -- it was published beside `policy: scene`,
+    # where it is silently ignored, which is what `EVIDENCE_SETTINGS` replaces.
+    # Compared against the default rather than a sentinel, so the published
+    # defaults stay discoverable; passing one unchanged is a no-op either way.
+    given = {"stride": stride, "threshold": threshold,
+             "detect_width": detect_width, "silence_s": silence_s}
+    unreachable = sorted(
+        name for name, (reads, default) in EVIDENCE_SETTINGS.items()
+        if given[name] != default and policy not in reads)
+    if unreachable:
+        detail = "; ".join(
+            f"{n} is read by {', '.join(EVIDENCE_SETTINGS[n][0]) or 'no policy'}"
+            for n in unreachable)
+        raise ValueError(
+            f"policy {policy!r} does not read {', '.join(unreachable)} -- "
+            f"{detail}")
+
     if needs is None:
         return None
 
@@ -119,10 +157,10 @@ def _cuts_for(video_id: str, policy: str) -> tuple[Optional[list[float]], str,
     return list(cuts.cuts), needs, cuts.params
 
 
-def run(video_id: str, policy: str = "uniform",
-        chunk_s: float = 20.0, min_s: float = 5.0,
-        max_s: Optional[float] = None,
-        sink: str | Sequence[str] = "file") -> Produced:
+def boundaries(video_id: str, policy: str = "uniform",
+               chunk_s: float = 20.0, min_s: float = 5.0,
+               max_s: Optional[float] = None,
+               sink: str | Sequence[str] = "file") -> Produced:
     """Decide the grid and write it. The one place boundaries are chosen."""
     if policy not in POLICIES:
         raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
@@ -171,6 +209,12 @@ def run(video_id: str, policy: str = "uniform",
     )
 
 
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: See `media/driver.py`.
+run = boundaries
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     import argparse
     import json
@@ -191,6 +235,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "cheaper and needs a HIGHER --threshold")
     ap.add_argument("--threshold", type=float, default=scenes.DEFAULT_THRESHOLD,
                     help="scene: content difference that opens a scene")
+    ap.add_argument("--detect-width", type=int, default=scenes.DETECT_WIDTH,
+                    dest="detect_width",
+                    help="scene: width the frame is scaled to for detection "
+                         "(default 320). A cut is a global property of the "
+                         "frame, so full resolution buys only time")
     ap.add_argument("--silence", type=float, default=speech.DEFAULT_SILENCE_S,
                     help="vad: a gap this long or longer is a boundary")
     ap.add_argument("--retune", type=float, default=None, metavar="VALUE",
@@ -225,7 +274,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             produced = retune(args.video_id, args.retune, args.sink)
         elif args.evidence:
             produced = evidence(args.video_id, args.policy, args.stride,
-                                args.threshold, scenes.DETECT_WIDTH,
+                                args.threshold, args.detect_width,
                                 args.silence, args.sink)
             if produced is None:
                 print(f"{args.video_id}: policy 'uniform' needs no evidence "

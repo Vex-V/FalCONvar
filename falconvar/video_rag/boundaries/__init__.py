@@ -16,8 +16,14 @@ flips between policies.
 
 from __future__ import annotations
 
-from .driver import evidence, load, load_cuts, main, retune, run
+#: `run` is the only public spelling. The function in `driver.py` is named for
+#: its component so a traceback frame says which one failed -- eight frames
+#: called `run` carry no information -- but exporting both names would give the
+#: library two ways to say the same thing, and `load`, `build` and `available`
+#: collide across components anyway, so a bare-name style needs aliases the
+#: moment a caller wants a second thing from the same module.
+from .driver import EVIDENCE_SETTINGS, evidence, load, load_cuts, main, retune, run
 from .grid import POLICIES, build, enforce, from_cuts, merge_tail, uniform
 
-__all__ = ["POLICIES", "build", "enforce", "evidence", "from_cuts", "load",
+__all__ = ["EVIDENCE_SETTINGS", "POLICIES", "build", "enforce", "evidence", "from_cuts", "load",
            "load_cuts", "main", "merge_tail", "retune", "run", "uniform"]

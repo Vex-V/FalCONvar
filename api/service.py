@@ -29,7 +29,11 @@ from falconvar.shared.contracts.documents import Produced
 from falconvar.video_rag.video import samplers as samplers_mod
 
 #: Where an upload is parked until a run reads it.
-UPLOADS = paths.UPLOADS
+def uploads() -> Path:
+    """Resolved per call, not captured at import, so `paths.configure()`
+    still moves it."""
+    return paths.data_root() / "uploads"
+
 
 
 @functools.wraps(boundaries.evidence)
@@ -75,6 +79,78 @@ def register(source: Path, video_id: str,
     return media.run(source, video_id, sink)
 
 
+def conditions() -> dict[str, dict[str, dict[str, Any]]]:
+    """When a parameter means anything, as `component -> name -> condition`.
+
+    A signature says what a component *accepts*; it cannot say that `stride`
+    is read only by a scene pass, so a form built from signatures alone offered
+    `silence_s` beside `policy: scene`, where it is silently ignored. Those
+    facts live here, and the values come from the registries wherever one
+    exists, so a policy or sampler added to the package lands on the right
+    side without editing this.
+
+    A condition names another parameter of the same component and either the
+    values under which this one applies (`in`), or -- for a sampler spec -- the
+    sampler names any one of which it takes (`names`). A blank field is read as
+    that parameter's default. No entry: always applies.
+    """
+    from falconvar.video_rag.audio import models as audio_models
+    from falconvar.video_rag.video import samplers as samplers_mod
+
+    policies = boundaries.POLICIES
+    scene = [p for p, needs in policies.items() if needs == "video"]
+    content = [p for p, needs in policies.items() if needs is not None]
+    model_transcribers = [t for t in audio_models.TRANSCRIBERS if t != "stub"]
+    model_diarizers = [d for d in audio_models.DIARIZERS if d != "none"]
+    speech = {"param": "transcriber", "in": model_transcribers}
+    voices = {"param": "diarizer", "in": model_diarizers}
+    llm = {"param": "tier", "in": ["llm"]}
+    return {
+        "audio": {
+            # The stub takes none of these: it loads nothing, and `audio.run`
+            # refuses a setting no chosen backend accepts rather than ignoring
+            # it -- so offering one here would build a form that 422s.
+            "model": speech,
+            "language": speech,
+            "vad_filter": speech,
+            "compute_type": speech,
+            "diarizer_model": voices,
+            "exclusive": voices,
+            # `device` is deliberately unconditioned: it is a fact about the
+            # machine, both real backends take it, and a run with one stub half
+            # still has a real other half to place.
+        },
+        # Derived from the table the component refuses by, never restated:
+        # a form that hid a different set from the one `evidence` enforces
+        # would offer a field whose value is then rejected.
+        "boundaries.evidence": {
+            **{name: {"param": "policy", "in": list(reads)}
+               for name, (reads, _) in boundaries.EVIDENCE_SETTINGS.items()},
+            "sink": {"param": "policy", "in": content},       # uniform writes nothing
+        },
+        "boundaries": {
+            # uniform is chunk_s alone: `grid.build` never reads the guards.
+            "min_s": {"param": "policy", "in": content},
+            "max_s": {"param": "policy", "in": content},
+        },
+        # Likewise derived: `SAMPLER_SETTINGS` is what `build_samplers`
+        # refuses by, so the field a form offers and the value the component
+        # accepts cannot disagree. A detector's own settings land on the one
+        # sampler that builds it, not on every sampler `threshold` reaches.
+        "video": {
+            **{name: {"param": "sampler", "names": list(readers)}
+               for name, readers in video.SAMPLER_SETTINGS.items()},
+            "store_scope": {"param": "frame_store", "in": [True]},
+            "prune_store": {"param": "frame_store", "in": [True]},
+        },
+        "aggregate": {
+            # Every model-backed aggregator -- summary, the prompts, the link
+            # profiles -- is llm tier, and the video vector is the summary's.
+            "llm": llm, "embedder": llm, "index": llm,
+        },
+    }
+
+
 def parameters() -> dict[str, Any]:
     """Every component's tunable parameters, read off its signature.
 
@@ -88,6 +164,7 @@ def parameters() -> dict[str, Any]:
     """
     import inspect
 
+    when = conditions()
     out: dict[str, Any] = {}
     for name, fn in COMPONENTS.items():
         fields = []
@@ -95,6 +172,7 @@ def parameters() -> dict[str, Any]:
             if arg in ("video_id", "self") or arg.startswith("*"):
                 continue
             fields.append({
+                "when": when.get(name, {}).get(arg),
                 "name": arg,
                 "type": (param.annotation if isinstance(param.annotation, str)
                          else getattr(param.annotation, "__name__", "any")),
@@ -464,7 +542,7 @@ def definition_remove(section: str, name: str) -> None:
     definitions.remove(section, name)
 
 
-__all__ = ["ARTIFACTS", "COMPONENTS", "INPUT_GRAMMAR", "UPLOADS", "artifact",
+__all__ = ["ARTIFACTS", "COMPONENTS", "INPUT_GRAMMAR", "artifact", "uploads",
            "available", "definition_add", "definition_list", "definition_remove",
            "parameters", "register",
            "exports", "frame_path", "prompt_add", "prompt_get", "prompt_list",

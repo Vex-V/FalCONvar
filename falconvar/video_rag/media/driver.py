@@ -16,24 +16,31 @@ from ...shared.contracts.documents import Media, Produced
 from .split import UnusableMedia, split
 
 
-def run(path: str | Path, video_id: Optional[str] = None,
-        sink: str | Sequence[str] = "file") -> Produced:
+def media(path: str | Path, video_id: Optional[str] = None,
+          sink: str | Sequence[str] = "file") -> Produced:
     """Describe the file, write `media.json`, report what was written."""
-    media = split(path, video_id)
-    written = sinks.write(media.video_id, "media", media.as_dict(), sink)
+    described = split(path, video_id)
+    written = sinks.write(described.video_id, "media", described.as_dict(), sink)
     return Produced(
-        video_id=media.video_id,
+        video_id=described.video_id,
         component="media",
         backend=",".join(written),
         artifacts={"media": written.get("file", "")},
-        stats={"has_video": media.has_video, "has_audio": media.has_audio,
-               "duration_s": media.duration_s,
-               "container": media.container_format},
+        stats={"has_video": described.has_video, "has_audio": described.has_audio,
+               "duration_s": described.duration_s,
+               "container": described.container_format},
         # What this file does NOT carry. A later component reads this rather
         # than opening the file again to find out.
-        skipped=([] if media.has_video else ["video"])
-                + ([] if media.has_audio else ["audio"]),
+        skipped=([] if described.has_video else ["video"])
+                + ([] if described.has_audio else ["audio"]),
     )
+
+
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: Named for the component, so a traceback frame says which one failed;
+#: eight functions called `run` all read the same in a stack.
+run = media
 
 
 def load(video_id: str) -> Media:

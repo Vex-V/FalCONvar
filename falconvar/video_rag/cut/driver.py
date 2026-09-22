@@ -12,7 +12,7 @@ from ...shared.contracts.documents import Produced, Transcript
 from .cutter import stats_for, to_chunks
 
 
-def run(video_id: str, sink: str | Sequence[str] = "file") -> Produced:
+def cut(video_id: str, sink: str | Sequence[str] = "file") -> Produced:
     """Apply the grid. Costs no model and can be repeated at will."""
     raw = load_raw(video_id)
     timeline = load_timeline(video_id)
@@ -32,6 +32,12 @@ def run(video_id: str, sink: str | Sequence[str] = "file") -> Produced:
         artifacts={"transcript": written.get("file", "")},
         stats={**stats, "timeline_fingerprint": transcript.timeline_fingerprint},
     )
+
+
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: See `media/driver.py`.
+run = cut
 
 
 def load(video_id: str) -> Transcript:

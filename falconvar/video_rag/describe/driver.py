@@ -13,15 +13,25 @@ from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
 from .frames import FrameSource, StoreUnavailable
 
-def run(video_id: str, describer: Optional[str] = None,
-        samplers: Optional[Sequence[str]] = None,
-        limit: Optional[int] = None,
-        resume: bool = True,
-        sink: str | Sequence[str] = "file") -> Produced:
+def describe(video_id: str, describer: Optional[str] = None,
+             samplers: Optional[Sequence[str]] = None,
+             limit: Optional[int] = None,
+             resume: bool = True,
+             max_output_tokens: Optional[int] = None,
+             sink: str | Sequence[str] = "file") -> Produced:
     """One call per (chunk, sampler). The expensive stage.
 
     `describer` is a provider or `provider/model`; None resolves through
     `shared.models.providers` -- FALCONVAR_DESCRIBER, then openai.
+
+    `max_output_tokens` is the ceiling on one answer, and None leaves the
+    backend's 2000. It is a real setting rather than a safety margin: the
+    `people` schema truncated mid-string at 700 and came back as unparseable
+    JSON, and a wider custom shape can do the same at 2000. **It is part of
+    the resume key** -- `ModelDescriber.config()` reports it, so changing it
+    re-describes everything already stored, at cost. That is correct: a
+    truncated answer and a whole one are different answers, and a stored one
+    cannot say which it was. A backend that loads no model (`stub`) ignores it.
     """
     env.load()
     manifest = load_manifest(video_id)
@@ -46,12 +56,13 @@ def run(video_id: str, describer: Optional[str] = None,
     if resume and paths.exists(video_id, "descriptions"):
         existing = load(video_id)
 
-    built = base.build(describer)
-    from .reader import describe
+    built = base.build(describer, **({} if max_output_tokens is None
+                                     else {"max_output_tokens": max_output_tokens}))
+    from .reader import answer
 
     with FrameSource(video_id, manifest) as source:
-        document = describe(manifest, timeline, built, source,
-                            samplers, existing, limit)
+        document = answer(manifest, timeline, built, source,
+                          samplers, existing, limit)
 
     written = sinks.write(video_id, "descriptions", document.as_dict(), sink)
     return Produced(
@@ -61,6 +72,12 @@ def run(video_id: str, describer: Optional[str] = None,
                "model": (document.model.get("params") or {}).get("model", built.name),
                **_record_prompts(document.model.get("prompts") or {}, sink)},
     )
+
+
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: See `media/driver.py`.
+run = describe
 
 
 def _record_prompts(versions: dict[str, str],
@@ -125,6 +142,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=None,
                     help="stop after N calls. Costs money, so this exists")
     ap.add_argument("--no-resume", action="store_true")
+    ap.add_argument("--max-tokens", type=int, default=None, dest="max_output_tokens",
+                    help="ceiling on one answer (default 2000). Part of the "
+                         "resume key, so changing it re-describes everything")
     ap.add_argument("--sink", default="file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
@@ -133,7 +153,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if args.sampler else None)
     try:
         produced = run(args.video_id, args.describer, samplers,
-                       args.limit, not args.no_resume, args.sink)
+                       args.limit, not args.no_resume,
+                       args.max_output_tokens, args.sink)
     except (KeyError, ValueError, FileNotFoundError, StoreUnavailable,
             base.DescriberUnavailable, sinks.UnknownBackend) as exc:
         print(f"error: {exc}")

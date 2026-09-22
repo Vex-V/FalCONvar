@@ -125,8 +125,8 @@ async def upload(
     it is a container probe, so it is answered rather than queued.
     """
     vid = safe_id(video_id or file.filename or "video")
-    service.UPLOADS.mkdir(parents=True, exist_ok=True)
-    target = service.UPLOADS / f"{vid}{Path(file.filename or '').suffix or '.mp4'}"
+    service.uploads().mkdir(parents=True, exist_ok=True)
+    target = service.uploads() / f"{vid}{Path(file.filename or '').suffix or '.mp4'}"
     with target.open("wb") as out:
         shutil.copyfileobj(file.file, out)
 
@@ -259,7 +259,7 @@ def add_prompt(request: PromptRequest) -> dict[str, Any]:
                                   shape=request.shape, about=request.about,
                                   fields=request.fields,
                                   summary=request.summary)
-    except library.Protected as exc:
+    except library.ProtectedPrompt as exc:
         # 409, not 422: the request is well-formed and the name exists. There
         # is nothing to correct except which name it asks for.
         raise HTTPException(409, {"error": str(exc)}) from None
@@ -277,7 +277,7 @@ def delete_prompt(name: str) -> None:
     """
     try:
         service.prompt_remove(name)
-    except library.Protected as exc:
+    except library.ProtectedPrompt as exc:
         raise HTTPException(409, {"error": str(exc)}) from None
     except library.PromptError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None
@@ -335,7 +335,7 @@ def list_definitions() -> dict[str, Any]:
 
 def _definition_error(exc: Exception) -> HTTPException:
     from falconvar.aggregates import definitions
-    if isinstance(exc, definitions.Protected):
+    if isinstance(exc, definitions.ProtectedDefinition):
         return HTTPException(409, {"error": str(exc)})
     return HTTPException(422, {"problems": getattr(exc, "problems", [str(exc)])})
 
@@ -357,7 +357,7 @@ def delete_aggregate_prompt(name: str) -> None:
     from falconvar.aggregates import definitions
     try:
         service.definition_remove("prompts", name)
-    except definitions.Protected as exc:
+    except definitions.ProtectedDefinition as exc:
         raise HTTPException(409, {"error": str(exc)}) from None
     except definitions.DefinitionError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None
@@ -380,7 +380,7 @@ def delete_link_profile(name: str) -> None:
     from falconvar.aggregates import definitions
     try:
         service.definition_remove("profiles", name)
-    except definitions.Protected as exc:
+    except definitions.ProtectedDefinition as exc:
         raise HTTPException(409, {"error": str(exc)}) from None
     except definitions.DefinitionError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None

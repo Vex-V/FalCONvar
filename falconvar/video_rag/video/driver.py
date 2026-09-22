@@ -67,11 +67,27 @@ def parse_spec(spec: str) -> tuple[str, list[str]]:
     return name, questions
 
 
+#: setting -> the samplers that read it. Everything absent from this table
+#: (`per_second`, `min_interval_s`, `max_per_chunk`) is enforced in the base
+#: class and applies to every sampler.
+SAMPLER_SETTINGS: dict[str, tuple[str, ...]] = {
+    "every_n": ("uniform",),
+    # Every sampler that decides by change. `uniform` keeps a frame on a
+    # stride, so there is nothing for a threshold to compare.
+    "threshold": ("clip", "yolo", "objects", "text"),
+    "vocabulary": ("objects",),
+    "confidence": ("objects",),
+    "languages": ("text",),
+}
+
+
 def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
                    min_interval_s: float = 0.0,
                    max_per_chunk: Optional[int] = None,
                    threshold: Optional[float] = None,
                    vocabulary: Optional[Sequence[str]] = None,
+                   confidence: Optional[float] = None,
+                   languages: Optional[Sequence[str]] = None,
                    questions: Optional[Sequence[str]] = None
                    ) -> list[samplers_mod.Sampler]:
     """`["yolo", "clip:[text,scene]"]` -> sampler objects.
@@ -99,10 +115,24 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
     imported: ingest does not depend on describe, and a sampler records a
     prompt as an opaque string. The caller that knows the question registry
     supplies it; without one, any name is accepted and validated later.
+
+    ``confidence`` and ``languages`` are settings of a *detector*, which is why
+    they are separate arguments rather than more of ``threshold``.
+    ``threshold`` is how much the frame must have changed to keep it;
+    ``confidence`` is how sure the detector must be that a box is a box at all,
+    and the two are different quantities on different scales. ``languages`` is
+    what EasyOCR is asked to read -- without it the text sampler is
+    English-only with no way to say otherwise.
     """
+    given = {"every_n": every_n, "threshold": threshold,
+             "vocabulary": vocabulary, "confidence": confidence,
+             "languages": languages}
+
     rate = {"min_interval_s": min_interval_s, "max_per_chunk": max_per_chunk}
     tuned = {} if threshold is None else {"threshold": threshold}
     stride = {} if every_n is None else {"every_n": every_n}
+    sure = {} if confidence is None else {"confidence": confidence}
+    reads = {} if languages is None else {"languages": list(languages)}
 
     grouped: dict[str, list[str]] = {}
     for spec in [s.strip() for s in specs if s.strip()]:
@@ -117,6 +147,23 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
             if question not in merged:
                 merged.append(question)
 
+    # A setting no chosen sampler reads is refused, not dropped. Dropped, the
+    # run reports success having sampled under settings nobody asked for --
+    # `--sampler uniform --confidence 0.55` built a sampler with no config at
+    # all and said nothing. This is the rule `audio.run` already applies to its
+    # two backends, and the table a form's `when` should be derived from rather
+    # than restated beside it.
+    unreachable = sorted(s for s, value in given.items()
+                         if value is not None
+                         and not set(SAMPLER_SETTINGS[s]) & set(grouped))
+    if unreachable:
+        detail = "; ".join(f"{s} is read by "
+                           f"{', '.join(SAMPLER_SETTINGS[s])}"
+                           for s in unreachable)
+        raise ValueError(
+            f"no chosen sampler reads {', '.join(unreachable)} "
+            f"(chosen: {', '.join(sorted(grouped))}) -- {detail}")
+
     built: list[samplers_mod.Sampler] = []
     for name, asked in grouped.items():
         ask = {"prompts": asked} if asked else {}
@@ -125,7 +172,9 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
         elif name == "objects":
             built.append(samplers_mod.build(name, vocabulary=list(vocabulary)
                                             if vocabulary else None,
-                                            **ask, **tuned, **rate))
+                                            **ask, **tuned, **sure, **rate))
+        elif name == "text":
+            built.append(samplers_mod.build(name, **ask, **tuned, **reads, **rate))
         else:
             # Thresholds are left unset unless given: the useful value differs
             # by an order of magnitude between samplers because they compare
@@ -134,23 +183,26 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
     return built
 
 
-def run(video_id: str, sampler: str | Sequence[str] = "uniform",
-        per_second: float = 1.0,
-        every_n: Optional[int] = None,
-        min_interval_s: float = 0.0,
-        max_per_chunk: Optional[int] = None,
-        threshold: Optional[float] = None,
-        vocabulary: Optional[Sequence[str]] = None,
-        frame_store: bool = True,
-        store_scope: str = "sampled",
-        prune_store: bool = False,
-        sink: str | Sequence[str] = "file") -> Produced:
+def video(video_id: str, sampler: str | Sequence[str] = "uniform",
+          per_second: float = 1.0,
+          every_n: Optional[int] = None,
+          min_interval_s: float = 0.0,
+          max_per_chunk: Optional[int] = None,
+          threshold: Optional[float] = None,
+          vocabulary: Optional[Sequence[str]] = None,
+          confidence: Optional[float] = None,
+          languages: Optional[Sequence[str]] = None,
+          frame_store: bool = True,
+          store_scope: str = "sampled",
+          prune_store: bool = False,
+          sink: str | Sequence[str] = "file") -> Produced:
     """One decode pass over the picture, onto a grid decided elsewhere."""
     media = load_media(video_id)
     timeline = load_timeline(video_id)
 
     built = build_samplers(split_specs(sampler), every_n, min_interval_s,
-                           max_per_chunk, threshold, vocabulary)
+                           max_per_chunk, threshold, vocabulary, confidence,
+                           languages)
 
     store = (FrameStore(paths.artifact(video_id, "store"))
              if frame_store else None)
@@ -180,6 +232,12 @@ def run(video_id: str, sampler: str | Sequence[str] = "uniform",
     )
 
 
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: See `media/driver.py`.
+run = video
+
+
 def load(video_id: str) -> Manifest:
     return Manifest.from_dict(sinks.read_json(paths.artifact(video_id, "manifest")))
 
@@ -205,6 +263,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="change samplers: per-sampler default if unset")
     ap.add_argument("--vocabulary", default=None,
                     help="objects: comma-separated class names")
+    ap.add_argument("--confidence", type=float, default=None,
+                    help="objects: how sure the detector must be of a box "
+                         "(default 0.3). Not --threshold, which is how much "
+                         "the frame must have changed")
+    ap.add_argument("--languages", default=None,
+                    help="text: comma-separated EasyOCR codes (default en)")
     ap.add_argument("--no-frame-store", action="store_true")
     ap.add_argument("--prune-store", action="store_true",
                     help="delete stored frames this manifest does not name. "
@@ -218,10 +282,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     vocab = ([v.strip() for v in args.vocabulary.split(",") if v.strip()]
              if args.vocabulary else None)
+    langs = ([l.strip() for l in args.languages.split(",") if l.strip()]
+             if args.languages else None)
     try:
         produced = run(args.video_id, args.sampler, args.per_second, args.every_n,
                        args.min_interval, args.max_per_chunk, args.threshold,
-                       vocab, not args.no_frame_store, args.store_scope,
+                       vocab, args.confidence, langs,
+                       not args.no_frame_store, args.store_scope,
                        args.prune_store, args.sink)
     except (KeyError, ValueError, FileNotFoundError, UnreadableSource,
             sinks.UnknownBackend) as exc:

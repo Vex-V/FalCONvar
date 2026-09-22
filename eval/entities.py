@@ -102,7 +102,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from falconvar.aggregates.definitions import Selection
     from falconvar.aggregates.driver import context_for
     from falconvar.aggregates.inputs import Source, parse
-    from falconvar.aggregates.linking import RULES, link, mentions_of
+    from falconvar.aggregates.entities.linking import RULES, link, mentions_of
     from falconvar.video_rag.embed import embedders
     from falconvar.shared import env
 

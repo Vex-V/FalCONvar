@@ -87,7 +87,7 @@ def _resumable(existing: Optional[Descriptions], manifest: Manifest,
             and stored.get(q) is not None and stored.get(q) == current.get(q)}
 
 
-def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
+def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
              source: FrameSource,
              samplers: Optional[Sequence[str]] = None,
              existing: Optional[Descriptions] = None,
@@ -202,4 +202,4 @@ def describe(manifest: Manifest, timeline: Timeline, describer: Describer,
     )
 
 
-__all__ = ["describe"]
+__all__ = ["answer"]

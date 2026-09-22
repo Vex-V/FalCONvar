@@ -15,10 +15,10 @@ and `boundaries.POLICIES` is that table:
 which modalities, what to look at, who answers, where output goes. Per-stage
 tuning lives on each component's own CLI.
 
-The bottom of the file is what `aggregates` may ask of this engine: a video's
-documents, the vocabulary's identity declarations, an embedder, and a place to
-put a whole-video summary vector. `aggregates` reaches video_rag through here
-and never through a component.
+The bottom of the file is the whole of what `aggregates` may ask of this tier:
+`vocabulary()`, so an input naming a question or a sampler can be checked
+before a job is queued. It was seven functions; the other six were shared
+concerns misfiled here and now live in `shared/`, which both tiers import.
 """
 
 from __future__ import annotations
@@ -225,21 +225,57 @@ def process(options: Options,
 
 # --------------------------------------------- what aggregates may ask of this
 
-def documents(video_id: str) -> dict[str, Any]:
-    """Every document this video has. The grid is required; the rest are None
-    where the stage that writes them never ran."""
-    found: dict[str, Any] = {"timeline": boundaries.load(video_id),
-                             "manifest": None, "descriptions": None,
-                             "transcript": None}
-    if paths.exists(video_id, "manifest"):
-        found["manifest"] = video.load(video_id)
-    if paths.exists(video_id, "descriptions"):
-        found["descriptions"] = describe.load(video_id)
-    if paths.exists(video_id, "transcript"):
-        found["transcript"] = cut.load(video_id)
-    return found
+def video_rag(source: str | Path,
+              video_id: Optional[str] = None,
+              policy: str = "uniform",
+              use_video: bool = True,
+              use_audio: bool = True,
+              sampler: str = "uniform",
+              describer: Optional[str] = None,
+              embedder: Optional[str] = None,
+              sink: str = "file",
+              index: str = DEFAULT_INDEX,
+              on_step: Optional[Callable[[str, Optional[Produced]], None]] = None
+              ) -> Run:
+    """The whole extraction, as keyword arguments. `process` with an `Options`.
+
+    The library front door. `Options` is the validated record a form or an API
+    posts and `process` is what runs it; this is the spelling a caller writes
+    by hand, so the arguments are named and checked at the call rather than
+    assembled into a dataclass first.
+
+    Per-stage tuning is deliberately absent -- a scene threshold, a sampler's
+    `confidence`, an audio `compute_type`. Those live on the component that
+    owns them, and a caller who wants them drives the components directly;
+    every one is `run(video_id, ...)`, in the order this function uses.
+    """
+    return process(Options(
+        source=Path(source), video_id=video_id, policy=policy,
+        use_video=use_video, use_audio=use_audio, sampler=sampler,
+        describer=describer, embedder=embedder, sink=sink, index=index,
+    ), on_step)
 
 
+# ------------------------------------------- the one thing aggregates asks
+#
+# This used to be seven functions. Six of them were shared concerns misfiled
+# here because video_rag was written first -- the field builder, unit
+# rendering, the embedder registry, the vector writer -- and loading a
+# video's documents, which is `shared.paths` plus a dataclass and needs no
+# help from this tier. They now live in `shared/`, which both tiers already
+# import, and `aggregates` reaches none of this module for them.
+#
+# This one cannot move. Its body is `describe`'s question vocabulary and the
+# sampler registry, so `shared` holding it would mean `shared` importing a
+# tier -- a cycle, and the one rule that currently holds without exception.
+# `aggregates` holding it would be the same dependency spelled wider: two
+# component imports instead of one call, coupled to `shape_of`'s internal
+# return shape rather than to flat data.
+#
+# And it cannot be read from a video's output either. `aggregates.validate`
+# takes no `video_id` -- a request is checked before any video is named, which
+# is what makes a typo a 422 at submit time rather than a job that runs and
+# finds nothing.
 def vocabulary() -> dict[str, Any]:
     """What an aggregate's input may name: every sampler, and every question
     with its fields -- `{field: [entry keys]}` for a list of objects, `None`
@@ -257,60 +293,6 @@ def vocabulary() -> dict[str, Any]:
 
     return {"samplers": _samplers.available(),
             "questions": {q: fields(q) for q in library.questions()}}
-
-
-def render(summary: str, structured: dict[str, Any]) -> str:
-    """An answer as text, exactly as the search index renders it."""
-    from .embed.units import render as render_unit
-    return render_unit(summary, structured)
-
-
-def answer_schema(fields: dict[str, Any]) -> dict[str, Any]:
-    """Describe's field builder, compiled: `{name: JSON Schema fragment}`."""
-    from .describe import library
-    return library.compile_fields(fields)
-
-
-def field_problems(fields: Any) -> list[str]:
-    """Everything wrong with a field builder, as messages."""
-    from .describe import library
-    if not isinstance(fields, dict) or not fields:
-        return ["`fields` must be a non-empty {name: {type, about}} map"]
-    return library.check_fields(fields)
-
-
-def embedder(spec: Optional[str] = None) -> Any:
-    """An embedder, resolved exactly as `embed` resolves one."""
-    return embed.build(spec)
-
-
-def index_video_summary(video_id: str, payload: dict[str, Any],
-                        embedder_spec: Optional[str] = None,
-                        index: str = DEFAULT_INDEX) -> int:
-    """Store one whole-video vector in `video_embeddings`. Postgres only.
-
-    Called by `aggregates` once it has a summary, and handed the summary rather
-    than reading `aggregates/summary.json` -- so video_rag never reads what
-    aggregates produced. It used to: `embed` looked for the file, which on a
-    first run did not exist yet, because embed runs before aggregate.
-
-    `/search level=video` reads the table. Best-effort: a video-level vector
-    that fails to write must not fail the aggregates that already succeeded.
-    """
-    names = [n.strip() for n in index.split(",") if n.strip()]
-    if "supabase" not in names:
-        return 0
-    from .embed.indexes.supabase import write_video_unit
-    from .embed.units import from_summary
-    try:
-        unit = from_summary(video_id, payload)
-        if unit is None:
-            return 0
-        built = embed.build(embedder_spec)
-        unit.vector = built.embed([unit.content])[0]
-        return write_video_unit(unit, built.key)
-    except Exception:                                    # noqa: BLE001
-        return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -385,7 +367,5 @@ def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> i
     return 0
 
 
-__all__ = ["COMPONENTS", "DEFAULT_INDEX", "Options", "Run", "answer_schema",
-           "documents", "embedder", "field_problems", "index_video_summary",
-           "main", "process", "render", "report", "search", "validate",
-           "videos", "vocabulary"]
+__all__ = ["COMPONENTS", "DEFAULT_INDEX", "Options", "Run", "main", "process",
+           "report", "search", "validate", "video_rag", "videos", "vocabulary"]
