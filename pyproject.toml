@@ -1,6 +1,6 @@
-# Declares the packages so `python -m falconvar.…` works from any directory.
-# Not a distribution: no wheel, no console_scripts -- `python -m` is the
-# documented interface, and a second spelling would be a second thing to keep
+# Declares the distribution. `python -m falconvar.…` works from a checkout and
+# from an install; there are no console_scripts, because `python -m` is the
+# documented interface and a second spelling would be a second thing to keep
 # correct.
 
 [build-system]
@@ -11,50 +11,80 @@ build-backend = "setuptools.build_meta"
 name = "falconvar"
 version = "3.0.0"
 description = "Video and audio in, searchable moments out."
+readme = "README.md"
 requires-python = ">=3.12"
-# Pins live in requirements.txt, which is what is actually installed. Repeating
-# them here would create two lists that drift; this file declares the packages,
-# not the environment.
-dependencies = []
+
+# The core: reading a video, the positional samplers, documents, and the
+# clients for whoever answers. Everything here is imported by a default run.
+#
+# Pins stay in `requirements.txt`, which is what a developer installs and what
+# the measured numbers were taken against. These are floors, not pins: a
+# library that pins its dependencies cannot be installed beside anything else.
+dependencies = [
+    "av>=15",                  # decode + exact PTS/time_base; OpenCV exposes neither
+    "opencv-python>=4.9",      # colour conversion, resize, JPEG encode, rotation
+    "numpy>=2",
+    "python-dotenv",           # .env
+    "jsonschema",              # schemas.validate(deep=True)
+    "scenedetect>=0.7",        # the scene detector algorithm
+    "openai",                  # every OpenAI-compatible provider; httpx for Anthropic
+    "qdrant-client",
+    "supabase",
+]
+
+# The heavy halves, opt-in. `pip install falconvar` would otherwise pull
+# several GB of CUDA wheels on behalf of someone running `uniform` against an
+# API model.
+#
+# **This does not weaken "a requirement is required".** That rule forbids a
+# second code path when a package is absent -- no hand-parsed `.env`, no
+# `transformers` stand-in for `sentence-transformers`, no Python ranking when
+# the RPC is missing. An extra that is not installed still fails with the
+# interpreter's own `ModuleNotFoundError` at the function-local import, with
+# nothing falling back. Extras change what gets installed, never what happens
+# when something is not.
+[project.optional-dependencies]
+local = [                      # model-backed samplers and in-process models
+    "torch>=2.4",              # clip, yolo, objects, text, the local embedder
+    "transformers>=4.44",      # clip, yolo (CLIP image tower), sentiment
+    "ultralytics>=8.3",        # yolo, objects (YOLO / YOLO-World)
+    "easyocr>=1.7",            # text (detector only; nothing is read)
+    "sentence-transformers",   # the `local` embedder
+    "gliner",                  # the `ner` aggregate
+]
+audio = [
+    "faster-whisper",
+    "pyannote.audio",
+]
+api = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+]
+all = ["falconvar[local,audio,api]"]
 
 [tool.setuptools.package-data]
-# The built-in prompts are data inside the package, not a resource beside it:
-# `python -m falconvar.workflow` from any directory has to find them, and an
-# editable install that resolves them by `__file__` would stop working the day
-# it becomes a real one.
+# The built-in prompts and definitions are data inside the package, not
+# resources beside it: `python -m falconvar.workflow` from any directory has to
+# find them, and an editable install that resolved them by `__file__` would
+# stop working the day it became a real one.
+#
+# `py.typed` (PEP 561) is what makes the annotations visible to a consumer's
+# type checker. Without it every one of them is invisible outside this tree.
+"falconvar" = ["py.typed"]
 "falconvar.video_rag.describe" = ["prompts.json"]
-"falconvar.aggregates" = ["definitions.json"]
+"falconvar.aggregates.definitions" = ["definitions.json"]
 
-[tool.setuptools]
-# Explicit rather than discovered: `docs`, `db` and `data` are not Python, and
-# auto-discovery would either pick them up or refuse to guess.
-packages = [
-    "api",
-    "falconvar",
-    "falconvar.aggregates",
-    "falconvar.aggregates.llm",
-    "falconvar.aggregates.model",
-    "falconvar.aggregates.statistics",
-    "falconvar.video_rag.audio",
-    "falconvar.video_rag.audio.backends",
-    "falconvar.video_rag.boundaries",
-    "falconvar.video_rag.cut",
-    "falconvar.video_rag.describe",
-    "falconvar.video_rag.describe.backends",
-    "falconvar.video_rag.media",
-    "falconvar.video_rag",
-    "falconvar.video_rag.embed",
-    "falconvar.video_rag.embed.indexes",
-    "falconvar.video_rag.retrieve",
-    "falconvar.shared",
-    "falconvar.shared.contracts",
-    "falconvar.shared.models",
-    "falconvar.shared.storage",
-    "falconvar.video_rag.video",
-    "falconvar.video_rag.video.samplers",
-    "falconvar.video_rag.video.samplers.perception",
-]
-# `recovery/` is deliberately absent, and has no `__init__.py`. It is the
-# standalone kit -- hand someone those files, a manifest and the video and they
-# rebuild the store with only `av`, `opencv-python` and `numpy`. Installing it
-# beside the pipeline is the first step towards it importing from one.
+[tool.setuptools.packages.find]
+# Found rather than listed. The explicit list drifted the moment a folder was
+# added: ten new `falconvar.aggregates.*` packages had to be appended by hand,
+# and a package left off is not a build error -- it is an `ImportError` for
+# whoever installs the wheel.
+#
+# `recovery/` is excluded here and has no `__init__.py`, deliberately. It is
+# the standalone kit: hand someone those files, a manifest and the video and
+# they rebuild the store with only `av`, `opencv-python` and `numpy`.
+# Installing it beside the pipeline is the first step towards it importing
+# from one. `api`, `eval` and `db` are not part of the library either.
+include = ["falconvar*"]
+exclude = ["recovery*", "api*", "eval*", "db*", "web*", "data*", "samples*"]
