@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import definitions
 from ..rendering import batched, resolve_span
-from . import WINDOW, DefinitionRunner, listing, schema
+from ..base import WINDOW, DefinitionRunner, listing, schema
 
 
 class ItemsAggregator(DefinitionRunner):

@@ -11,9 +11,14 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ...shared.contracts.documents import fingerprint_of
-from ..base import Context
+from ..base import Context, ModelUnavailable
 from ..inputs import Input, Read, read
-from . import DEFAULT_SENTIMENT_MODEL, MAX_CHARS, ModelUnavailable, pieces, plain
+from ..rendering import pieces, plain
+
+DEFAULT_SENTIMENT_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
+
+#: The longest piece a sentiment model is handed. Trained on single sentences.
+MAX_CHARS = 480
 
 
 class SentimentAggregator:

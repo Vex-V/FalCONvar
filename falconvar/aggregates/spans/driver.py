@@ -15,8 +15,8 @@ from typing import Any
 
 from .. import definitions
 from ..rendering import resolve_span
-from . import WINDOW, DefinitionRunner, listing, schema
-from .fold import fold
+from ..base import WINDOW, DefinitionRunner, listing, schema
+from ..fold import fold
 
 
 class SpansAggregator(DefinitionRunner):

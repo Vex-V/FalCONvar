@@ -26,9 +26,9 @@ from itertools import combinations
 from typing import Any, Optional
 
 from .. import definitions, inputs
-from ..linking import Mentions, link, mentions_of
+from .linking import Mentions, link, mentions_of
 from ..rendering import resolve_span
-from . import DefinitionRunner, listing, schema
+from ..base import DefinitionRunner, listing, schema
 
 
 class EntitiesAggregator(DefinitionRunner):
@@ -38,10 +38,11 @@ class EntitiesAggregator(DefinitionRunner):
     def __init__(self, definition_id: str, llm: Optional[str] = None,
                  embedder: Optional[str] = None) -> None:
         super().__init__(definition_id, llm)
-        # Resolved exactly as video_rag's `embed` resolves one, and reached
-        # through its driver -- the other tier, never a component.
-        from ...video_rag import driver as video_rag
-        self.embedder = video_rag.embedder(embedder)
+        # The same resolution `embed` uses, because identity must be
+        # measured in the space the index was built in. Both reach the one
+        # embedder registry in `shared/models`.
+        from ...shared.models import embedders
+        self.embedder = embedders.build(embedder)
 
     @property
     def model_key(self) -> str:

@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from ..shared.contracts.documents import fingerprint_of
+from ..shared.errors import FalconvarError
 
 if TYPE_CHECKING:
     from .base import Context
@@ -68,7 +69,7 @@ _SOURCE = re.compile(r"^([^\[\]]+?)(?:\[([^\[\]]*)\])?$")
 _LABEL = re.compile(r"^([a-z0-9][a-z0-9_-]{0,31})=(.+)$")
 
 
-class InputError(ValueError):
+class InputError(FalconvarError, ValueError):
     """A selection that does not parse, or names what does not exist."""
 
 
@@ -293,8 +294,13 @@ def render(block: dict[str, Any], fields: Sequence[str],
 
 
 def read(context: "Context", one: Input) -> Read:
-    """Every chunk's text for one input. Chunks with nothing are left out."""
-    from ..video_rag import driver as video_rag
+    """Every chunk's text for one input. Chunks with nothing are left out.
+
+    A field renders through the index's own renderer, so the text a summary is
+    built from is the text that was embedded -- one string, not two that look
+    alike.
+    """
+    from ..shared.contracts.units import render as render_unit
 
     chunks = {c["chunk_id"]: c for c in
               (context.descriptions.chunks if context.descriptions else [])}
@@ -313,7 +319,7 @@ def read(context: "Context", one: Input) -> Read:
             for sampler_id, block in ((chunks.get(chunk_id) or {}).get("samplers") or {}).items():
                 if not source.matches(sampler_id, block):
                     continue
-                said = render(block, source.fields, video_rag.render)
+                said = render(block, source.fields, render_unit)
                 if said:
                     parts.append((sampler_id, said))
                     answers.add(sampler_id)

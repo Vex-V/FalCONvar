@@ -13,6 +13,13 @@ Two sources of aggregators. Code: `stats`, `speakers`, `coverage`, `ner`,
 `sentiment`. Data: every prompt and link profile in `definitions` -- `summary`,
 `chapters`, `events`, `entities:people` and whatever a user has added -- each run
 by its kind's runner.
+
+**One folder per aggregator, each with a `driver.py`**, as a component of
+video_rag has. A tier is a class attribute rather than a directory, because it
+says what an aggregator *costs*, not what it is made of -- and grouping by cost
+put `linking`, which is 230 lines of its own, three levels from the runner that
+is its only caller. What every aggregator shares is `base` (the protocols and
+`DefinitionRunner`), `inputs` (what it reads) and `rendering` (how that reads).
 """
 
 from __future__ import annotations
@@ -22,8 +29,9 @@ from typing import Any, Optional, Sequence
 
 from . import definitions
 from .base import TIERS, Context, missing
-from .statistics import (CoverageAggregator, SpeakersAggregator,
-                         StatsAggregator)
+from .coverage import CoverageAggregator
+from .speakers import SpeakersAggregator
+from .stats import StatsAggregator
 
 REGISTRY: dict[str, Any] = {
     cls.name: cls for cls in
@@ -33,18 +41,18 @@ REGISTRY: dict[str, Any] = {
 #: name -> ("module:Class", tier, about). Resolved on first use, so a `--tier
 #: free` run never imports torch.
 _LAZY: dict[str, tuple[str, str, str]] = {
-    "ner": ("model.ner:NERAggregator", "local",
+    "ner": ("ner:NERAggregator", "local",
             "named entities, and which chunks each appears in"),
-    "sentiment": ("model.sentiment:SentimentAggregator", "local",
+    "sentiment": ("sentiment:SentimentAggregator", "local",
                   "tone per chunk, and where it turns"),
 }
 
 #: kind -> the runner every definition of that kind is built with.
 RUNNERS: dict[str, str] = {
-    "fold": "llm.fold:FoldAggregator",
-    "spans": "llm.spans:SpansAggregator",
-    "items": "llm.items:ItemsAggregator",
-    "link": "llm.entities:EntitiesAggregator",
+    "fold": "fold:FoldAggregator",
+    "spans": "spans:SpansAggregator",
+    "items": "items:ItemsAggregator",
+    "link": "entities:EntitiesAggregator",
 }
 
 

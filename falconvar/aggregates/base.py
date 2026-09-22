@@ -14,6 +14,11 @@ selection over the documents, see `inputs` -- and answers once per input:
 
 `depends_on` names a source the video must have (`transcript`). A question that
 does not apply is reported as skipped with the reason, never as a failure.
+
+**`DefinitionRunner` is here rather than beside the kinds that subclass it**,
+for the reason `samplers/base.py` holds `Sampler`: a base class in a package's
+`__init__` is reached by importing the package, so every kind that inherits it
+drags in its siblings. One aggregator folder imports one module here instead.
 """
 
 from __future__ import annotations
@@ -23,6 +28,10 @@ from typing import Any, Optional, Protocol, Sequence
 
 from ..shared.contracts.documents import (Descriptions, Manifest, Timeline, Transcript,
                                           fingerprint_of)
+#: Re-exported so the local tier raises a name from its own namespace, while
+#: `except ModelUnavailable` covers audio's too. They were separate classes
+#: with the same name, so it silently covered only one.
+from ..shared.errors import ModelUnavailable
 
 #: Cheapest first. A tier is a ceiling, not a selection.
 TIERS = ("free", "local", "llm")
@@ -130,4 +139,75 @@ def missing(aggregator: Any, context: Context) -> Optional[str]:
     return None
 
 
-__all__ = ["TIERS", "Aggregator", "Context", "Reader", "missing"]
+#: How many lines go into one fold.
+BATCH = 25
+
+#: Lines one `spans` or `items` call reads. Above it, `items` asks per window
+#: and `spans` divides folded parts instead of chunks.
+WINDOW = 100
+
+
+def schema(name: str, properties: dict[str, Any]) -> dict[str, Any]:
+    """`{name, schema}` for a strict structured call: every key required."""
+    return {"name": name.replace(":", "_").replace("~", "_"),
+            "schema": {"type": "object", "additionalProperties": False,
+                       "required": list(properties), "properties": properties}}
+
+
+def listing(key: str, item: dict[str, Any]) -> dict[str, Any]:
+    """A property holding a list of objects, every key required."""
+    return {key: {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "required": list(item), "properties": item}}}
+
+
+class DefinitionRunner:
+    """The second kind of aggregator: one built from a definition.
+
+    `summary`, `chapters` and `events` are not classes -- they are entries in
+    `definitions.json`, and this is what runs one. A subclass is a *kind*
+    (`fold`, `spans`, `items`, `link`), so adding a prompt adds no code.
+
+    Everything a kind needs from the definition is resolved here: its fields,
+    its version, and who answers it. `_run` is the only thing a kind writes.
+    """
+
+    tier = "llm"
+    depends_on: tuple[str, ...] = ()
+    takes_inputs = True
+
+    def __init__(self, definition_id: str, llm: Optional[str] = None) -> None:
+        from ..shared.models.llm import Model
+        from . import definitions
+        self.name = definition_id
+        self.section, self.definition = definitions.locate(definition_id)
+        self.entry = definitions.get(self.section, self.definition)
+        self.about = self.entry.get("about", "")
+        self.version = definitions.version_of(self.section, self.definition)
+        self.llm = Model(llm, role="llm")
+
+    @property
+    def model_key(self) -> str:
+        return self.llm.key
+
+    def properties(self) -> dict[str, Any]:
+        """The definition's own fields, compiled by the shared builder -- the
+        same one a describe shape compiles through, so an aggregate's answer
+        and a description's are built by one set of rules."""
+        from ..shared.contracts.fields import compile_fields
+        return compile_fields(self.entry["fields"])
+
+    def read(self, context: Any, one: Any) -> Any:
+        from .inputs import read as read_input
+        return read_input(context, one)
+
+    def run(self, context: Any, read: Any) -> dict[str, Any]:
+        import asyncio
+        return asyncio.run(self._run(context, read))
+
+    async def _run(self, context: Any, read: Any) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+__all__ = ["BATCH", "TIERS", "WINDOW", "Aggregator", "Context", "DefinitionRunner",
+           "ModelUnavailable", "Reader", "listing", "missing", "schema"]

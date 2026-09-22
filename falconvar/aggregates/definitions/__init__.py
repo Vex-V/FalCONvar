@@ -1,6 +1,6 @@
 """Aggregate definitions, as data: prompts, and link profiles.
 
-    falconvar/aggregates/definitions.json   built in, shipped, read-only at runtime
+    falconvar/aggregates/definitions/definitions.json   built in, shipped, read-only at runtime
     data/aggregates.json                    custom, written by the API
 
 The split `describe` makes for its questions, for the same reason: a custom
@@ -49,8 +49,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from ..shared import paths
-from . import inputs as inputs_mod
+from ...shared import paths
+from .. import inputs as inputs_mod
+from ...shared.errors import FalconvarError
 
 BUILTIN_PATH = Path(__file__).with_name("definitions.json")
 SECTIONS = ("prompts", "profiles")
@@ -85,7 +86,7 @@ _lock = threading.Lock()
 _cache: Optional[dict[str, Any]] = None
 
 
-class DefinitionError(ValueError):
+class DefinitionError(FalconvarError, ValueError):
     """A definition that will not be accepted, or does not exist.
 
     Carries the problems as a list, because a message may itself contain the
@@ -97,7 +98,7 @@ class DefinitionError(ValueError):
         self.problems = problems or [message]
 
 
-class Protected(DefinitionError):
+class ProtectedDefinition(DefinitionError):
     """Built in, so not yours to change."""
 
 
@@ -273,8 +274,8 @@ def _check_text(value: Any, what: str) -> list[str]:
 
 
 def _check_fields(fields: Any, owned: frozenset[str]) -> list[str]:
-    from ..video_rag import driver as video_rag
-    problems = video_rag.field_problems(fields)
+    from ...shared.contracts.fields import problems as field_problems
+    problems = field_problems(fields)
     if isinstance(fields, dict):
         taken = sorted(set(fields) & owned)
         if taken:
@@ -358,7 +359,7 @@ def check_profile(name: str, entry: dict[str, Any],
             "a profile without `identity` links whole values, and nothing in one "
             "answer is provably different from anything else, so no threshold "
             "can be read off the video -- give `threshold`")
-    from .linking import RULES
+    from ..entities.linking import RULES
     if entry.get("rule") not in RULES:
         problems.append(f"`rule` must be one of {', '.join(RULES)}")
     if entry.get("check") not in CHECKS:
@@ -399,10 +400,10 @@ def add(section: str, name: str, entry: dict[str, Any]) -> dict[str, Any]:
     if section not in SECTIONS:
         raise DefinitionError(f"section must be one of {', '.join(SECTIONS)}")
     if load()[section].get(name, {}).get("builtin"):
-        raise Protected(f"{name!r} is a built-in {section[:-1]} and cannot be "
+        raise ProtectedDefinition(f"{name!r} is a built-in {section[:-1]} and cannot be "
                         "replaced; pick another name")
     clean = {k: v for k, v in entry.items() if v is not None and k != "builtin"}
-    from ..video_rag import driver as video_rag
+    from ...video_rag import driver as video_rag
     problems = CHECKERS[section](name, _with_defaults(section, clean),
                                  video_rag.vocabulary())
     if problems:
@@ -419,7 +420,7 @@ def add(section: str, name: str, entry: dict[str, Any]) -> dict[str, Any]:
 def remove(section: str, name: str) -> None:
     """Delete a custom definition. Answers it already wrote are untouched."""
     if load()[section].get(name, {}).get("builtin"):
-        raise Protected(f"{name!r} is built in and cannot be deleted")
+        raise ProtectedDefinition(f"{name!r} is built in and cannot be deleted")
     with _lock:
         doc = _read(paths.AGGREGATE_DEFINITIONS)
         if not (doc.get(section) or {}).pop(name, None):
@@ -436,7 +437,7 @@ def _write(doc: dict[str, Any]) -> None:
     tmp.replace(target)                  # atomic: a torn file is a broken run
 
 
-__all__ = ["CHECKS", "DefinitionError", "KINDS", "PROFILE_PREFIX", "Protected",
+__all__ = ["CHECKS", "DefinitionError", "KINDS", "PROFILE_PREFIX", "ProtectedDefinition",
            "Selection", "add", "check_profile", "check_prompt", "default_selection",
            "get", "ids", "kind_text", "load", "locate", "profiles", "prompts",
            "remove", "selection", "system", "version_of"]

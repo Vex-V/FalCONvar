@@ -42,10 +42,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
-from ..shared.contracts.documents import fingerprint_of
+from ...shared.contracts.documents import fingerprint_of
 
 if TYPE_CHECKING:
-    from .base import Context
+    from ..base import Context
 
 #: How the threshold is read off the provably-different pairs: their maximum,
 #: or a quantile of them.
@@ -120,8 +120,8 @@ def mentions_of(context: "Context", selection: Any) -> list[Mention]:
     someone. Otherwise one mention per matching answer, carrying the field's
     whole value, the prose (`summary`) or the chunk's transcript.
     """
-    from ..video_rag import driver as video_rag
-    from .inputs import PROSE
+    from ...shared.contracts.units import render
+    from ..inputs import PROSE
 
     field, keys = selection.field, tuple(selection.keys)
     out: list[Mention] = []
@@ -143,7 +143,7 @@ def mentions_of(context: "Context", selection: Any) -> list[Mention]:
                 value = (block.get("description") if field == PROSE
                          else structured.get(field))
                 said = (value.strip() if isinstance(value, str) else
-                        video_rag.render("", {field: value}).removeprefix(f"{field}: "))
+                        render("", {field: value}).removeprefix(f"{field}: "))
                 if said:
                     out.append(Mention(chunk["chunk_id"], sampler_id, field, 0,
                                        said, {field: said}))

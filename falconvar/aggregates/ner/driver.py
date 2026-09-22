@@ -10,10 +10,20 @@ from collections import Counter
 from typing import Any, Optional
 
 from ...shared.contracts.documents import fingerprint_of
-from ..base import Context
+from ..base import Context, ModelUnavailable
 from ..inputs import Input, Read, read
-from . import (DEFAULT_LABELS, DEFAULT_NER_MODEL, NER_CHARS, ModelUnavailable,
-               pieces, plain)
+from ..rendering import pieces, plain
+
+#: What to look for. GLiNER is zero-shot, so the label set *is* the
+#: configuration -- the same lesson as the open-vocabulary detector, where a
+#: mismatched vocabulary found 2.4 detections per frame and a matched one 5.1.
+DEFAULT_LABELS = ("person", "organisation", "location", "product",
+                  "event", "date")
+
+DEFAULT_NER_MODEL = "urchade/gliner_small-v2.1"
+
+#: The longest piece GLiNER is handed; it reads 384 tokens.
+NER_CHARS = 1200
 
 
 class NERAggregator:

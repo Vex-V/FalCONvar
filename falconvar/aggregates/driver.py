@@ -9,11 +9,12 @@ is two answers, `summary~severity` and `summary~hazards`. A link profile's id
 carries a colon, `entities:people`, and Windows refuses one in a filename, so on
 disk it is `entities.people.json`.
 
-**Reaches video_rag through its driver, never its components.** Documents,
-the question vocabulary, an embedder and the whole-video vector all come from
-`video_rag.driver`, imported inside the functions that need them so importing
-this package loads nothing from the other tier. video_rag, for its part, never
-reads what this writes: the summary is handed to it, not left for it to find.
+**Reads the other tier's files, and asks it exactly one thing.** Documents are
+read straight from disk through `shared`, the field builder and the renderer
+and the embedder are `shared` too, and the whole-video vector is written here.
+The single call into `video_rag.driver` is `vocabulary()` -- what a question or
+a sampler may be named -- imported inside the function that needs it, so
+importing this package loads nothing from the other tier.
 """
 
 from __future__ import annotations
@@ -31,12 +32,28 @@ from .inputs import DEFAULT as DEFAULT_INPUT
 
 
 def context_for(video_id: str) -> Context:
-    """Every document video_rag wrote for this video. Missing ones are None."""
-    from ..video_rag import driver as video_rag
+    """Every document video_rag wrote for this video. Missing ones are None.
 
-    found = video_rag.documents(video_id)
-    return Context(video_id, found["timeline"], found["manifest"],
-                   found["descriptions"], found["transcript"])
+    Read from disk through `shared` and nothing else. Components exchange
+    files, and this tier is another reader of those files -- so it names an
+    artifact and parses the dataclass exactly as a component's `load` does,
+    rather than calling seven of them. The grid is required; a video with no
+    `timeline.json` was never ingested.
+    """
+    from ..shared import paths
+    from ..shared.contracts.documents import (Descriptions, Manifest, Timeline,
+                                              Transcript)
+    from ..shared.storage import sinks
+
+    def read(name: str, cls: Any) -> Any:
+        return (cls.from_dict(sinks.read_json(paths.artifact(video_id, name)))
+                if paths.exists(video_id, name) else None)
+
+    timeline = Timeline.from_dict(
+        sinks.read_json(paths.artifact(video_id, "timeline")))
+    return Context(video_id, timeline, read("manifest", Manifest),
+                   read("descriptions", Descriptions),
+                   read("transcript", Transcript))
 
 
 #: Who made an `llm` aggregate that does not say. Before providers existed
@@ -248,13 +265,13 @@ def run(video_id: str, tier: str = "free",
 
     recorded = _record_definitions(used, backends)
 
-    # The whole-video vector, from the summary this run has in hand. It lived in
-    # `embed`, which read `summary.json` -- a file that on a first run did not
-    # exist yet, because embed runs before aggregate.
+    # The whole-video vector, from the summary this run has in hand. It lived
+    # in `embed`, which read `summary.json` -- a file that on a first run did
+    # not exist yet, because embed runs before aggregate. Written here now,
+    # through `shared`, so the handoff is not a call into the other tier.
     video_units = 0
     if "summary" in ran and index:
-        from ..video_rag import driver as video_rag
-        video_units = video_rag.index_video_summary(
+        video_units = index_summary(
             video_id, load(video_id, "summary").payload, embedder, index)
 
     return Produced(
@@ -267,6 +284,47 @@ def run(video_id: str, tier: str = "free",
                "skipped": skipped, **recorded},
         skipped=sorted(skipped),
     )
+
+
+def index_summary(video_id: str, payload: dict[str, Any],
+                  embedder: Optional[str] = None,
+                  index: Optional[str] = None) -> int:
+    """Store the whole video as one vector in `video_embeddings`. Postgres only.
+
+    **Its own table, never beside the moments.** `embeddings` answers *which
+    twenty seconds*; a summary answers *which video*, and a video is not a
+    moment you can play -- so the two never share a ranking, and `/search`
+    reaches this one only as `level=video`. `chunk_id = -1` marks it as
+    not-a-chunk; nothing keyed by chunk ever sees it.
+
+    Only the final summary, never the intermediate layers: indexing those would
+    return the same moment two or three times under different wordings.
+
+    Rendered and embedded through `shared`, so the text a video is found by is
+    built exactly like the text a moment is found by, in the same vector space.
+    Best-effort: a video-level vector that fails to write must not fail the
+    aggregates that already succeeded.
+    """
+    names = [n.strip() for n in (index or "").split(",") if n.strip()]
+    if "supabase" not in names:
+        return 0
+    from ..shared.contracts.units import Unit, render
+    from ..shared.models import embedders
+    from ..shared.storage import rows
+    try:
+        summary = (payload.get("summary") or "").strip()
+        if not summary:
+            return 0
+        structured = {key: payload[key]
+                      for key in ("topics", "setting", "notable")
+                      if payload.get(key)}
+        unit = Unit(video_id, -1, "summary", render(summary, structured),
+                    structured, sampler="summary", question="summary")
+        built = embedders.build(embedder)
+        unit.vector = built.embed([unit.content])[0]
+        return rows.write_video_unit(unit, built.key)
+    except Exception:                                    # noqa: BLE001
+        return 0
 
 
 def _record_definitions(used: dict[str, str], backends: Sequence[str]) -> dict[str, Any]:
