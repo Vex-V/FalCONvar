@@ -37,7 +37,7 @@ every unrecognised question resolves to and it is a shipped one.
 
 **Which keys identify an entry is not a shape's business.** It used to be
 declared beside the shapes, for entity linking; a link profile in
-`falconvar/aggregates/definitions.json` owns it now, so the same answers can be
+`falconvar/aggregates/definitions/definitions.json` owns it now, so the same answers can be
 linked by different keys without touching what was asked.
 """
 
@@ -50,6 +50,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...shared import paths
+from ...shared.errors import FalconvarError
+from ...shared.contracts.fields import (FIELD_NAME, FIELD_TYPES, MAX_ENUM,
+                                        MAX_FIELDS, MAX_NESTED_KEYS,
+                                        check_fields, compile_fields)
 
 BUILTIN_PATH = Path(__file__).with_name("prompts.json")
 
@@ -64,34 +68,16 @@ NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 #: which is after the frames have been read and the money is about to be spent.
 PLACEHOLDERS = {"n", "span", "vocabulary"}
 
-#: A field name has to survive being a JSON Schema property, a `jsonb` key and
-#: a named part of a rendered unit, so it is as narrow as a question name.
-FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-
-#: What a custom field may be. Two primitives; `of` turns a list into a list of
-#: objects. That is the whole range the built-in shapes already span -- `scene`
-#: is flat lists, `people`/`objects`/`text` are the nested form -- so a custom
-#: shape is the shipped vocabulary exposed, not a new mechanism beside it.
-FIELD_TYPES = ("text", "list")
-
-#: Caps. Structured answers run ~3x longer than prose and the `people` schema
-#: already truncated mid-string at `max_output_tokens=700`, coming back as
-#: unparseable JSON. An unbounded shape is a paid call for an answer that
-#: cannot be read, so the limit is refused at write time rather than
-#: discovered at call time.
-MAX_FIELDS = 12
-MAX_NESTED_KEYS = 8
-MAX_ENUM = 24
 
 _lock = threading.Lock()
 _cache: Optional[dict[str, Any]] = None
 
 
-class PromptError(ValueError):
+class PromptError(FalconvarError, ValueError):
     """A prompt the vocabulary will not accept, with the reason."""
 
 
-class Protected(PromptError):
+class ProtectedPrompt(PromptError):
     """The question exists and is built in, so it cannot be changed.
 
     Distinct from a rejected or unknown one because the answer to a caller is
@@ -110,48 +96,6 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 # ------------------------------------------------------- building a shape
-
-def _compile_field(spec: dict[str, Any]) -> dict[str, Any]:
-    """One field spec -> the JSON Schema fragment a call will be sent.
-
-    Generated rather than accepted. The schema goes to the API with
-    `strict: true`, and that subset is narrow -- every property required,
-    `additionalProperties` false, no unions, a shallow nesting cap. A builder
-    cannot express something the API would refuse; a raw schema arriving over
-    HTTP can, and would fail *after* the frames are read with the call about to
-    be paid for. That is the same failure `check` already prevents for a
-    `{typo}` placeholder.
-    """
-    about = str(spec.get("about") or "").strip()
-    one_of = list(spec.get("one_of") or [])
-
-    if spec.get("type") == "text":
-        leaf: dict[str, Any] = {"type": "string", "description": about}
-        if one_of:
-            leaf["enum"] = one_of
-        return leaf
-
-    nested = spec.get("of")
-    if nested:
-        keys = list(nested)
-        # One bound object per entity, never parallel lists: a list of people
-        # beside a list of actions does not say who did what, and cannot be
-        # made to afterwards.
-        return {
-            "type": "array", "description": about,
-            "items": {
-                "type": "object", "additionalProperties": False,
-                "required": keys,
-                "properties": {k: {"type": "string",
-                                   "description": str(nested[k]).strip()}
-                               for k in keys},
-            },
-        }
-
-    items: dict[str, Any] = {"type": "string"}
-    if one_of:
-        items["enum"] = one_of
-    return {"type": "array", "description": about, "items": items}
 
 
 def compile_shape(spec: dict[str, Any]) -> dict[str, Any]:
@@ -193,77 +137,6 @@ def check_shape(spec: Any) -> list[str]:
                         "shape for a summary-only question")
         return problems
     return problems + check_fields(fields)
-
-
-def compile_fields(fields: dict[str, Any]) -> dict[str, Any]:
-    """`{name: JSON Schema fragment}`, in the order the fields were written."""
-    return {name: _compile_field(f) for name, f in fields.items()}
-
-
-def check_fields(fields: dict[str, Any]) -> list[str]:
-    """Everything wrong with a field builder, as messages.
-
-    Apart from `check_shape` because a describe shape is not the only answer
-    built from fields: an aggregate prompt's is too, with no prose summary.
-    """
-    problems: list[str] = []
-    if len(fields) > MAX_FIELDS:
-        problems.append(f"{len(fields)} fields; {MAX_FIELDS} max -- a longer "
-                        "answer truncates rather than failing")
-
-    for name, field in fields.items():
-        where = f"field {name!r}"
-        if not FIELD_NAME.match(str(name)):
-            problems.append(f"{where} must match {FIELD_NAME.pattern}")
-        if not isinstance(field, dict):
-            problems.append(f"{where} must be an object with a `type`")
-            continue
-
-        kind = field.get("type")
-        if kind not in FIELD_TYPES:
-            problems.append(f"{where}: unknown type {kind!r}; "
-                            f"known: {', '.join(FIELD_TYPES)}")
-        if not str(field.get("about") or "").strip():
-            # The description is what the model is actually steered by, so an
-            # unlabelled field is a paid call for a key nobody explained.
-            problems.append(f"{where} needs an `about` describing what to put "
-                            "in it -- it is what the model is steered by")
-
-        one_of = field.get("one_of")
-        if one_of is not None:
-            if not isinstance(one_of, list) or not one_of:
-                problems.append(f"{where}: `one_of` must be a non-empty list")
-            elif len(one_of) > MAX_ENUM:
-                problems.append(f"{where}: {len(one_of)} choices; {MAX_ENUM} max")
-            elif not all(isinstance(v, str) and v.strip() for v in one_of):
-                problems.append(f"{where}: `one_of` values must be strings")
-
-        nested = field.get("of")
-        if nested is None:
-            continue
-        if kind == "text":
-            problems.append(f"{where}: `of` needs type 'list' -- it makes each "
-                            "entry an object, so there must be entries")
-        if one_of is not None and nested:
-            problems.append(f"{where}: `one_of` and `of` are exclusive; a "
-                            "vocabulary constrains a value, `of` replaces it")
-        if not isinstance(nested, dict) or not nested:
-            problems.append(f"{where}: `of` must be a non-empty "
-                            "{key: description} map")
-            continue
-        if len(nested) > MAX_NESTED_KEYS:
-            problems.append(f"{where}: {len(nested)} keys; {MAX_NESTED_KEYS} max")
-        for key, description in nested.items():
-            if not FIELD_NAME.match(str(key)):
-                problems.append(f"{where}: key {key!r} must match "
-                                f"{FIELD_NAME.pattern}")
-            if not str(description or "").strip():
-                problems.append(f"{where}: key {key!r} needs a description")
-        if identity is not None and not (isinstance(identity, list) and identity
-                                         and all(k in nested for k in identity)):
-            problems.append(f"{where}: `identity` must be a non-empty list of "
-                            f"keys from `of` ({', '.join(nested)})")
-    return problems
 
 
 def load(refresh: bool = False) -> dict[str, Any]:
@@ -496,7 +369,7 @@ def add(name: str, instruction: str, shape: str = "scene",
              **({"about": about.strip()} if about.strip() else {})}
 
     if load()["questions"].get(name, {}).get("builtin"):
-        raise Protected(
+        raise ProtectedPrompt(
             f"{name!r} is a built-in question and cannot be replaced. Built-ins "
             "live in the package so that every deployment's `yolo` means the "
             "same thing; pick another name.")
@@ -531,7 +404,7 @@ def remove(name: str) -> None:
     naming one does not own it.
     """
     if load()["questions"].get(name, {}).get("builtin"):
-        raise Protected(f"{name!r} is built in and cannot be deleted")
+        raise ProtectedPrompt(f"{name!r} is built in and cannot be deleted")
     with _lock:
         doc = _read(paths.PROMPTS)
         if not (doc.get("questions") or {}).pop(name, None):

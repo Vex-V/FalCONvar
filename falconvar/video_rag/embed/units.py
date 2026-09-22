@@ -23,78 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ...shared.contracts.documents import Descriptions, Transcript, fingerprint_of
-
-
-def render(summary: str, structured: dict[str, Any]) -> str:
-    """One string per unit: the summary, then every structured field, named."""
-    parts: list[str] = []
-    if summary and summary.strip():
-        parts.append(summary.strip())
-    for key in sorted(structured):
-        value = structured[key]
-        rendered = _render_value(value)
-        if rendered:
-            parts.append(f"{key}: {rendered}")
-    return ". ".join(parts)
-
-
-def _render_value(value: Any) -> str:
-    if value is None or value == "" or value == []:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, dict):
-        # Sorted here too. Determinism had been handled one level deep and not
-        # two, which is exactly how the Postgres/file divergence survived.
-        return "; ".join(f"{k} {_render_value(value[k])}" for k in sorted(value)
-                         if _render_value(value[k]))
-    if isinstance(value, list):
-        return " | ".join(r for r in (_render_value(v) for v in value) if r)
-    return str(value)
-
-
-@dataclass
-class Unit:
-    """One embeddable thing, keyed by a hash of its own text."""
-
-    video_id: str
-    chunk_id: int
-    sampler_id: str
-    content: str
-    structured: dict[str, Any] = field(default_factory=dict)
-    vector: Optional[list[float]] = None
-    #: The two halves of `sampler_id`, carried rather than parsed. Filtering by
-    #: question is the query a person actually makes -- "the text on screen",
-    #: not "what the CLIP sampler said" -- and it is not expressible as a
-    #: suffix match, because a bare id like `clip` means question == strategy.
-    sampler: str = ""
-    question: str = ""
-
-    @property
-    def text_hash(self) -> str:
-        """Identity is the text. Re-embedding is then "what changed", not
-        "what is here", which is what makes a re-run cost nothing."""
-        return fingerprint_of({"content": self.content})
-
-    @property
-    def key(self) -> str:
-        return f"{self.video_id}:{self.chunk_id}:{self.sampler_id}"
-
-    def as_dict(self) -> dict[str, Any]:
-        return {"video_id": self.video_id, "chunk_id": self.chunk_id,
-                "sampler_id": self.sampler_id, "content": self.content,
-                "structured": self.structured, "text_hash": self.text_hash,
-                "sampler": self.sampler, "question": self.question,
-                "vector": self.vector}
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Unit":
-        return cls(d["video_id"], d["chunk_id"], d["sampler_id"], d["content"],
-                   d.get("structured", {}), d.get("vector"),
-                   d.get("sampler", ""), d.get("question", ""))
+from ...shared.contracts.documents import Descriptions, Transcript
+from ...shared.contracts.units import Unit, render
 
 
 def from_descriptions(document: Descriptions) -> list[Unit]:
@@ -136,36 +66,4 @@ def from_transcript(document: Transcript) -> list[Unit]:
     return units
 
 
-def from_summary(video_id: str, payload: dict[str, Any]) -> Optional[Unit]:
-    """The whole video as one unit, from the `summary` aggregate.
-
-    **Kept apart from the chunk units, in its own table.** `embeddings` answers
-    *which twenty seconds*; a summary answers *which video*, and a video is not
-    a moment you can play. Mixing them would return a whole-video "moment"
-    beside real ones in every search, and it would need a sentinel `chunk_id`
-    to sit in a table keyed by one.
-
-    Only the final summary, never the intermediate layers. A leaf summary
-    covers a real span and is worth keeping as a record, but indexing the
-    layers would return the same moment two or three times over under
-    different wordings -- the count bias the moment aggregation guards against,
-    one level up.
-
-    `chunk_id = -1` marks it as not-a-chunk for anything that reads a Unit
-    generically; nothing keyed by chunk ever sees it, because this goes to its
-    own table.
-    """
-    summary = (payload.get("summary") or "").strip()
-    if not summary:
-        return None
-    # The same three-level render as a chunk unit, so the text a video is
-    # found by is built exactly like the text a moment is found by.
-    structured = {key: payload[key] for key in ("topics", "setting", "notable")
-                  if payload.get(key)}
-    content = render(summary, structured)
-    return Unit(video_id, -1, "summary", content, structured,
-                sampler="summary", question="summary")
-
-
-__all__ = ["Unit", "render", "from_descriptions", "from_summary",
-           "from_transcript"]
+__all__ = ["Unit", "from_descriptions", "from_transcript", "render"]

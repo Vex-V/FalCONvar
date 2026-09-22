@@ -10,7 +10,7 @@ from typing import Optional, Sequence
 
 from ...shared import paths
 from ...shared.contracts.documents import Produced
-from . import embedders as embedders_mod
+from ...shared.models import embedders as embedders_mod
 from . import readable
 from . import units as units_mod
 from . import indexes as backends
@@ -31,10 +31,9 @@ def collect(video_id: str) -> list[units_mod.Unit]:
 DEFAULT_INDEX = "qdrant"
 
 
-def run(video_id: str, embedder: Optional[str] = None,
-        batch: int = 64,
-        index_name: str | Sequence[str] = DEFAULT_INDEX,
-        sink: str | Sequence[str] = "file") -> Produced:
+def embed(video_id: str, embedder: Optional[str] = None,
+          batch: int = 64,
+          index_name: str | Sequence[str] = DEFAULT_INDEX) -> Produced:
     """Embed what changed, into one or more indexes.
 
     Several indexes take the same vectors: embedding is the paid half and the
@@ -44,6 +43,15 @@ def run(video_id: str, embedder: Optional[str] = None,
     `embedder` is a provider or `provider/model`; None resolves through
     `shared.models.providers` -- FALCONVAR_EMBEDDER, then openai -- exactly as
     `retrieve` resolves it, so the two cannot disagree about the space.
+
+    **There is no `sink` here, and there was one that did nothing.** Every
+    other component writes a document and `sinks.write` fans it out; this one
+    writes vectors, and where they go is `index_name`. `embedded.json` has no
+    row mapping at all, so `sinks.write` would refuse the `supabase` backend
+    for it. The parameter was accepted, never read, and published by
+    `/capabilities` -- so a generated form offered a destination control that
+    changed nothing, which is the failure `_embed` guards against one line
+    down for backends.
     """
     built = embedders_mod.build(embedder)
     names = ([n.strip() for n in index_name.split(",") if n.strip()]
@@ -56,6 +64,12 @@ def run(video_id: str, embedder: Optional[str] = None,
         # leave an embedded Qdrant lock held for the life of the process.
         for _, target in indexes:
             backends.release(target)
+
+
+#: The uniform name every component also answers to: what a dispatch
+#: table calls and what a form introspects. The same function object.
+#: See `media/driver.py`.
+run = embed
 
 
 def _embed(built, names, indexes, video_id: str, batch: int) -> Produced:
@@ -104,9 +118,10 @@ def _embed(built, names, indexes, video_id: str, batch: int) -> Produced:
         dropped += target.prune(live)
         artifacts[name] = str(target.save())
 
-    # No whole-video vector here: that is made from the summary, which
-    # `aggregates` hands to `video_rag.driver.index_video_summary`. Reading it
-    # back from `aggregates/summary.json` made this tier depend on the one above.
+    # No whole-video vector here: that is made from the summary, and
+    # `aggregates.index_summary` writes it, through `shared`. Reading it back
+    # from `aggregates/summary.json` made this tier depend on the one above --
+    # and on a first run the file did not exist yet, because embed runs first.
     return Produced(
         video_id=video_id, component="embed", backend=",".join(names),
         artifacts=artifacts,

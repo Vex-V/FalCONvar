@@ -16,6 +16,7 @@ import os
 from typing import Any, Optional
 
 from .. import env
+from ..errors import Unavailable
 
 #: falconvar's tables live in their own Postgres schema, not `public`. falconvar's
 #: are still deployed alongside and `video_embeddings` collides outright, so a
@@ -29,7 +30,7 @@ SECRET_VARS = ("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY",
 PUBLISHABLE_VARS = ("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY")
 
 
-class DatabaseUnavailable(RuntimeError):
+class DatabaseUnavailable(Unavailable):
     """No URL, no key, no client library, or a server that will not answer."""
 
 
@@ -60,6 +61,26 @@ def client(url: Optional[str] = None, key: Optional[str] = None,
                              options=ClientOptions(schema=SCHEMA))
     except Exception as exc:                             # noqa: BLE001
         raise DatabaseUnavailable(f"could not connect: {exc}") from None
+
+
+def upsert_vectors(table: str, rows: list[dict[str, Any]], api: Any = None) -> int:
+    """`upsert`, with the one refusal a new embedder is likely to meet.
+
+    A database whose column is still `vector(1536)` refuses any other width
+    with "expected 1536 dimensions" -- true, and no help towards the fix.
+
+    Here rather than beside the moment index because both tiers write vectors:
+    `embed` the chunk units, `aggregates` the whole-video one.
+    """
+    try:
+        return upsert(table, rows, api)
+    except Exception as exc:                             # noqa: BLE001
+        if "dimension" not in str(exc).lower():
+            raise
+        raise RuntimeError(
+            f"{table} refused these vectors ({exc}). The column still has a "
+            "fixed width: re-run db/supabase/install.sql, which lets it hold "
+            "any embedder's") from None
 
 
 def upsert(table: str, rows: list[dict[str, Any]], api: Any = None,
@@ -116,6 +137,6 @@ def delete_except(table: str, match: dict[str, Any], column: str,
     query.execute()
 
 
-__all__ = ["DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
+__all__ = ["upsert_vectors", "DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
            "URL_VARS", "client", "configured", "delete_except",
            "delete_stale_chunks", "delete_where", "upsert"]

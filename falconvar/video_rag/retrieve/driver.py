@@ -13,7 +13,7 @@ from typing import Any, Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ...shared import paths
-from ..embed import embedders as embedders_mod
+from ...shared.models import embedders as embedders_mod
 from ..embed.driver import DEFAULT_INDEX
 from ..embed import indexes as backends
 from .search import Moment, to_moments

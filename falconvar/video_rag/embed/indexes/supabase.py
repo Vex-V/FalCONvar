@@ -42,38 +42,8 @@ def as_vector(value: Any) -> list[float]:
 VIDEO_TABLE = "video_embeddings"
 
 
-def _upsert(table: str, rows: list[dict[str, Any]], api: Any = None) -> int:
-    """`db.upsert`, with the one refusal a new embedder is likely to meet.
-
-    A database whose column is still `vector(1536)` refuses any other width
-    with "expected 1536 dimensions" -- true, and no help towards the fix.
-    """
-    try:
-        return db.upsert(table, rows, api)
-    except Exception as exc:                             # noqa: BLE001
-        if "dimension" not in str(exc).lower():
-            raise
-        raise RuntimeError(
-            f"{table} refused these vectors ({exc}). The column still has a "
-            "fixed width: re-run db/supabase/install.sql, which lets it hold "
-            "any embedder's") from None
-
-
-def write_video_unit(unit: Any, embedder_key: str, api: Any = None) -> int:
-    """Upsert one whole-video vector. Keyed (video_id, kind, embedder).
-
-    Separate from `SupabaseIndex` because it is not an index over moments: it
-    has no chunk, no sampler and no ranking of its own yet. `install.sql` has
-    held the table since before anything wrote it; this is what fills it.
-    """
-    from ....shared.storage import db
-    if not unit or not unit.vector:
-        return 0
-    return _upsert(VIDEO_TABLE, [{
-        "video_id": unit.video_id, "kind": "summary",
-        "embedder": embedder_key, "text_hash": unit.text_hash,
-        "content": unit.content, "embedding": list(unit.vector),
-    }], api or db.client())
+#: The width-refusal wrapper now lives beside `upsert`; both tiers need it.
+_upsert = db.upsert_vectors
 
 
 def search_videos(vector: Sequence[float], embedder_key: str,

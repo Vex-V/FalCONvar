@@ -272,3 +272,20 @@ def writer_for(artifact: str) -> Optional[Callable[[str, dict[str, Any]], None]]
 
 
 __all__ = ["WRITERS", "write_definitions", "write_prompts", "writer_for"]
+
+
+def write_video_unit(unit: Any, embedder_key: str, api: Any = None) -> int:
+    """Upsert one whole-video vector. Keyed (video_id, kind, embedder).
+
+    Here rather than beside the moment index, because `aggregates` writes it
+    and must not import a video_rag component: `embeddings` answers *which
+    twenty seconds*, this answers *which video*, and they never share a
+    ranking. `install.sql` has held the table since before anything wrote it.
+    """
+    if not unit or not unit.vector:
+        return 0
+    return db.upsert_vectors("video_embeddings", [{
+        "video_id": unit.video_id, "kind": "summary",
+        "embedder": embedder_key, "text_hash": unit.text_hash,
+        "content": unit.content, "embedding": list(unit.vector),
+    }])
