@@ -23,7 +23,10 @@ from . import documents
 
 #: Written to `db/json/`. Relative to the checkout, not the data root: these
 #: are source, not output.
-SCHEMA_DIR = paths.REPO_ROOT / "db" / "json"
+def schema_dir() -> Path:
+    """Where the generated schemas are written. A checkout only: these are
+    source, not output, so an installed copy has nowhere to put them."""
+    return paths.checkout_root() / "db" / "json"
 
 _PRIMITIVES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
@@ -104,7 +107,7 @@ def schema_for(cls: type) -> dict[str, Any]:
 
 def generate(out_dir: Optional[Path] = None) -> dict[str, Path]:
     """Write one schema per document. Returns name -> path."""
-    out_dir = Path(out_dir or SCHEMA_DIR)
+    out_dir = Path(out_dir or schema_dir())
     out_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
     for tag, cls in sorted(documents.DOCUMENTS.items()):
@@ -120,7 +123,7 @@ def check(out_dir: Optional[Path] = None) -> list[str]:
 
     What CI runs. Empty means the three descriptions still agree.
     """
-    out_dir = Path(out_dir or SCHEMA_DIR)
+    out_dir = Path(out_dir or schema_dir())
     stale: list[str] = []
     for tag, cls in sorted(documents.DOCUMENTS.items()):
         path = out_dir / f"{tag}.schema.json"

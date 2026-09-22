@@ -25,7 +25,7 @@ from .....shared import paths
 # text encoder on first use. That is a second, separate CLIP from the one
 # ClipChangeSampler loads through HuggingFace -- different libraries, different
 # formats, different jobs. Deleting it costs a re-download, not a failure.
-WEIGHTS_DIR = paths.WEIGHTS
+
 
 
 def weight_path(name: str) -> str:
@@ -34,7 +34,7 @@ def weight_path(name: str) -> str:
     Falling back to the bare name rather than raising keeps first-run working:
     ultralytics downloads what is missing.
     """
-    local = WEIGHTS_DIR / name
+    local = paths.weights_root() / name
     return str(local) if local.exists() else name
 
 
