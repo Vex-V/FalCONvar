@@ -24,6 +24,7 @@ import av
 import numpy as np
 
 from ...shared.contracts.documents import Media
+from ...shared.errors import FalconvarError
 
 #: OpenCV auto-applies container rotation; PyAV does not, so the reader does.
 #: PyAV 18.1 exposes the display matrix through none of `side_data`,
@@ -33,7 +34,7 @@ from ...shared.contracts.documents import Media
 _ROTATIONS = {90: 0, 180: 1, 270: 2}       # cv2.ROTATE_* resolved lazily
 
 
-class UnreadableSource(RuntimeError):
+class UnreadableSource(FalconvarError, RuntimeError):
     """The file cannot be opened, or carries no video stream."""
 
 

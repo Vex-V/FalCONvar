@@ -38,6 +38,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
 from .. import env, paths
+from ..errors import FalconvarError, Unavailable
 
 PROTOCOLS = ("openai", "chat", "anthropic", "local")
 ROLES = ("describe", "llm", "embed")
@@ -63,11 +64,11 @@ OFFLINE: dict[str, str] = {"describe": "stub", "embed": "hash"}
 NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 
-class ProviderError(ValueError):
+class ProviderError(FalconvarError, ValueError):
     """An unknown provider, one that cannot do what was asked, or no model."""
 
 
-class ProviderUnavailable(RuntimeError):
+class ProviderUnavailable(Unavailable):
     """A provider that needs a key, and none is set."""
 
 

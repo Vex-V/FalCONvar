@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from .. import paths
+from ..errors import FalconvarError
 
 BACKENDS = ("file", "supabase")
 
 
-class UnknownBackend(ValueError):
+class UnknownBackend(FalconvarError, ValueError):
     """A sink name that is not `file` or `supabase`."""
 
 

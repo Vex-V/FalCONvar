@@ -16,6 +16,7 @@ from typing import Any
 
 import av
 import numpy as np
+from ...shared.errors import FalconvarError
 
 #: What both Whisper and pyannote are trained on. Not a parameter.
 SAMPLE_RATE = 16000
@@ -28,7 +29,7 @@ SAMPLE_RATE = 16000
 SILENCE_RMS = 1e-3
 
 
-class NoAudio(Exception):
+class NoAudio(FalconvarError):
     """The file carries no audio stream at all."""
 
 

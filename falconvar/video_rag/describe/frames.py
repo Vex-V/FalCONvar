@@ -17,9 +17,10 @@ from typing import Any
 
 from ...shared import paths
 from ...shared.contracts.documents import Manifest
+from ...shared.errors import Unavailable
 
 
-class StoreUnavailable(RuntimeError):
+class StoreUnavailable(Unavailable):
     """The frame store is missing, or lacks a frame the manifest names."""
 
 

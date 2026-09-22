@@ -15,9 +15,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence
 
 from .frames import LoadedFrame
+from ...shared.errors import Unavailable
 
 
-class DescriberUnavailable(Exception):
+class DescriberUnavailable(Unavailable):
     """No client, no key, or a model this account cannot reach."""
 
 

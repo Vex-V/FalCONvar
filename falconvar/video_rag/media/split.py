@@ -23,9 +23,10 @@ from typing import Optional
 import av
 
 from ...shared.contracts.documents import AudioStream, Media, VideoStream
+from ...shared.errors import FalconvarError
 
 
-class UnusableMedia(RuntimeError):
+class UnusableMedia(FalconvarError, RuntimeError):
     """The file cannot be opened, or carries neither a video nor an audio stream."""
 
 

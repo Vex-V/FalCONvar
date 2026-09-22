@@ -26,6 +26,7 @@ from typing import Any, Optional, Sequence
 import av
 
 from ...shared.contracts.documents import Cuts, Media
+from ...shared.errors import FalconvarError
 
 #: Cuts are a global property of the frame; full resolution buys nothing but
 #: time. Detection runs on a downscaled copy.
@@ -39,7 +40,7 @@ DEFAULT_THRESHOLD = 27.0
 DEFAULT_STRIDE = 5
 
 
-class NoPicture(RuntimeError):
+class NoPicture(FalconvarError, RuntimeError):
     """Asked to find scene cuts in a file with no video stream."""
 
 

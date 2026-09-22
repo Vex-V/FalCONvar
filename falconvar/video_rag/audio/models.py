@@ -17,10 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
 from .source import Track
-
-
-class ModelUnavailable(Exception):
-    """No model, no runtime, or a load that will not succeed by retrying."""
+#: The same class the local aggregates raise; see `shared/errors.py`.
+from ...shared.errors import ModelUnavailable
 
 
 # ---------------------------------------------------------------- transcribe
@@ -199,10 +197,42 @@ def diarizer(name: str, **kwargs) -> Diarizer:
     return _resolve(DIARIZERS, name, "diarizer")(**kwargs)
 
 
+def settings(kind: str, name: str) -> set[str]:
+    """What this backend's constructor accepts, by argument name.
+
+    Read off the signature rather than tabled beside it, for the reason
+    `/capabilities` introspects a component rather than restating its
+    parameters: a restated list drifts, and a drifted one offers a setting the
+    backend does not take or hides one it does.
+
+    The backends differ in what they can be told -- `whisper` has a
+    `vad_filter` and `pyannote` an `exclusive`, and neither stub has either --
+    so the caller asks instead of assuming. Resolving the class imports its
+    module, which is the module the caller is about to construct from anyway;
+    nothing heavy is pulled in that the build would not pull in.
+    """
+    registry = {"transcriber": TRANSCRIBERS, "diarizer": DIARIZERS}.get(kind)
+    if registry is None:
+        raise KeyError(f"unknown kind {kind!r}; known: transcriber, diarizer")
+    import inspect
+    cls = _resolve(registry, name, kind)
+    if cls.__init__ is object.__init__:
+        # A backend with no constructor of its own takes nothing. Without this
+        # the signature read is `object.__init__(*args, **kwargs)`, whose
+        # parameter names are `args` and `kwargs` -- a set that happens to
+        # match nothing today and would match a real `kwargs` tomorrow.
+        return set()
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+             inspect.Parameter.KEYWORD_ONLY)
+    return {p.name for p in inspect.signature(cls.__init__).parameters.values()
+            if p.name != "self" and p.kind in named}
+
+
 def available() -> dict[str, list[str]]:
     return {"transcribers": sorted(TRANSCRIBERS), "diarizers": sorted(DIARIZERS)}
 
 
 __all__ = ["ModelUnavailable", "Word", "Segment", "Transcript", "Transcriber",
            "Turn", "Diarization", "Diarizer", "StubTranscriber", "NoDiarizer",
-           "TRANSCRIBERS", "DIARIZERS", "transcriber", "diarizer", "available"]
+           "TRANSCRIBERS", "DIARIZERS", "transcriber", "diarizer", "available",
+           "settings"]

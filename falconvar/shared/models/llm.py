@@ -43,6 +43,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional, Sequence
 
 from . import providers as providers_mod
+from ..errors import Unavailable
 
 #: Retries on the Anthropic path for a rate limit or an overloaded server. The
 #: OpenAI SDK already retries these inside a call; the Messages path is plain
@@ -51,7 +52,7 @@ RETRIES = 2
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
 
-class LLMUnavailable(Exception):
+class LLMUnavailable(Unavailable):
     """No key, or an API refusal that retrying will not fix."""
 
 
