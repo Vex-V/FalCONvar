@@ -7,16 +7,58 @@ downstream is keyed by `(video_id, chunk_id)`.
 
 ## Install
 
+Working on FalCONvar itself:
+
 ```bash
 pip install -r requirements.txt   # all of it: nothing falls back without a package
 pip install -e .              # then `python -m falconvar.…` from any directory
 cp .env.example .env          # OpenAI key; Supabase and HF tokens if used
 ```
 
+Using it as a library, where the heavy halves are opt-in:
+
+```bash
+pip install falconvar            # core: uniform sampling + an API model
+pip install "falconvar[local]"   # clip/yolo/objects/text, and in-process models
+pip install "falconvar[audio]"   # whisper + pyannote
+pip install "falconvar[all]"
+```
+
+An extra you did not install still fails with a plain `ModuleNotFoundError` at
+the point it is needed — nothing falls back to a second code path.
+
+```python
+import falconvar
+falconvar.configure(data_root="/var/lib/falconvar")   # before anything runs
+
+from falconvar.video_rag import video_rag             # the whole pipeline
+run = video_rag("x.mp4", policy="scene", sampler="clip:[text,scene]")
+
+from falconvar.video_rag import embed, describe       # or one component
+embed.run(run.video_id, embedder="local", index_name="qdrant")
+descriptions = describe.load(run.video_id)            # and read it back
+```
+
+Without `configure()` and outside a checkout, everything is written under
+`~/.falconvar`; `FALCONVAR_DATA` and `FALCONVAR_WEIGHTS` move it too.
+
 For the Postgres backend, run `db/supabase/install.sql` in the SQL editor and
 add `falconvar` to **Settings → API → Exposed schemas**. The file is idempotent
 and is also how a schema change is applied — re-run the whole thing.
 `db/supabase/reset.sql` drops everything first, and is the only destructive one.
+
+### Deleting every video, locally and in Supabase
+
+Irreversible: descriptions, embeddings and llm aggregates cost paid calls to
+rebuild. Stop the API first -- the embedded Qdrant store is locked while it runs.
+Keeps the schema, custom prompts and definitions (`data/*.json`), `data/eval/`
+and `weights/`, so nothing needs re-installing.
+
+```bash
+python db/wipe.py                 # lists what it will delete, then asks you to type 'delete'
+python db/wipe.py --local         # only data/out and data/uploads
+python db/wipe.py --supabase      # only the rows
+```
 
 ## Quickstart
 
@@ -24,6 +66,7 @@ and is also how a schema change is applied — re-run the whole thing.
 python -m falconvar.workflow samples/video.mp4 --policy vad --sampler clip,yolo:overview
 python -m falconvar.video_rag.retrieve "the moment the reactor exploded" video
 python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
+python example.py                             # both levels of the library, side by side
 ```
 
 ## The pipeline
@@ -37,7 +80,8 @@ runs one then the other:
   — counts, speakers, summaries, chapters, entities — and never reads the video.
 
 Every component reads files and writes files, none imports another, and every
-one has the signature `run(video_id, ...) -> Produced`.
+one has the signature `run(video_id, ...) -> Produced`, with `load(video_id)`
+to read what it wrote back.
 
 | # | tier | component | reads | writes |
 |---|---|---|---|---|
@@ -232,7 +276,7 @@ python -m falconvar.aggregates --list                                 # every ag
 ```
 
 **`summary`, `chapters` and `events` are data, not classes** — one prompt each
-of kind `fold`, `spans` and `items` in `falconvar/aggregates/definitions.json`.
+of kind `fold`, `spans` and `items` in `falconvar/aggregates/definitions/definitions.json`.
 `POST /aggregate-prompts` adds your own: an instruction, the answer's fields in
 the builder a custom question uses, and optionally the input it reads by
 default. Custom definitions live in `data/aggregates.json`.
@@ -385,13 +429,17 @@ falconvar/
     describe/      7  prompts · library · prompts.json · frames · backends/
     embed/         8  units · embedders · remote · local · indexes/ · readable
     retrieve/         search
-  aggregates/      tier 2: inputs · definitions.json · statistics/ · model/ ·
-                   llm/ (fold · spans · items · entities) · linking · driver.py
+  video_rag/driver.py + engine.py (what aggregates may ask)
+  aggregates/      tier 2: driver.py · base · inputs · rendering ·
+                   definitions/ · one folder per aggregator, each with a
+                   driver.py: stats speakers coverage (free) · ner sentiment
+                   (local) · fold spans items entities (llm)
 api/               HTTP: routes, dispatch, one background worker, db reads
 web/               the client at /app: one page, no build step
 recovery/          STANDALONE: rebuild a store from a manifest + the video
 db/
   supabase/        install.sql · reset.sql
+  wipe.py          delete every video, locally and in Supabase
   json/            document schemas, generated from the dataclasses
 data/              everything a run writes; gitignored
 docs/ROUTES.md     the HTTP surface

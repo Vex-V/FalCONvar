@@ -12,14 +12,18 @@ measurements and the traps live here.
 
 ```
 falconvar/
+  __init__.py      configure() · __version__ · the error base. Imports almost nothing
+  py.typed         PEP 561: without it a consumer's checker sees no annotations
   workflow.py      the whole run: video_rag's driver, then aggregates'
-  shared/          paths · env         both tiers import these
+  shared/          paths · env · errors   both tiers import these
     contracts/     documents · schemas   what components hand each other
+                   units (one embeddable thing + render) · fields (the builder)
     storage/       sinks · db · rows     where a document goes
-    models/        providers · llm       who answers a model call
-                   paths and documents import nothing
+    models/        providers · llm · embedders/   who answers a model call
+                   errors imports nothing; paths imports only errors
   video_rag/       TIER 1: the video in, a searchable index out, and the search
-    driver.py        extraction as component calls · search · what aggregates may ask
+    driver.py        Options · validate · process · video_rag() · the CLI
+                     and vocabulary(), the one thing aggregates asks
     media/         1 split: what streams the file carries
     audio/         2 source · reader · models
       backends/      whisper · pyannote · cuda
@@ -37,12 +41,15 @@ falconvar/
     retrieve/        search: a query to ranked moments
   aggregates/      TIER 2: answers over what video_rag extracted; never the video
     driver.py        answers up to a tier · the video's summary vector
-    base · inputs (what an aggregate reads) · rendering · linking (who is who, no model)
-    definitions      prompts and link profiles, as data
+    base             the protocols · Context · DefinitionRunner
+    inputs (what an aggregate reads) · rendering (how that reads to one)
+    definitions/     prompts and link profiles, as data
       definitions.json  BUILT-IN summary · chapters · events · people · objects · text
-    statistics/    stats · speakers · coverage      free: arithmetic, no input
-    model/         ner · sentiment                  local: GPU models
-    llm/           fold · spans · items · entities  llm: one runner per kind
+    one folder per aggregator, each with its own driver.py:
+    stats/ speakers/ coverage/        free:  arithmetic, no input
+    ner/ sentiment/                   local: GPU models
+    fold/ spans/ items/               llm:   one runner per kind
+    entities/      driver · linking (who is who, no model)
 api/               main (routes) · service (dispatch) · jobs (one worker)
                    browse (read-only queries over the rows a run wrote)
 web/               the client at /app. No build step: index.html · app.js ·
@@ -51,6 +58,7 @@ web/               the client at /app. No build step: index.html · app.js ·
 recovery/          STANDALONE: recreate.py, imports nothing from the pipeline
 db/
   supabase/        install.sql · reset.sql
+  wipe.py          delete every video, locally and in Supabase
   json/            document schemas, generated from the dataclasses
 data/              everything a run writes; gitignored
   out/<id>/        media, transcript.raw, cuts, timeline, manifest, store,
@@ -81,6 +89,7 @@ python -m falconvar.aggregates <id> --tier llm --index supabase   # answers, + t
 python -m falconvar.video_rag.media samples/x.mp4
 python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
 python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.video_rag.boundaries <id> --evidence --detect-width 160   # cheaper pass
 python -m falconvar.video_rag.boundaries <id> --calibrate        # sweep, no decode
 python -m falconvar.video_rag.boundaries <id> --retune 45        # rethreshold cached scores
 python -m falconvar.video_rag.boundaries <id> --policy scene --chunk-duration 30
@@ -88,6 +97,11 @@ python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]"   # one p
 python -m falconvar.video_rag.video <id> --sampler clip:text+scene       # same, no brackets
 python -m falconvar.video_rag.video <id> --sampler yolo --per-second 4 --min-interval 3
 python -m falconvar.video_rag.video <id> --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video_rag.video <id> --sampler objects --confidence 0.55   # detector, not change
+python -m falconvar.video_rag.video <id> --sampler text --languages en,de
+python -m falconvar.video_rag.audio <id> --no-vad-filter --compute-type int8
+python -m falconvar.video_rag.audio <id> --overlaps      # keep overlapping speech
+python -m falconvar.video_rag.describe <id> --max-tokens 4000   # re-describes everything
 python -m falconvar.video_rag.video <id> --prune-store           # irreversible, opt-in
 python -m falconvar.video_rag.cut <id>
 python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
@@ -101,6 +115,18 @@ python -m falconvar.video_rag.retrieve "..." <id> --question text       # across
 python -m falconvar.aggregates <id> --tier llm
 python -m falconvar.aggregates <id> --tier llm --only entities   # who is who, across chunks
 python -m eval.entities                         # grade linking against hand labels
+python -m eval.attributes                       # prototype: people by attributes (test.md)
+python -m eval.tracking --errors 3              # prototype: tracking veto / merge variants
+
+# as a library, not a CLI
+pip install falconvar            # core: uniform + an API model
+pip install "falconvar[local]"   # clip/yolo/objects/text + in-process models
+pip install "falconvar[audio]"   # whisper + pyannote
+pip install "falconvar[all]"
+python -m pip wheel --no-deps -w dist .      # build it
+
+python example.py                # both levels, same video, side by side
+python example.py samples/x.mp4
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
@@ -125,12 +151,50 @@ never touches the video. `workflow.py` calls the two drivers and nothing below
 them; each driver calls its own components -- the shape the pipeline always
 had, one level up.
 
-The dependency runs one way. `aggregates` reaches video_rag only through
-`video_rag/driver.py` -- `documents`, `vocabulary`, `render`, `answer_schema`,
-`field_problems`, `embedder`, `index_video_summary` -- never a component. video_rag never reads anything
-aggregates wrote: the whole-video vector used to be made by `embed` reading
-`aggregates/summary.json`, which also meant a first run never made one, since
-embed runs before aggregate. Now aggregates hands the summary over.
+The dependency runs one way, and it is **one function wide**. `aggregates`
+calls `video_rag.driver.vocabulary()` and nothing else: what a question or a
+sampler may be named, so an input can be checked before a job is queued.
+
+It was seven. The other six were never video_rag features -- they were shared
+concerns misfiled there because video_rag was written first, which their own
+imports gave away. `embed/embedders.py` imported nothing but `shared.errors`
+and `shared.models.providers`; `units.render` imported nothing at all;
+`library.check_fields` carried a docstring already saying *"a describe shape is
+not the only answer built from fields: an aggregate prompt's is too"*. They now
+live where both tiers can reach them without an edge:
+
+    shared/contracts/units    Unit, render        embed makes one per chunk,
+                                                  aggregates one per video
+    shared/contracts/fields   the field builder   a describe shape and an
+                                                  aggregate prompt both compile
+    shared/models/embedders/  the registry        identity must be measured in
+                                                  the space the index was built
+    shared/storage/rows       write_video_unit    a row write, like every other
+    (nothing)                 documents()         `paths` + a dataclass; the
+                                                  other tier just reads the files
+
+**`vocabulary()` is the one that cannot move**, and the reasons are worth
+keeping. `shared` holding it would mean `shared` importing a tier -- a cycle,
+and the one rule that holds today without exception. `aggregates` holding it
+would be the same dependency spelled *wider*: two component imports instead of
+one call, coupled to `shape_of`'s internal return shape rather than flat data.
+And it cannot be read off a video's output, because `aggregates.validate` takes
+no `video_id` -- a request is checked before any video is named, which is what
+makes a typo a 422 at submit time rather than a job that runs and finds
+nothing.
+
+Verified by the move itself: renaming every component's `run`, renaming
+`reader.describe` to `answer` and moving `linking.py` into `entities/` touched
+**no line of `aggregates`**. And `embed` re-run against an already-embedded
+video reported **0 embedded, 15 unchanged** -- the embedder key and every text
+hash identical after the registry moved, so nothing already stored became
+unreachable.
+
+video_rag never reads anything aggregates wrote: the whole-video vector used to
+be made by `embed` reading `aggregates/summary.json`, which also meant a first
+run never made one, since embed runs before aggregate. `aggregates.index_summary`
+writes it now, through `shared`, so the handoff is not a call in either
+direction.
 
 **The grid is a component, not a side effect.** Everything that needs
 boundaries reads `timeline.json`; nothing derives them as a byproduct. There is
@@ -162,6 +226,27 @@ else. No streaming chunker, no `observe()` at native rate, no open-ended
 only when a pass produces the grid it is simultaneously consuming, so decisions
 get made before the information to make them exists and have to be patched.
 
+**A component's signature is its whole surface, so everything under it has to
+be reachable from there.** `/capabilities` reads the signature and the client
+builds a form from that, so a setting the `run()` does not take is a setting
+nobody outside the package has. Audited across video_rag once and it had
+drifted in five places: the diarizer was constructed with **no arguments at
+all**, so pyannote's `exclusive` -- which decides whether overlapping speech is
+resolved, and the grid rests on the resolved form -- could not be set; whisper's
+`vad_filter` likewise, and on the reference video it is the difference between
+**10 segments and 0**; describe pinned `max_output_tokens` at 2000, the number
+the `people` schema already truncated at 700; the text sampler was English-only
+because `languages` stopped at the sampler constructor; and `embed` took a
+`sink` it never read, which `/capabilities` then published as a working
+control. A parameter accepted and ignored is worse than one missing: the form
+offers it, the run reports success, and nothing says the setting did nothing.
+
+Still not reachable, deliberately: per-sampler internals (`clip.mode`,
+`yolo.crop_pad`, `objects.class_aware`/`metric`, `ocr.grid`, EasyOCR's
+`canvas_size`), because one CLI has one `--threshold` and one `--vocabulary`,
+and per-sampler configuration needs a spec syntax before it needs parameters.
+`FrameStore.quality` and the `rotation` override are simply not wired.
+
 **Components exchange files, never objects.** Every one is
 `run(video_id, ...) -> Produced`, addressed by video id and a backend rather
 than by assembled paths. That is what makes each independently runnable,
@@ -192,6 +277,13 @@ first had landed, leaving a manifest claiming a run with no sampled frames —
 indistinguishable from a run whose samplers kept nothing, which happens. Written
 the other way round, the same failure leaves rows nobody points at and no
 manifest claiming them, so a reader is told the truth: not ingested here yet.
+
+**`embed` has no sink, and had one that did nothing.** Every other component
+writes a document and `sinks.write` fans it out; this one writes vectors, and
+where they go is `index`. `embedded.json` has no row mapping at all, so the
+`supabase` backend would be refused for it. The parameter was accepted, never
+read, and published by `/capabilities` -- a destination control on a generated
+form that changed nothing.
 
 **Recompute and write are different questions.** The fingerprint governs
 whether to recompute; every requested backend is written regardless. Conflating
@@ -228,10 +320,34 @@ reorganisation changes. It broke twice this way: `WEIGHTS_DIR` at
 downloaded wherever ultralytics decided and nothing reported it; and moving
 `paths.py` one level down silently redirected every artifact.
 
-`FALCONVAR_DATA` moves the data root. It is a **process** variable, not a
-`.env` key: `.env` is read at the top of an entry point, later than these
-constants resolve, and a path that moved depending on how early it was read
-would be worse than one that cannot go in `.env` at all.
+**A marker is only ours if the package under it is ours.** Searching upward
+finds *a* `pyproject.toml`, not necessarily this project's. Installed into a
+venv inside someone else's repo, the search walked out of `site-packages` and
+returned **their** root: the library imported fine and resolved `DATA_ROOT` and
+`WEIGHTS` into their tree, so a run would have written every artifact and
+338 MB of checkpoints there with nothing reporting it. Worse than the bare
+case, which at least raised `RuntimeError` from `import falconvar` and so could
+not be shipped at all. A candidate counts only when
+`root/falconvar/shared/paths.py` resolves to that very file.
+
+**The roots resolve on first use, not at import.** As module constants they
+were computed before a caller could say where its data should go — an
+installed copy raised from the import itself. `paths.configure(data_root=...)`
+now works after the import that triggers it, and PEP 562 keeps every reader
+spelling it `paths.OUT_ROOT` while the value is computed per access. Four
+module-level captures had to go with them (`SCHEMA_DIR`, the two weights
+caches, the API's uploads directory): captured at import, they ignore a later
+`configure()` and put the checkpoints in the old place.
+
+Precedence: `configure()`, then `FALCONVAR_DATA` / `FALCONVAR_WEIGHTS`, then
+the checkout, then `~/.falconvar`. `configure()` wins because an embedding
+application must be able to guarantee where it writes; the variables are for
+when you do not control the calling code. Neither is a `.env` key: `.env` is
+read when a key is needed, which can be earlier or later than a path is, and a
+root that moved depending on which module was touched first would be worse than
+one that cannot live there at all. `.env` itself is the checkout's from a
+checkout and the working directory's from an install — the only file a
+consumer would expect to be read.
 
 **A leading underscore under `data/out/` marks a directory that is not a
 video.** The embedded Qdrant store lives at `_qdrant`, beside the videos rather
@@ -264,6 +380,33 @@ out costs EasyOCR on every decimated frame — 98.1% of that sampler's total.
 `uniform:text` ran **no model at ingest** and the VLM still transcribed
 `RadioFreeEurope RadioLiberty`, `BYELORUSSIAN S.S.R.`, `REACTOR 1`, `1977`
 correctly. Two different questions, not two settings of one.
+
+**A detector's settings are not the sampler's threshold.** `threshold` is how
+much the frame must have changed to keep it; `confidence` is how sure the
+detector must be that a box is a box at all. Different quantities on different
+scales, so they are separate parameters landing on separate samplers --
+`confidence` on `objects`, `languages` on `text` -- rather than more readings of
+one number. `languages` is the one with no workaround: without it EasyOCR is
+asked for English and there is nothing to say otherwise.
+
+**And a setting no chosen sampler reads is refused.** `--sampler uniform
+--confidence 0.55` used to return `Produced` with the sampler built from *no
+config at all*, and say nothing — the rule `audio.run` already applied to its
+two backends, not applied here when `confidence` and `languages` were added.
+`video.SAMPLER_SETTINGS` is setting → the samplers that read it, and
+`build_samplers` refuses anything that lands nowhere, naming it and what does
+read it. `boundaries.EVIDENCE_SETTINGS` is the same for the precursor passes,
+keyed by **policy and not by precursor**: `speech.detect` takes `silence_s`
+but only `vad` reads it — `speaker_cuts` has no such argument — so grouping
+both speech policies together would let `--policy speaker --silence 2.0`
+through to be ignored, which is the failure the table exists to stop.
+
+Both are compared against the published default rather than a `None` sentinel,
+so `/capabilities` keeps showing `stride: 5` to a form; passing a default
+unchanged is a no-op either way. And `service.conditions()` now *derives* its
+`when` from these two tables instead of restating them — a form that hid a
+different set from the one the component enforces would offer a field whose
+value is then rejected.
 
 **A sampler runs once and answers a list of questions.** `clip:[text,scene]`
 is one pass over the video answering two questions about the frames it kept;
@@ -413,6 +556,13 @@ consequence of decimation: `every_n=3` is one frame every 3 s at
 `per_second=1` and one every 0.75 s at 4. A cadence in seconds regardless is
 still expressible through `min_interval_s`, enforced in the base class before
 the strategy runs. Default 1: every decimated frame.
+
+**`max_output_tokens` is a setting, and it is part of the resume key.**
+`ModelDescriber.config()` reports it, so raising it re-describes everything
+already stored, at cost. That is correct rather than unfortunate: a truncated
+answer and a whole one are different answers, and a stored one cannot say which
+it was. `None` means the backend's 2000 and produces the config byte for byte
+as before, so nothing already described went stale when the parameter appeared.
 
 **Resume is keyed on the manifest, the describer *and* the prompts.** Without
 the model check, describing with the stub and then switching to a real one
@@ -670,6 +820,17 @@ recording, so `SPEAKER_00` in one window bears no relation to `SPEAKER_00` in
 the next — chunk first and the speakers are not misaligned, they are
 unnameable.
 
+**A setting no chosen backend takes is refused, not dropped.** `stub` has no
+`language` and `none` has no `exclusive`, and the two halves are configured
+independently -- both call their checkpoint `model`, which is why the component
+spells them `model` and `diarizer_model`. `models.settings()` reads each
+backend's constructor, `audio.run` routes each setting to the half that takes
+it (`device` to both, being a fact about the machine), and names any that
+landed nowhere. Quietly ignoring one would mean a run reporting success having
+transcribed under settings nobody asked for -- the same silence the named
+defaults in `audio/driver.py` exist to prevent. The client never builds such a
+request anyway: `conditions()` hides a setting whose backend is not selected.
+
 **Transcription and diarization stay separate passes, joined by `align`.**
 Whisper does not know who spoke and pyannote does not know what was said. A
 word is attributed by its **midpoint**, because the two models estimate edges
@@ -765,6 +926,33 @@ questions similarity answers approximately. Measured on Chernobyl: 89.4% speech
 ratio, 125.1 words per minute, `monologue: true` with 0 handovers, and chapters
 that tile the whole video with the explosion at 94.4 s.
 
+**One folder per aggregator, and a tier is not a folder.** They were grouped by
+tier -- `statistics/`, `model/`, `llm/` -- which put a *cost* in the directory
+tree and left `linking.py`, 230 lines read by one runner, three levels away from
+it at the package root. A tier is already a class attribute, and the ladder is
+`TIERS` in `base`, so the directory said nothing the code did not. `model/` was
+also the worst name available: everywhere else here a model is a provider, and
+that folder held NER and sentiment.
+
+So each aggregator is a folder with its own `driver.py`, as a video_rag
+component is. Most hold one file today, which is the point -- `entities/` needed
+two the day it was written, and the next aggregator that needs three has
+somewhere to put them. What every aggregator shares stays at the root, the way
+video_rag's components share `falconvar/shared/`: `base` (the protocols,
+`Context` and `DefinitionRunner`), `inputs` and `rendering`.
+
+`DefinitionRunner` moved out of `llm/__init__.py` for the reason `Sampler` is in
+`samplers/base.py`: a base class inside a package's `__init__` is reached by
+importing the package, so every kind that subclasses it drags in its siblings.
+Measured after the move -- importing `falconvar.aggregates` loads the three free
+aggregators and nothing else; `ner`, `sentiment` and all four runners stay
+unimported until asked for by name.
+
+Nothing stored was invalidated. A worktree at the previous commit, run against
+the aggregates the new layout had just written, read **4 of 4 as current** --
+same fingerprints, same `version` hashes, same model keys -- and every id, tier,
+kind, default input and definition entry compares byte-identical.
+
 **A tier is a cost ceiling, and asking for a dear one still runs the cheap
 ones.** Cheapest first, so a run that dies partway has produced the free results
 rather than none.
@@ -806,7 +994,7 @@ skipped at run time with the reason.
 
 **Prompts are data; the kinds are the only code.** `summary`, `chapters` and
 `events` are one entry each of kind `fold`, `spans` and `items` in
-`aggregates/definitions.json`; a custom prompt is another entry in
+`aggregates/definitions/definitions.json`; a custom prompt is another entry in
 `data/aggregates.json`, not a class. The answer's fields use describe's builder
 and the schema is generated from it, for the reason a custom question's is.
 Every word a model is told -- the kinds' own citation and check lines included
@@ -860,7 +1048,7 @@ descriptions since rewritten reads perfectly, which is precisely why staleness
 cannot be left to a reader to notice.
 
 **Entities: who is who is decided by rules; the model only writes the
-account.** `aggregates/linking.py` embeds each mention's identity keys and
+account.** `aggregates/entities/linking.py` embeds each mention's identity keys and
 merges under constraints; the `link` runner then asks for one account per
 linked entity (concurrently, capped at 12). v0's flow, cluster then narrate.
 Tried the other way first: gpt-5.4-mini, given test1's 39 actor entries, linked
@@ -936,6 +1124,18 @@ flagged). `activity`'s `actor` field carries position and behaviour; the
 **The labels are tiny and were written by the builder**: 20 scored mentions on
 test1 and 9 on test2, read from the descriptions after seeing one run. test2 is
 the check test1 was not tuned on. A direction, not a result.
+
+**Attribute tracking is a prototype in `eval/`, not the linker.** test.md's
+proposal -- the `people` shape answering in fixed vocabularies, a weighted
+distance over them, Hungarian assignment over answers in time order -- lives in
+`eval/attributes.py` and `eval/tracking.py`, reading test1 re-described under
+`data/eval/people` so the real test1's `activity` labels were untouched.
+Attributes separate same from different people at AUC 0.970 against 0.862 for
+word overlap. The one fix that helped is a **merge pass** joining tracks that
+never share an answer: F1 0.94 / 4 wrong against 0.93 / 7. Vetoes hurt -- age
+0.93 -> 0.81, gender 0.94 -> 0.92 -- because a refused mention lands in another
+person's track; matching against the whole track did not beat the last two
+appearances. 62 labelled mentions on one video, not yet checked on test2.
 
 ---
 
@@ -1094,6 +1294,104 @@ but now with more paid calls already in flight when it happens.
 
 ---
 
+## As a library
+
+The product is the library; `api/` and `web/` are how it gets exercised. Two
+levels are public, and a third exists because the first two need it.
+
+```python
+from falconvar.video_rag import boundaries, describe, embed   # one component
+embed.run(video_id, embedder="local", index_name="qdrant")
+boundaries.evidence(video_id, "scene", stride=5)     # not everything is `run`
+descriptions = describe.load(video_id)               # read a result back
+
+from falconvar.video_rag import video_rag            # the whole pipeline
+video_rag("x.mp4", policy="scene", sampler="clip:[text,scene]")
+
+import falconvar
+falconvar.configure(data_root="/var/lib/falconvar")  # before anything runs
+```
+
+**The module is the unit: `embed.run`, never a bare `embed`.** The function in
+`embed/driver.py` *is* named `embed`, with `run = embed` beneath it, and that
+is worth keeping -- eight components all raising from a frame called `run` put
+zero information in the one line a user pastes into a bug report, and
+`help(embed)` said `run(...)`. But only `run` is exported, because a bare-name
+style does not survive contact with the rest of the surface:
+
+    load        in 6 of 8 components
+    build       in 3       boundaries · describe · embed
+    available   in 2       describe · embed
+
+So `from ...boundaries import load` and `from ...describe import load` collide
+immediately, and a caller ends up writing `load as load_timeline` -- which is
+exactly what the components already do to each other internally. And "more than
+`run`" is the *common* case, not the rare one: reading results is half of what
+a library is for. Measured on the example script written the other way, three
+of seven components had to be imported twice, once as the function and once as
+the module.
+
+`boundaries` is the clearest case, with three ways in and only one of them
+`run`: `evidence` decodes and scores (14.0 s on the test video), `run` turns
+the cached cuts into a grid (0.03 s), and `retune` re-thresholds the stored
+score series without decoding at all (0.004 s, **3,500x**). No naming collapses
+that into one function.
+
+Renaming the functions cost two collisions, both worth fixing -- `media/driver.py`
+had a local `media`, and `describe/` had a *second* function called `describe`
+in `reader.py`, renamed `answer`, which is what the rest of the tree calls one.
+Left unfixed the second was infinite recursion.
+
+**A module's public surface is `run` and `load`.** Two directions, not two
+steps: `run` does the work and writes, `load` reads the result back, typed.
+Nothing in a hand-written pipeline calls `load` to make the pipeline work --
+each `run` resolves its own inputs through other components' `load`, which is
+where the data flow went when it left the driver. `load` is public because it
+is simultaneously a component's input mechanism and a user's way to read
+results.
+
+Two components honestly break the pair, and both are worth knowing. `embed`
+has `run` and no `load`: it writes *vectors*, into an index rather than a
+document, and `embedded.json` beside them is for reading rather than searching
+(`readable`). `retrieve` has neither -- it is `search(query, ...)`, because a
+query is not a video id and what comes back is a ranking, not an artifact.
+
+**Exports are lazy where eagerness would cost an import.**
+`from falconvar.video_rag import video_rag` binds `process`, which imports
+every component: 53 modules, 352 ms and `av`, for someone who wanted one of
+them. PEP 562 `__getattr__` defers it, and `import falconvar.video_rag` stays
+at 1.3 ms. The same trick holds `__version__`, because
+`importlib.metadata.version` scans the environment's distributions -- measured
+**~120 ms**, a tenth of a second on every `import falconvar` to compute a
+string almost nobody reads.
+
+**Every deliberate failure is a `FalconvarError`, and keeps its builtin base.**
+Twenty classes across ten modules had no common ancestor, so an embedding
+application could not say "anything the library refused" without listing them,
+and a list drifts. `class UnknownBackend(FalconvarError, ValueError)` mixes the
+base in rather than substituting it, so every `except ValueError` already
+written still fires. `Unavailable` is the branch worth catching on its own --
+no package, no weights, no key, no server, none of it fixed by retrying.
+Two names collided: `ModelUnavailable` existed twice with *different* bases,
+so `except ModelUnavailable` silently covered half of what it looked like it
+covered (now one class in `shared/errors.py`), and `Protected` is now
+`ProtectedDefinition` and `ProtectedPrompt`.
+
+**Heavy dependencies are extras, and that does not weaken "a requirement is
+required".** That rule forbids a second code path when a package is absent.
+An extra that is not installed still fails at the function-local import with
+the interpreter's own `ModuleNotFoundError`, and nothing falls back. Extras
+change what gets *installed*, never what happens when something is not --
+and `pip install falconvar` pulling several GB of CUDA wheels for someone
+running `uniform` against an API model is a worse default than `[local]`.
+
+**Packages are found, not listed.** The explicit list drifted the moment a
+folder was added, and a package left off a wheel is not a build error -- it is
+an `ImportError` for whoever installs it. `recovery/` stays excluded and
+`__init__`-less on purpose.
+
+---
+
 ## API
 
 **Every component has the same signature, so one route runs any of them.**
@@ -1118,6 +1416,28 @@ signature — name, type, default, required. Introspected for the reason
 `defaults` is read off `workflow.Options`: a restated list drifts, and a
 drifted one offers a parameter the component does not take or hides one it
 does. That is the contract a configuration UI builds against.
+
+**A signature says what a component accepts, not when a setting means
+anything.** `boundaries.evidence` takes `stride` and `silence_s` together, and a
+form built from the signature alone offered `silence_s` beside `policy: scene`,
+where it is silently ignored. `service.conditions()` adds a `when` to each such
+parameter -- another parameter and the values under which this one applies,
+or for a sampler spec the sampler names that read it -- with the values read off
+`POLICIES`, the sampler registry and `TRANSCRIBERS`. The client hides what does
+not apply and never sends a hidden value, so a `stride` typed before switching
+to `vad` does not ride along.
+
+**A published type is the annotation as written, and the client reads its
+shape.** `/capabilities` restates nothing, so a parameter's type arrives as
+`Optional[float]` or `str | Sequence[str]`. The client matched those strings
+*exactly* to pick a widget, so every `Optional[...]` field fell through to a
+text box and was sent as text: `threshold` reached a sampler as `"0.9"` and
+raised on its range check, and `vocabulary` arrived as a string that `list()`
+turned into one entry per letter. `kindOf` strips the wrapper, takes a union's
+first member -- which is why `str | Sequence[str]` stays one text box holding a
+spec the component parses itself -- and a sequence is split on commas for every
+such parameter rather than for `samplers` alone. Nine parameters were affected
+before the two `Optional[bool]` ones existed to make it visible.
 
 **The API calls components, never drivers.** A driver is argparse; importing
 one to reach the work behind it would make a server depend on a CLI.
