@@ -43,8 +43,8 @@ from typing import Any, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from falconvar.rag.embed.indexes import tokenize          # noqa: E402
-from falconvar.rag.retrieve import search                 # noqa: E402
+from falconvar.video_rag.embed.indexes import tokenize          # noqa: E402
+from falconvar.video_rag.retrieve import search                 # noqa: E402
 
 
 # ----------------------------------------------------------------- metrics
@@ -163,7 +163,7 @@ def corpus_terms(video_ids: Iterable[str]) -> set[str]:
     this needs -- and it is the same text the vectors were built from, so an
     overlap measured here is the overlap the lexical half sees.
     """
-    from falconvar.rag.embed import readable
+    from falconvar.video_rag.embed import readable
 
     terms: set[str] = set()
     for video_id in video_ids:

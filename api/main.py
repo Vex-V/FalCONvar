@@ -34,8 +34,8 @@ from pydantic import BaseModel, Field
 from api import browse, service
 from api.jobs import Runner, progress
 from falconvar import workflow
-from falconvar.describe import library
-from falconvar.rag.embed import EmbedderUnavailable
+from falconvar.video_rag.describe import library
+from falconvar.video_rag.embed import EmbedderUnavailable
 from falconvar.shared import env, paths
 from falconvar.shared.storage import db
 
@@ -183,6 +183,14 @@ def run_component(video_id: str, component: str,
                                   "known": list(service.COMPONENTS)})
     if not paths.exists(video_id, "media"):
         raise HTTPException(404, {"error": f"{video_id} has not been uploaded"})
+    if component == "aggregate":
+        # A typo in an input is a 422 now, not a job that fails once queued.
+        p = request.params
+        problems = service.aggregates.validate(
+            p.get("tier", "free"), p.get("llm"), p.get("inputs"), p.get("only"),
+            p.get("embedder"))
+        if problems:
+            raise HTTPException(422, {"problems": problems})
 
     job = runner.submit(component, video_id,
                         lambda j: service.run_component(component, video_id,
@@ -272,6 +280,109 @@ def delete_prompt(name: str) -> None:
     except library.Protected as exc:
         raise HTTPException(409, {"error": str(exc)}) from None
     except library.PromptError as exc:
+        raise HTTPException(404, {"error": str(exc)}) from None
+
+
+# ---------------------------------------------------- aggregate definitions
+
+class AggregatePromptRequest(BaseModel):
+    """A custom aggregate: how it asks, what it asks, and the answer's shape.
+
+    `fields` is describe's builder, never a JSON Schema, for the reason a
+    question's is: the schema reaches the model API with `strict: true`, and a
+    raw one could express what that refuses -- failing with the call paid for.
+    """
+
+    name: str = Field(..., description="lowercase; not a code aggregator's name")
+    kind: str = Field(..., description="fold | spans | items")
+    instruction: str
+    fields: dict[str, Any] = Field(..., description="{name: {type: text|list, about, one_of?, of?}}")
+    about: str = ""
+    inputs: Optional[str] = Field(None, description="what it reads by default; "
+                                                    "grammar at /aggregate-definitions")
+    key: Optional[str] = Field(None, description="spans/items: the list the answer is under")
+    fold_instruction: Optional[str] = Field(None, description="fold: what each batch is asked")
+
+
+class LinkProfileRequest(BaseModel):
+    """A custom link profile: what is linked, by which keys, and what to write."""
+
+    model_config = {"populate_by_name": True}
+
+    name: str
+    field: str = Field(..., description="a list field such as `people`; or a "
+                                        "text field, `summary` or `transcript` with `threshold`")
+    instruction: str
+    fields: dict[str, Any] = Field(..., description="the account per entity, as describe's builder")
+    about: str = ""
+    identity: list[str] = Field(default_factory=list, description="entry keys that say who it is")
+    story: list[str] = Field(default_factory=list, description="entry keys the account reads besides")
+    transcript: bool = False
+    from_: str = Field("*", alias="from", description="which answers: sources without fields")
+    threshold: Optional[float] = None
+    rule: str = "max"
+    mutual: bool = True
+    check: str = Field("flag", description="flag | off")
+    min_appearances: int = 2
+    max_narratives: int = 12
+
+
+@app.get("/aggregate-definitions", tags=["aggregates"])
+def list_definitions() -> dict[str, Any]:
+    """Every aggregate prompt and link profile, and the input grammar."""
+    return service.definition_list()
+
+
+def _definition_error(exc: Exception) -> HTTPException:
+    from falconvar.aggregates import definitions
+    if isinstance(exc, definitions.Protected):
+        return HTTPException(409, {"error": str(exc)})
+    return HTTPException(422, {"problems": getattr(exc, "problems", [str(exc)])})
+
+
+@app.post("/aggregate-prompts", status_code=201, tags=["aggregates"])
+def add_aggregate_prompt(request: AggregatePromptRequest) -> dict[str, Any]:
+    """Add a custom aggregate prompt. Writes a file; runs nothing."""
+    from falconvar.aggregates import definitions
+    entry = request.model_dump(exclude={"name"})
+    try:
+        return service.definition_add("prompts", request.name, entry)
+    except definitions.DefinitionError as exc:
+        raise _definition_error(exc) from None
+
+
+@app.delete("/aggregate-prompts/{name}", status_code=204, tags=["aggregates"])
+def delete_aggregate_prompt(name: str) -> None:
+    """Remove a custom prompt. Answers it wrote are untouched."""
+    from falconvar.aggregates import definitions
+    try:
+        service.definition_remove("prompts", name)
+    except definitions.Protected as exc:
+        raise HTTPException(409, {"error": str(exc)}) from None
+    except definitions.DefinitionError as exc:
+        raise HTTPException(404, {"error": str(exc)}) from None
+
+
+@app.post("/link-profiles", status_code=201, tags=["aggregates"])
+def add_link_profile(request: LinkProfileRequest) -> dict[str, Any]:
+    """Add a custom link profile; it runs as `entities:<name>`."""
+    from falconvar.aggregates import definitions
+    entry = request.model_dump(by_alias=True, exclude={"name"})
+    try:
+        return service.definition_add("profiles", request.name, entry)
+    except definitions.DefinitionError as exc:
+        raise _definition_error(exc) from None
+
+
+@app.delete("/link-profiles/{name}", status_code=204, tags=["aggregates"])
+def delete_link_profile(name: str) -> None:
+    """Remove a custom profile. Answers it wrote are untouched."""
+    from falconvar.aggregates import definitions
+    try:
+        service.definition_remove("profiles", name)
+    except definitions.Protected as exc:
+        raise HTTPException(409, {"error": str(exc)}) from None
+    except definitions.DefinitionError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None
 
 
@@ -459,8 +570,8 @@ def search(request: SearchRequest) -> dict[str, Any]:
                                "scope": scope, "videos": found}
         if not found:
             out["note"] = ("nothing in video_embeddings for this embedder -- "
-                           "run `aggregate --tier llm`, then "
-                           "`embed --index supabase`")
+                           "run `aggregates --tier llm --index supabase`, which "
+                           "stores each summary as its video's vector")
         if ignored:
             out["ignored"] = (f"{', '.join(ignored)} narrow inside a video, so "
                               "they do not apply to level=video")

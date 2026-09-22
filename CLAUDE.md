@@ -12,35 +12,42 @@ measurements and the traps live here.
 
 ```
 falconvar/
-  workflow.py      the whole run, as a list of component calls
-  shared/          paths · env         everything below imports these
+  workflow.py      the whole run: video_rag's driver, then aggregates'
+  shared/          paths · env         both tiers import these
     contracts/     documents · schemas   what components hand each other
     storage/       sinks · db · rows     where a document goes
     models/        providers · llm       who answers a model call
                    paths and documents import nothing
-  media/         1 split: what streams the file carries
-  audio/         2 source · reader · models
-    backends/      whisper · pyannote · cuda
-  boundaries/   3+4 scenes (picture) · speech (soundtrack) · grid
-  video/         5 reader · decimate · store · pipeline
-    samplers/      base · uniform · scene · people · objects · ocr
-      perception/  detectors · descriptors · embedders. Every model weight
-                   lives below this line and none above it.
-  cut/           6 the transcript, onto the grid
-  describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
-    prompts.json   BUILT-IN questions and shapes; shipped, read-only
-    backends/      stub · model (every provider, through shared/models/llm)
-  rag/embed/     8 units · embedders · remote · local · readable
-    indexes/       qdrant · supabase
-  rag/retrieve/ 10 search
-  aggregate/     9 base · rendering · linking (who is who, no model)
-    statistics/    stats · speakers · coverage      free: arithmetic
+  video_rag/       TIER 1: the video in, a searchable index out, and the search
+    driver.py        extraction as component calls · search · what aggregates may ask
+    media/         1 split: what streams the file carries
+    audio/         2 source · reader · models
+      backends/      whisper · pyannote · cuda
+    boundaries/   3+4 scenes (picture) · speech (soundtrack) · grid
+    video/         5 reader · decimate · store · pipeline
+      samplers/      base · uniform · scene · people · objects · ocr
+        perception/  detectors · descriptors · embedders. Every model weight
+                     lives below this line and none above it.
+    cut/           6 the transcript, onto the grid
+    describe/      7 prompts (logic) · library (the vocabulary) · frames · reader
+      prompts.json   BUILT-IN questions and shapes; shipped, read-only
+      backends/      stub · model (every provider, through shared/models/llm)
+    embed/         8 units · embedders · remote · local · readable
+      indexes/       qdrant · supabase
+    retrieve/        search: a query to ranked moments
+  aggregates/      TIER 2: answers over what video_rag extracted; never the video
+    driver.py        answers up to a tier · the video's summary vector
+    base · inputs (what an aggregate reads) · rendering · linking (who is who, no model)
+    definitions      prompts and link profiles, as data
+      definitions.json  BUILT-IN summary · chapters · events · people · objects · text
+    statistics/    stats · speakers · coverage      free: arithmetic, no input
     model/         ner · sentiment                  local: GPU models
-    llm/           summary · chapters · events · entities   llm: paid calls
+    llm/           fold · spans · items · entities  llm: one runner per kind
 api/               main (routes) · service (dispatch) · jobs (one worker)
                    browse (read-only queries over the rows a run wrote)
 web/               the client at /app. No build step: index.html · app.js ·
-                   app.css. Every form generated from /capabilities
+                   app.css. Every form generated from /capabilities. Pages:
+                   video rag · aggregates · prompts · search · data
 recovery/          STANDALONE: recreate.py, imports nothing from the pipeline
 db/
   supabase/        install.sql · reset.sql
@@ -56,7 +63,7 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-111 Python files, ~13.7k lines.
+116 Python files, ~15.6k lines.
 
 ## Commands
 
@@ -66,29 +73,33 @@ python -m falconvar.workflow samples/x.mp4 --no-audio --sampler uniform:text
 python -m falconvar.workflow samples/x.mp4 --tier llm --sink file,supabase \
        --index qdrant,supabase
 
+# one tier at a time
+python -m falconvar.video_rag samples/x.mp4 --sampler clip   # extract: media -> embed
+python -m falconvar.aggregates <id> --tier llm --index supabase   # answers, + the video vector
+
 # one component at a time; per-stage tuning lives on these, not on workflow
-python -m falconvar.media samples/x.mp4
-python -m falconvar.audio <id> --transcriber whisper --diarizer pyannote
-python -m falconvar.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
-python -m falconvar.boundaries <id> --calibrate        # sweep, no decode
-python -m falconvar.boundaries <id> --retune 45        # rethreshold cached scores
-python -m falconvar.boundaries <id> --policy scene --chunk-duration 30
-python -m falconvar.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
-python -m falconvar.video <id> --sampler clip:text+scene       # same, no brackets
-python -m falconvar.video <id> --sampler yolo --per-second 4 --min-interval 3
-python -m falconvar.video <id> --sampler objects --vocabulary "crate,pallet"
-python -m falconvar.video <id> --prune-store           # irreversible, opt-in
-python -m falconvar.cut <id>
-python -m falconvar.describe <id> --describer openai --limit 5   # costs money
-python -m falconvar.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
-python -m falconvar.aggregate <id> --tier llm --llm anthropic
-python -m falconvar.rag.embed <id> --embedder local --index qdrant   # in-process, no key
-python -m falconvar.video <id> --sampler uniform:safety   # a custom question
-python -m falconvar.rag.embed <id> --index qdrant,supabase
-python -m falconvar.rag.retrieve "..." <id> --sampler clip:text   # one pairing
-python -m falconvar.rag.retrieve "..." <id> --question text       # across samplers
-python -m falconvar.aggregate <id> --tier llm
-python -m falconvar.aggregate <id> --tier llm --only entities   # who is who, across chunks
+python -m falconvar.video_rag.media samples/x.mp4
+python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
+python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.video_rag.boundaries <id> --calibrate        # sweep, no decode
+python -m falconvar.video_rag.boundaries <id> --retune 45        # rethreshold cached scores
+python -m falconvar.video_rag.boundaries <id> --policy scene --chunk-duration 30
+python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
+python -m falconvar.video_rag.video <id> --sampler clip:text+scene       # same, no brackets
+python -m falconvar.video_rag.video <id> --sampler yolo --per-second 4 --min-interval 3
+python -m falconvar.video_rag.video <id> --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video_rag.video <id> --prune-store           # irreversible, opt-in
+python -m falconvar.video_rag.cut <id>
+python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
+python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
+python -m falconvar.aggregates <id> --tier llm --llm anthropic
+python -m falconvar.video_rag.embed <id> --embedder local --index qdrant   # in-process, no key
+python -m falconvar.video_rag.video <id> --sampler uniform:safety   # a custom question
+python -m falconvar.video_rag.embed <id> --index qdrant,supabase
+python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
+python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
+python -m falconvar.aggregates <id> --tier llm
+python -m falconvar.aggregates <id> --tier llm --only entities   # who is who, across chunks
 python -m eval.entities                         # grade linking against hand labels
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
@@ -106,9 +117,24 @@ top-level directory.
 
 ## Architecture — the load-bearing decisions
 
+**Two tiers, each a driver over the components in its folder.** `video_rag`
+extracts: the file, both modalities onto one grid, descriptions, vectors -- and
+answers queries over them, so it is a complete RAG engine on its own.
+`aggregates` answers higher-level questions over what video_rag extracted, and
+never touches the video. `workflow.py` calls the two drivers and nothing below
+them; each driver calls its own components -- the shape the pipeline always
+had, one level up.
+
+The dependency runs one way. `aggregates` reaches video_rag only through
+`video_rag/driver.py` -- `documents`, `vocabulary`, `render`, `answer_schema`,
+`field_problems`, `embedder`, `index_video_summary` -- never a component. video_rag never reads anything
+aggregates wrote: the whole-video vector used to be made by `embed` reading
+`aggregates/summary.json`, which also meant a first run never made one, since
+embed runs before aggregate. Now aggregates hands the summary over.
+
 **The grid is a component, not a side effect.** Everything that needs
 boundaries reads `timeline.json`; nothing derives them as a byproduct. There is
-no ordering rule anywhere in `workflow.py`, because the answer falls out of
+no ordering rule anywhere in `video_rag/driver.py`, because the answer falls out of
 what the policy depends on, and `boundaries.POLICIES` is that table as data:
 
     uniform    nothing.  arithmetic over a duration `media.json` already has
@@ -746,11 +772,63 @@ rather than none.
 **`depends_on` drops rather than fails.** `speakers` on silent CCTV is not an
 error, it is a question that does not apply, and it is reported as skipped
 *with the reason* — because "speakers did not run" is only useful beside why.
+`chapters` used to depend on `summary` and never read it; no aggregator depends
+on another now.
 
-**Every account of a chunk is rendered, not the first one found.** Taking only
-the best-ranked source throws the other modality away. Measured the hard way: a
-run picked stub `clip` text over 428 words of real narration, and the model
-correctly reported that it had been given nothing to summarise.
+**What an aggregate reads is an input, never a guess from sampler names.**
+`rendering.pick_sources` listed `transcript`, `clip`, `uniform` by preference and
+fell back to everything, so what a summary read depended on what the samplers
+happened to be called -- test1's `clip:topic` and `clip:activity` matched none
+of them. `aggregates/inputs.py` is a grammar with three operators:
+
+    ,        separate inputs -- one answer each
+    +        sources joined into one input
+    [a,b]    fields of one answer joined into one input
+
+`clip:hazards[severity,hazards]` is one summary over both fields;
+`clip:hazards[severity],clip:hazards[hazards]` is two, stored as
+`summary~severity` and `summary~hazards`. **A bare name is a question, never a
+sampler** -- `text` is both, and "the text on screen" is what a person means --
+so a sampler's whole output is `text:*`. Fields render through the index's own
+`units.render`, so a field reads to an aggregate as it reads to a search.
+
+**Every account of a chunk is read by default, not the first one found.** The
+default input is `transcript+*`. Taking only the best-ranked source throws the
+other modality away. Measured the hard way: a run picked stub `clip` text over
+428 words of real narration, and the model correctly reported that it had been
+given nothing to summarise.
+
+**A typo in an input is a 422; an input with nothing to read is a skip.**
+`aggregates.validate` parses every selection and checks each question, field and
+entry key against the vocabulary before a job is queued. Whether *this* video
+was asked a question is not in the request, so an input that finds nothing is
+skipped at run time with the reason.
+
+**Prompts are data; the kinds are the only code.** `summary`, `chapters` and
+`events` are one entry each of kind `fold`, `spans` and `items` in
+`aggregates/definitions.json`; a custom prompt is another entry in
+`data/aggregates.json`, not a class. The answer's fields use describe's builder
+and the schema is generated from it, for the reason a custom question's is.
+Every word a model is told -- the kinds' own citation and check lines included
+-- is in the JSON, so `version_of` covers it and editing any of it rebuilds what
+it wrote. No free-form kind: an answer without citations is a fold. Verified: a
+custom `incident_report` fold over `clip:hazards[severity,hazards]` on Chernobyl,
+reused on the second run, deleted with its answer left in place.
+
+**A colon cannot be in a Windows filename.** `entities:people` is stored as
+`entities.people.json`, and the API's aggregate URLs use the stem. No
+definition name or label contains a `.`, so the mapping reverses.
+
+**Nothing is cut to fit.** `chunk_rows` stopped at 400 rows and `sentiment`
+scored a chunk's first 480 characters as its tone. `items` now asks per
+100-line window, concurrently. `spans` folds chunks into parts until they fit
+one call and cites part ids, because dividing windows separately would force a
+chapter break at every window edge -- exercised on Chernobyl with the window
+shrunk to 4: 3 chapters over folded parts, every chunk covered. The local models
+cut text at sentence ends into pieces each reads whole, and sentiment weights
+them by length. On Chernobyl NER went from 27 entities to 55 and mean sentiment
+from -0.37 to -0.67 -- but the default input widened at the same time, so
+neither is a like-for-like measurement of the pieces.
 
 **Ask for a word count, not "several sentences".** Once structured fields
 arrived the model sized the summary as one field among many: 105 median words
@@ -764,12 +842,15 @@ chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
 
-The final summary goes somewhere else: `units.from_summary` turns it into one
-unit per video, which `embed` writes to `video_embeddings` rather than
-`embeddings`. `embeddings` answers *which twenty seconds*, a summary answers
-*which video*, and a video is not a moment you can play -- so the two never
-share a ranking, and `/search` reaches the second only as `level=video`.
-Postgres only, and best-effort: a missing `summary.json` writes nothing.
+The final summary goes somewhere else: once `aggregates` has it, and the run's
+`index` names `supabase`, it hands the payload to
+`video_rag.driver.index_video_summary`, where `units.from_summary` makes one unit
+per video for `video_embeddings` rather than `embeddings`. `embeddings` answers
+*which twenty seconds*, a summary answers *which video*, and a video is not a
+moment you can play -- so the two never share a ranking, and `/search` reaches
+the second only as `level=video`. Postgres only, and best-effort: a vector that
+fails to write does not fail the aggregates. Verified after the tier split:
+Chernobyl, `--tier llm --index supabase`, `video_units: 1`.
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -778,22 +859,30 @@ is asked for chunk ids, which it can copy; times it would invent.
 descriptions since rewritten reads perfectly, which is precisely why staleness
 cannot be left to a reader to notice.
 
-**Entities: who is who is decided by rules; the model only narrates.**
-`aggregate/linking.py` embeds each entry's identity fields and merges under
-constraints; `entities` then asks the model for one narrative per linked entity
-(concurrently, capped at 12). Tried the other way first: gpt-5.4-mini, given
-test1's 39 actor entries, linked 31, broke the same-answer rule twice after
-being told it, and merged an older woman with an older man.
+**Entities: who is who is decided by rules; the model only writes the
+account.** `aggregates/linking.py` embeds each mention's identity keys and
+merges under constraints; the `link` runner then asks for one account per
+linked entity (concurrently, capped at 12). v0's flow, cluster then narrate.
+Tried the other way first: gpt-5.4-mini, given test1's 39 actor entries, linked
+31, broke the same-answer rule twice after being told it, and merged an older
+woman with an older man.
 
-**Identity is declared, never inferred.** A shape names the keys that identify
-an entry -- `people`: `appearance`, `clothing` -- in `prompts.json`'s top-level
-`identity` map, or as `identity` on a custom field spec. Beside the shape, not
-inside it: `version_of` hashes the shape, so a key there would re-describe
-every answer given in it (verified: 18/18 prompt hashes unchanged). A shape
-declaring none is never linked. The driver fills `Context.identity`, so the
-aggregator never imports `describe`, and `entities` folds the declarations
-into its fingerprint through `inputs_of` -- the only aggregator with one, so
-every other stored fingerprint is untouched.
+**Identity belongs to a link profile, not to a shape.** A profile names a list
+field, the entry keys that identify one (`people`: `appearance`, `clothing`),
+the keys its account reads besides, and the account's instruction and fields.
+It used to be declared beside the describe shapes, which allowed one way to
+link a given answer; a profile can link the same `people` answers by clothing
+alone, and a run can narrow a profile with `yolo[people.clothing]` -- narrow
+only, since a key the profile does not name is a different profile. Moving it
+re-described nothing, because identity was never in a prompt hash. test1's
+labels are on the custom `activity` question, so `data/aggregates.json` carries
+an `actors` profile: after the move test1 linked into **the same groups**, and
+`eval.entities` printed the same table as below.
+
+**Whole values need a threshold.** A profile over a text field, the prose or the
+transcript yields one mention per answer, so nothing in the video is provably
+different and no threshold can be read off it. Such a profile must set one; it
+is refused at write time otherwise.
 
 **Cannot-link is per answer, and the threshold is read off it.** Two entries in
 one answer are different by the question's own wording ("one entry per
@@ -814,15 +903,35 @@ better on bge and makes wrong merges on OpenAI, and the default has to hold
 under whatever embedder a deployment runs. v0's genericness filter, tried as an
 outlier test on mean similarity, changed no result anywhere and was dropped.
 
+**The check flags; it never drops.** A model check inside the account call --
+"which of these observations is not the same subject" -- was measured as a
+filter that removed what it named:
+
+| | test1 F1 | test2 F1 |
+|---|---|---|
+| rules only | **0.94** | **0.91** |
+| check drops, run 1 | 0.91 | 0.80 |
+| check drops, run 2 | 0.81 | 0.80 |
+
+It caught the known bad merge, a cream coat inside the dark-puffy-coat woman,
+and it rejected true matches -- three of four the same way: a detail present in
+one observation and absent from another read as a contradiction, despite the
+instruction saying it is not one. The same prompt rejected three on one run and
+four on the next. Verifying candidate pairs instead of clusters made the same
+mistake. So `check: flag` keeps every member, marks the disputed ones (`doubt`
+on the mention, `doubts` on the entity) and writes the account from the rest;
+an entity whose every observation is disputed gets no account. On test1 after
+the change: 3 doubts, the cream coat among them, 0 members lost.
+
 **A score that skips doubtful labels hides exactly the wrong merges.** The
 first real run scored precision 1.00 while merging a dark puffy coat and a
 cream coat into the woman in the gray top -- every one of those mentions was
 labelled unsure, so no pair of them was scored. `eval/entities.py` now counts
 links touching unsure mentions as `unchecked`, and `different` labels rule a
-mention out of a group. Still in the stored output, unscored: the dark-coat and
-cream-coat women linked to each other, and two women linked on "entering".
-`activity`'s `actor` field carries position and behaviour; the `people` shape's
-`clothing` would not.
+mention out of a group. Still linked, unscored: the dark-coat and cream-coat
+women (now flagged by the check), and two women linked on "entering" (not
+flagged). `activity`'s `actor` field carries position and behaviour; the
+`people` profile's `clothing` would not.
 
 **The labels are tiny and were written by the builder**: 20 scored mentions on
 test1 and 9 on test2, read from the descriptions after seeing one run. test2 is
@@ -867,7 +976,7 @@ reason: a form defaulting to the dataclass's `None` shows nothing where the
 answer is `openai`.
 
 **A model choice is one string, and only the stages that call a model take
-it.** `describe`, `embed`/`retrieve` and `aggregate` each take one
+it.** `describe`, `embed`/`retrieve` and `aggregates` each take one
 `provider/model` argument; media, audio, boundaries, video and cut never see
 one. There was a separate `model` field beside every provider field -- six on
 `Options` and the upload form, a `--model` on four CLIs, two env variables per
@@ -1159,7 +1268,7 @@ which is why it was written that way.
 
 **`level` picks granularity and never mixes the two.** `moment` ranks chunks;
 `video` ranks whole videos by their summary out of `video_embeddings`, which
-`embed` writes from the `summary` aggregate (Postgres only; 4/4 on the test
+`aggregates` fills from its `summary` (Postgres only; 4/4 on the test
 corpus, winner 0.40-0.50 against runners-up of 0.05-0.32). One endpoint, but
 never one ranking: a whole-video "moment" beside real ones is not something you
 can play. At `level=video` the moment filters are reported under `ignored`
@@ -1343,7 +1452,7 @@ firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
 `shared.contracts.schemas --check` proves the dataclasses and the generated JSON
-Schema still agree. The API serves **21 routes**; `docs/ROUTES.md` is the
+Schema still agree. The API serves **26 routes**; `docs/ROUTES.md` is the
 reasoning and `/docs` the authority on shapes. The web client at `/app` drives
 every route a run or a question needs, generating each form from
 `/capabilities` rather than restating it.
@@ -1351,9 +1460,12 @@ every route a run or a question needs, generating each form from
 **The live deployment, as of 2026-09-15** -- facts about one database, not the
 code, and worth re-checking before trusting:
 
-- `install.sql` has not been re-run since it was trimmed and widened. Both
-  vector columns are still `vector(1536)` and `embeddings.timeline_fingerprint`
-  still exists; section 10 fixes both.
+- `install.sql` is current, including the aggregates redesign. Verified on
+  test1 with the secret key: 8 `aggregates` rows carrying `inputs`, `version`
+  and `stats.model`; `entities:actors` as 23 `entities` and 39
+  `entity_mentions` (3 with a `doubt`); 4 `aggregate_definitions`. A planted
+  stale entity and mention were deleted by the next write, and "who is in
+  chunk 2" is one equality on `entity_mentions`.
 - The publishable key in `.env` is refused with a 401 while the secret key
   works, so every read that goes through `db.client(write=False)` -- the
   `/db/*` routes, `video_embeddings`, the grid fallback in `retrieve` -- fails
@@ -1376,9 +1488,10 @@ code, and worth re-checking before trusting:
   mock server's recording of the request, not against the real thing.
 - **An answering model in-process.** Local answers go through a server --
   Ollama, LM Studio, llama.cpp, vLLM. Nothing loads a VLM into this process.
-- **Supabase at any width, run.** `install.sql` drops the fixed width, but the
-  live database has not had it re-run: both vector columns are still
-  `vector(1536)`, so nothing but OpenAI's embedder can write there yet.
+- **Supabase at any width, run.** `install.sql` drops the fixed width and the
+  live database has had it, but no non-OpenAI embedder has written there yet.
+- **Spans and items on a video longer than one window.** Both paths were
+  exercised with the window shrunk to 4 chunks, never on a video that needs it.
 - **Keeping answers when a describe call fails.** One failed call raises and
   the run's other answers -- already paid for, and with concurrency more of
   them in flight -- are discarded. Writing the successes before raising would

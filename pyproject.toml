@@ -22,7 +22,8 @@ dependencies = []
 # `python -m falconvar.workflow` from any directory has to find them, and an
 # editable install that resolves them by `__file__` would stop working the day
 # it becomes a real one.
-"falconvar.describe" = ["prompts.json"]
+"falconvar.video_rag.describe" = ["prompts.json"]
+"falconvar.aggregates" = ["definitions.json"]
 
 [tool.setuptools]
 # Explicit rather than discovered: `docs`, `db` and `data` are not Python, and
@@ -30,28 +31,28 @@ dependencies = []
 packages = [
     "api",
     "falconvar",
-    "falconvar.aggregate",
-    "falconvar.aggregate.llm",
-    "falconvar.aggregate.model",
-    "falconvar.aggregate.statistics",
-    "falconvar.audio",
-    "falconvar.audio.backends",
-    "falconvar.boundaries",
-    "falconvar.cut",
-    "falconvar.describe",
-    "falconvar.describe.backends",
-    "falconvar.media",
-    "falconvar.rag",
-    "falconvar.rag.embed",
-    "falconvar.rag.embed.indexes",
-    "falconvar.rag.retrieve",
+    "falconvar.aggregates",
+    "falconvar.aggregates.llm",
+    "falconvar.aggregates.model",
+    "falconvar.aggregates.statistics",
+    "falconvar.video_rag.audio",
+    "falconvar.video_rag.audio.backends",
+    "falconvar.video_rag.boundaries",
+    "falconvar.video_rag.cut",
+    "falconvar.video_rag.describe",
+    "falconvar.video_rag.describe.backends",
+    "falconvar.video_rag.media",
+    "falconvar.video_rag",
+    "falconvar.video_rag.embed",
+    "falconvar.video_rag.embed.indexes",
+    "falconvar.video_rag.retrieve",
     "falconvar.shared",
     "falconvar.shared.contracts",
     "falconvar.shared.models",
     "falconvar.shared.storage",
-    "falconvar.video",
-    "falconvar.video.samplers",
-    "falconvar.video.samplers.perception",
+    "falconvar.video_rag.video",
+    "falconvar.video_rag.video.samplers",
+    "falconvar.video_rag.video.samplers.perception",
 ]
 # `recovery/` is deliberately absent, and has no `__init__.py`. It is the
 # standalone kit -- hand someone those files, a manifest and the video and they

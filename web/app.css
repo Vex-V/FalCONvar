@@ -131,6 +131,7 @@ button.small {
   background: none; border: 1px solid var(--rule); border-radius: 2px;
   color: var(--ink); padding: 3px 9px; cursor: pointer; font: 12px inherit;
 }
+button.small[disabled] { opacity: .35; cursor: default; }
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
@@ -184,5 +185,27 @@ td.wrap { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 480px; }
 }
 @media (max-width: 900px) { .fieldrow { grid-template-columns: 1fr; } }
 
+.fieldrow.head { color: var(--quiet); font-size: 11px; margin-bottom: 2px; }
+
 details { border: 1px solid var(--rule); border-radius: 3px; padding: 8px 12px; margin-bottom: 10px; }
 summary { cursor: pointer; font-size: 12px; color: var(--quiet); }
+
+/* aggregates ------------------------------------------------------------- */
+
+.gate { border: 1px solid var(--ink); border-radius: 3px; padding: 10px 14px; margin: 0 0 14px; color: var(--ink); }
+
+table.pick td:first-child { width: 22px; }
+table.pick tr.tier td { background: var(--hush); color: var(--quiet); text-transform: uppercase;
+  letter-spacing: .06em; font-size: 11px; }
+table.pick input[type=text] { font-size: 12px; padding: 3px 6px; }
+table.pick tr.off td { opacity: .45; }
+
+.answers { display: flex; flex-wrap: wrap; gap: 6px; }
+.answers button[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+.prose { font-size: 14px; line-height: 1.6; max-width: 72ch; margin: 4px 0 10px; white-space: pre-wrap; }
+table.kv th { width: 170px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+
+.filterrow { display: grid; grid-template-columns: 1fr 110px 1fr 28px; gap: 6px; margin-bottom: 6px; }
+@media (max-width: 700px) { .filterrow { grid-template-columns: 1fr; } }

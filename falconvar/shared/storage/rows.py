@@ -170,13 +170,69 @@ def _descriptions(video_id: str, document: dict[str, Any], api: Any) -> None:
 
 
 def _aggregate(video_id: str, document: dict[str, Any], api: Any) -> None:
+    # `stats` carries who made the answer. Without it a Postgres reader could
+    # not tell a summary gpt wrote from one Claude wrote.
+    stats = document.get("stats") or {}
     db.upsert("aggregates", [{
         "video_id": video_id,
         "aggregate_id": document["aggregate_id"],
         "tier": document.get("tier", "free"),
         "payload": document.get("payload", {}),
         "inputs_fingerprint": document.get("inputs_fingerprint", ""),
+        "stats": stats,
+        "inputs": stats.get("inputs"),
+        "version": stats.get("version"),
     }], api)
+    if document["aggregate_id"].startswith("entities:"):
+        _entities(video_id, document, api)
+
+
+def _entities(video_id: str, document: dict[str, Any], api: Any) -> None:
+    """A link profile's answer as rows, so "who is in chunk 6" and "where does
+    e003 appear" are queries rather than a walk through a payload.
+
+    Keyed by the answer id, not the profile: one profile can answer several
+    inputs. Upserted, then whatever the answer no longer holds is deleted --
+    after, so a failure leaves the previous copy whole rather than a hole.
+    """
+    aggregate_id = document["aggregate_id"]
+    payload = document.get("payload") or {}
+    entities = payload.get("entities") or []
+    db.upsert("entities", [{
+        "video_id": video_id, "aggregate_id": aggregate_id,
+        "entity_id": e["entity_id"], "profile": payload.get("profile"),
+        "field": e.get("field"), "label": e.get("label"),
+        "appearances": e.get("appearances", 0), "chunk_ids": e.get("chunk_ids", []),
+        "start_ts": e.get("start_ts"), "end_ts": e.get("end_ts"),
+        "observed_s": e.get("observed_s"),
+        "account": e.get("account"), "doubts": e.get("doubts") or [],
+    } for e in entities], api)
+    mentions = [{
+        "video_id": video_id, "aggregate_id": aggregate_id,
+        "mention_key": m["key"], "entity_id": e["entity_id"],
+        "chunk_id": m["chunk_id"], "sampler_id": m["sampler_id"],
+        "entry": {k: v for k, v in m.items()
+                  if k not in ("key", "chunk_id", "sampler_id", "doubt")},
+        "doubt": m.get("doubt"),
+    } for e in entities for m in e.get("mentions") or []]
+    db.upsert("entity_mentions", mentions, api)
+    match = {"video_id": video_id, "aggregate_id": aggregate_id}
+    db.delete_except("entities", match, "entity_id",
+                     [e["entity_id"] for e in entities], api)
+    db.delete_except("entity_mentions", match, "mention_key",
+                     [m["mention_key"] for m in mentions], api)
+
+
+def write_definitions(entries: list[dict[str, Any]], api: Any = None) -> int:
+    """Record the aggregate definitions a run used, at the version it used.
+
+    Append-only and keyed `(name, version)`, for the reason `write_prompts` is:
+    an answer records the version it was asked under, and that hash cannot say
+    what the prompt was once it has been edited.
+    """
+    if not entries:
+        return 0
+    return db.upsert("aggregate_definitions", entries, api)
 
 
 def write_prompts(entries: list[dict[str, Any]], api: Any = None) -> int:
@@ -215,4 +271,4 @@ def writer_for(artifact: str) -> Optional[Callable[[str, dict[str, Any]], None]]
     return WRITERS.get(artifact)
 
 
-__all__ = ["WRITERS", "write_prompts", "writer_for"]
+__all__ = ["WRITERS", "write_definitions", "write_prompts", "writer_for"]

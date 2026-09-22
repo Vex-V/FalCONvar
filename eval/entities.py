@@ -92,15 +92,25 @@ def v0_groups(mentions, vectors, link=0.88, generic=0.80) -> list[list[int]]:
     return [sorted(g) for g in members.values()]
 
 
+#: What the labels were written against: the `actors` list of the custom
+#: `activity` question, identified by `actor`. An input, in the aggregates'
+#: grammar, so the harness needs no profile file to run.
+SELECT = "*[actors.actor]"
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    from falconvar.aggregate.driver import context_for
-    from falconvar.aggregate.linking import RULES, link, mentions_of
-    from falconvar.rag.embed import embedders
+    from falconvar.aggregates.definitions import Selection
+    from falconvar.aggregates.driver import context_for
+    from falconvar.aggregates.inputs import Source, parse
+    from falconvar.aggregates.linking import RULES, link, mentions_of
+    from falconvar.video_rag.embed import embedders
     from falconvar.shared import env
 
     ap = argparse.ArgumentParser(description="Grade entity linking against hand labels.")
     ap.add_argument("--embedder", action="append", default=None,
                     help="repeatable; default openai and local")
+    ap.add_argument("--select", default=SELECT,
+                    help="which list and keys identify a mention: source[field.key,...]")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     env.load()
@@ -108,12 +118,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     labels = json.loads(LABELS.read_text(encoding="utf-8"))["videos"]
     videos = list(labels)
     names = args.embedder or ["openai", "local"]
+    chosen = parse(args.select)[0]
+    fields = [f for s in chosen.sources for f in s.fields]
+    if not fields or any("." not in f for f in fields) or len({f.split(".")[0] for f in fields}) != 1:
+        ap.error("--select names one list and its keys, e.g. *[people.clothing,people.appearance]")
+    selection = Selection(tuple(Source(s.head) for s in chosen.sources),
+                          fields[0].split(".")[0], tuple(f.split(".", 1)[1] for f in fields))
 
     mentions, vectors = {}, {}
     for vid in videos:
         context = context_for(vid)
-        mentions[vid] = mentions_of(context.descriptions,
-                                    lambda q, c=context: c.identity.get(q, {}))
+        mentions[vid] = mentions_of(context, selection)
         for name in names:
             built = embedders.build(name)
             vectors[(vid, built.key)] = built.embed([m.signature for m in mentions[vid]])

@@ -12,7 +12,8 @@
 <header>
   <h1>FalCONvar</h1>
   <nav id="tabs">
-    <button data-tab="run" aria-selected="true">Run</button>
+    <button data-tab="rag" aria-selected="true">Video RAG</button>
+    <button data-tab="aggregates" aria-selected="false">Aggregates</button>
     <button data-tab="prompts" aria-selected="false">Prompts</button>
     <button data-tab="search" aria-selected="false">Search</button>
     <button data-tab="data" aria-selected="false">Data</button>
@@ -28,11 +29,11 @@
 
 <main>
 
-<!-- ------------------------------------------------------------------ run -->
-<section id="tab-run">
+<!-- ------------------------------------------------------------ video rag -->
+<section id="tab-rag">
   <div class="cols">
     <div class="panel">
-      <h2>Components</h2>
+      <h2>Video RAG</h2>
       <ol class="steps" id="steps"></ol>
       <p class="note" id="plan-note"></p>
     </div>
@@ -53,6 +54,62 @@
         <pre class="out" id="output">Pick a component and run it.</pre>
         <div id="artifacts"></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------- aggregates -->
+<section id="tab-aggregates" hidden>
+  <p class="note gate" id="a-gate" hidden></p>
+  <div class="cols wide">
+    <div>
+      <div class="panel">
+        <h2>Aggregators</h2>
+        <div class="scroll" id="a-list"></div>
+        <details id="a-grammar" style="margin-top:10px">
+          <summary>What an input may say</summary>
+          <div id="a-grammar-body"></div>
+        </details>
+      </div>
+
+      <div class="panel" style="margin-top:18px">
+        <h2>Settings</h2>
+        <div class="row">
+          <div class="field" style="flex:1;min-width:180px">
+            <label for="a-llm">llm <span class="hint">answers the llm tier</span></label>
+            <input type="text" id="a-llm">
+          </div>
+          <div class="field" style="flex:1;min-width:180px">
+            <label for="a-embedder">embedder <span class="hint">for entities:*</span></label>
+            <input type="text" id="a-embedder">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field" style="flex:1;min-width:130px">
+            <label for="a-sink">sink</label><select id="a-sink"></select>
+          </div>
+          <div class="field" style="flex:1;min-width:130px">
+            <label for="a-index">index <span class="hint">supabase stores the video vector</span></label>
+            <select id="a-index"></select>
+          </div>
+          <div class="field" style="width:120px">
+            <label for="a-force">&nbsp;</label>
+            <label><input type="checkbox" id="a-force"> rebuild</label>
+          </div>
+        </div>
+        <p class="note" id="a-providers"></p>
+        <div class="row" style="margin-top:10px">
+          <button class="go" id="a-run">Run selected</button>
+          <span id="a-state"></span>
+        </div>
+        <pre class="out" id="a-output" style="margin-top:12px" hidden></pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Answers</h2>
+      <div id="a-answers"></div>
+      <div id="a-view" style="margin-top:14px"></div>
     </div>
   </div>
 </section>
@@ -108,10 +165,8 @@
         </div>
         <div class="field">
           <label>fields</label>
-          <div class="fieldrow" style="color:var(--quiet);font-size:11px">
-            <span>name</span><span>type</span><span>about</span>
-            <span>of / one_of</span><span></span>
-          </div>
+          <div class="fieldrow head"><span>name</span><span>type</span><span>about</span>
+            <span>of / one_of</span><span></span></div>
           <div id="p-fields"></div>
           <button class="small" id="p-add-field" type="button">+ field</button>
           <p class="note">
@@ -129,6 +184,79 @@
         <span id="p-state"></span>
       </div>
       <pre class="out" id="p-out" style="margin-top:12px" hidden></pre>
+    </div>
+  </div>
+
+  <div class="cols wide" style="margin-top:18px">
+    <div class="panel">
+      <h2>Aggregate prompts</h2>
+      <p class="note" style="margin:0 0 8px">
+        What <code>summary</code>, <code>chapters</code>, <code>events</code> and
+        anything added here ask the model. A prompt runs as its name on the
+        Aggregates page.
+      </p>
+      <div class="scroll" id="ap-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Add an aggregate prompt</h2>
+
+      <div class="field">
+        <label for="ap-template">start from <span class="hint">copies a prompt into the form</span></label>
+        <select id="ap-template"></select>
+      </div>
+
+      <div class="row">
+        <div class="field" style="flex:1;min-width:160px">
+          <label for="ap-name">name <span class="hint">lowercase</span></label>
+          <input type="text" id="ap-name" placeholder="incident_report">
+        </div>
+        <div class="field" style="width:220px">
+          <label for="ap-kind">kind</label>
+          <select id="ap-kind"></select>
+        </div>
+      </div>
+      <p class="note" id="ap-kind-note" style="margin-top:-6px;margin-bottom:10px"></p>
+
+      <div class="field">
+        <label for="ap-instruction">instruction <span class="hint">the rendered chunks follow it</span></label>
+        <textarea id="ap-instruction"></textarea>
+      </div>
+
+      <div class="field" id="ap-fold-wrap">
+        <label for="ap-fold">fold instruction <span class="hint">what each batch is asked; blank = the default</span></label>
+        <input type="text" id="ap-fold">
+      </div>
+
+      <div class="row">
+        <div class="field" style="flex:2;min-width:200px">
+          <label for="ap-inputs">reads by default <span class="hint">blank = transcript+*</span></label>
+          <input type="text" id="ap-inputs" placeholder="clip:hazards[severity,hazards]">
+        </div>
+        <div class="field" style="flex:1;min-width:120px" id="ap-key-wrap">
+          <label for="ap-key">list key <span class="hint">the answer's list</span></label>
+          <input type="text" id="ap-key" placeholder="chapters">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="ap-about">about</label>
+        <input type="text" id="ap-about">
+      </div>
+
+      <div class="field">
+        <label>answer fields <span class="hint" id="ap-fields-hint"></span></label>
+        <div class="fieldrow head"><span>name</span><span>type</span><span>about</span>
+          <span>of / one_of</span><span></span></div>
+        <div id="ap-fields"></div>
+        <button class="small" id="ap-add-field" type="button">+ field</button>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <button class="go" id="ap-save">Create</button>
+        <span id="ap-state"></span>
+      </div>
+      <pre class="out" id="ap-out" style="margin-top:12px" hidden></pre>
     </div>
   </div>
 </section>
@@ -234,28 +362,58 @@
 
 <!-- ----------------------------------------------------------------- data -->
 <section id="tab-data" hidden>
-  <div class="panel">
-    <h2>Database</h2>
-    <div id="db-status"></div>
-    <div class="row" style="margin-top:12px">
+  <div class="cols wide">
+    <div class="panel">
+      <h2>This video's aggregates, on disk</h2>
+      <p class="note" style="margin:0 0 8px">
+        One file per answer. <code>inputs</code> is what it read,
+        <code>version</code> the definition it was asked under, and the
+        fingerprint what a stored copy must match to be reused.
+      </p>
+      <div class="scroll" id="d-files"></div>
+      <pre class="out" id="d-file-view" style="margin-top:10px" hidden></pre>
+    </div>
+
+    <div class="panel">
+      <h2>Database</h2>
+      <div id="db-status"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:18px">
+    <h2>Query a table</h2>
+    <div class="row">
       <div class="field" style="flex:1;min-width:200px">
         <label for="d-table">table</label><select id="d-table"></select>
       </div>
-      <div class="field" style="width:110px">
+      <div class="field" style="flex:1;min-width:160px">
+        <label for="d-order">order <span class="hint">column, or column.desc</span></label>
+        <input type="text" id="d-order">
+      </div>
+      <div class="field" style="width:100px">
         <label for="d-limit">limit</label>
         <input type="number" id="d-limit" value="25" min="1" max="1000">
       </div>
-      <div class="field" style="width:150px">
-        <label for="d-heavy">&nbsp;</label>
+      <div class="field" style="width:130px">
+        <label>&nbsp;</label>
         <label><input type="checkbox" id="d-heavy"> include heavy</label>
       </div>
-      <div class="field" style="width:150px">
-        <label for="d-thisvideo">&nbsp;</label>
+      <div class="field" style="width:130px">
+        <label>&nbsp;</label>
         <label><input type="checkbox" id="d-thisvideo" checked> this video only</label>
       </div>
-      <button class="go" id="d-go" style="height:34px">Query</button>
     </div>
-    <p class="note" id="d-about"></p>
+    <p class="note" id="d-about" style="margin-top:-4px"></p>
+    <div class="field" style="margin-top:8px">
+      <label>filters <span class="hint">every one must hold</span></label>
+      <div id="d-filters"></div>
+      <div class="row">
+        <button class="small" id="d-add-filter" type="button">+ filter</button>
+        <span id="d-presets" class="row"></span>
+      </div>
+      <datalist id="d-columns"></datalist>
+    </div>
+    <button class="go" id="d-go">Query</button>
     <div id="d-results" style="margin-top:10px"></div>
   </div>
 </section>
